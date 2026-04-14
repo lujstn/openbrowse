@@ -231,7 +231,8 @@ async def _inject_token(
             browser_session,
             f"""(function() {{
                 var token = {token_json};
-                document.getElementById('g-recaptcha-response').value = token;
+                var el = document.getElementById('g-recaptcha-response');
+                if (el) el.value = token;
                 if (typeof ___grecaptcha_cfg !== 'undefined') {{
                     Object.entries(___grecaptcha_cfg.clients).forEach(function(entry) {{
                         var k = entry[0]; var v = entry[1];
