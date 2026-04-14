@@ -168,10 +168,10 @@ async def launch_chrome(slot: DisplaySlot) -> str:
     """
     import cloakbrowser
 
-    cloakbrowser.ensure_binary()
+    binary_path = cloakbrowser.ensure_binary()
     stealth_args = cloakbrowser.get_default_stealth_args()
 
-    args = list(stealth_args) + [
+    args = [binary_path] + list(stealth_args) + [
         f"--remote-debugging-port={slot.cdp_port}",
         "--no-first-run",
         "--no-default-browser-check",

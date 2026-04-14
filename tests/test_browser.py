@@ -60,7 +60,7 @@ async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
     mock_create_subproc.return_value = mock_proc
 
     mock_cloak = MagicMock()
-    mock_cloak.ensure_binary = MagicMock()
+    mock_cloak.ensure_binary.return_value = "/usr/bin/cloakbrowser"
     mock_cloak.get_default_stealth_args.return_value = ["--stealth-flag"]
 
     slot = DisplaySlot(display_num=10, vnc_port=5910, novnc_port=6080, cdp_port=9222)
@@ -79,8 +79,10 @@ async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
     env = call_args.kwargs["env"]
     assert env["DISPLAY"] == ":10"
 
-    # Check args include stealth flag and CDP port
+    # Check binary path is first arg
     positional_args = call_args.args
+    assert positional_args[0] == "/usr/bin/cloakbrowser"
+
     args_str = " ".join(positional_args)
     assert "--stealth-flag" in args_str
     assert "--remote-debugging-port=9222" in args_str
