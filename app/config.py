@@ -39,6 +39,7 @@ class Settings:
     novnc_base_port: int = 6080
     vnc_base_port: int = 5900
     xvfb_base_display: int = 10
+    cdp_base_port: int = 9222
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
