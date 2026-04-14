@@ -71,9 +71,9 @@ def _format_relative_time(iso_str: str) -> str:
 async def dashboard_home(request: Request):
     sessions, total = await crud.list_sessions(page=1, page_size=50)
     return templates.TemplateResponse(
+        request,
         "sessions.html",
-        {
-            "request": request,
+        context={
             "sessions": sessions,
             "total": total,
             "format_duration": _format_duration,
@@ -89,9 +89,9 @@ async def session_detail(request: Request, session_id: str):
         return HTMLResponse("Session not found", status_code=404)
     messages, _ = await crud.list_messages(session_id, limit=500)
     return templates.TemplateResponse(
+        request,
         "session_detail.html",
-        {
-            "request": request,
+        context={
             "session": session,
             "messages": messages,
             "format_duration": _format_duration,
@@ -104,9 +104,9 @@ async def session_detail(request: Request, session_id: str):
 async def profiles_page(request: Request):
     profiles, total = await crud.list_profiles(page=1, page_size=50)
     return templates.TemplateResponse(
+        request,
         "profiles.html",
-        {
-            "request": request,
+        context={
             "profiles": profiles,
             "total": total,
             "format_relative": _format_relative_time,
