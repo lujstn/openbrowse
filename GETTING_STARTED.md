@@ -119,8 +119,10 @@ curl http://<pi-ip>:8420/health
 Tailscale Funnel exposes the server to the internet over HTTPS with a stable hostname.
 
 ```bash
-sudo tailscale funnel 8420
+sudo tailscale funnel --bg 8420
 ```
+
+The `--bg` flag runs the funnel as a background daemon managed by Tailscale — it survives reboots without a separate systemd unit.
 
 Your URL will be in the format:
 
@@ -139,6 +141,12 @@ Test the public endpoint:
 ```bash
 curl https://llmpi.tail12345.ts.net/health
 # {"status":"ok","active_sessions":0}
+```
+
+To disable the funnel later:
+
+```bash
+sudo tailscale funnel --bg off
 ```
 
 ---
@@ -165,6 +173,8 @@ User=lucas
 WorkingDirectory=/home/lucas/browser-use-raspberrypi
 EnvironmentFile=/home/lucas/browser-use-raspberrypi/.env
 ExecStart=/home/lucas/browser-use-raspberrypi/.venv/bin/python -m app.main
+ExecStartPost=/usr/bin/tailscale funnel --bg 8420
+ExecStopPost=/usr/bin/tailscale funnel --bg off
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -173,6 +183,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
+
+The `ExecStartPost` line automatically enables Tailscale Funnel when the service starts, and `ExecStopPost` disables it on stop. To run **without** the funnel (local network only), remove those two lines.
 
 Enable and start:
 
@@ -186,6 +198,12 @@ Check status:
 
 ```bash
 sudo systemctl status browser-use
+```
+
+Verify the funnel is active:
+
+```bash
+tailscale funnel status
 ```
 
 View live logs:
