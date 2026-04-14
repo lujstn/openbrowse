@@ -223,7 +223,7 @@ async def run_agent_session(session_id: str) -> None:
             try:
                 browser_context = agent.browser_context
                 if browser_context:
-                    await browser_context.save_cookies(storage_state_path)
+                    await browser_context.save_cookies()
             except Exception as e:
                 logger.warning("Failed to save cookies: %s", e)
 
