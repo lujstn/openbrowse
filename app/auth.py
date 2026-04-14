@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -17,6 +19,6 @@ async def require_api_key(
     if not settings.api_key:
         # No key configured — allow all (development mode)
         return "dev"
-    if credentials is None or credentials.credentials != settings.api_key:
+    if credentials is None or not hmac.compare_digest(credentials.credentials, settings.api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials.credentials

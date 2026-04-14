@@ -11,6 +11,18 @@ import aiosqlite
 
 from app.db.models import get_db
 
+_SESSION_COLUMNS = {
+    "status", "model", "task", "title", "output", "output_schema",
+    "step_count", "last_step_summary", "is_task_successful", "live_url",
+    "profile_id", "sensitive_data", "max_cost_usd", "total_input_tokens",
+    "total_output_tokens", "llm_cost_usd", "total_cost_usd",
+    "screenshot_path", "display_num", "system_prompt_extension", "updated_at",
+}
+
+_PROFILE_COLUMNS = {
+    "name", "user_id", "storage_state_path", "last_used_at", "updated_at",
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -99,6 +111,9 @@ async def list_sessions(
 async def update_session(session_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return await get_session(session_id)
+    invalid = set(fields) - _SESSION_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid column names: {invalid}")
     fields["updated_at"] = _now()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [session_id]
@@ -256,6 +271,9 @@ async def list_profiles(
 async def update_profile(profile_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return await get_profile(profile_id)
+    invalid = set(fields) - _PROFILE_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid column names: {invalid}")
     fields["updated_at"] = _now()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [profile_id]
