@@ -43,9 +43,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 pip install -e ".[dev]"
-
-playwright install chromium
-playwright install-deps
 ```
 
 ---
