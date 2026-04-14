@@ -19,6 +19,10 @@ from app.db import crud
 
 logger = logging.getLogger(__name__)
 
+
+class BudgetExceededError(Exception):
+    """Raised when a session exceeds its max_cost_usd budget."""
+
 MODEL_MAP: dict[str, str] = {
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
@@ -49,6 +53,7 @@ async def run_agent_session(session_id: str) -> None:
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
+    max_cost = session.get("max_cost_usd")
 
     # Load profile storage state path
     storage_state_path: str | None = None
@@ -154,6 +159,14 @@ async def run_agent_session(session_id: str) -> None:
                 summary=summary or f"Step {step_count}",
             )
 
+            # Budget enforcement
+            if max_cost:
+                usage = agent_instance.history.usage
+                if usage and usage.total_cost >= max_cost:
+                    raise BudgetExceededError(
+                        f"Cost ${usage.total_cost:.4f} exceeded budget ${max_cost:.2f}"
+                    )
+
         # Build and run agent
         agent_kwargs: dict[str, Any] = {
             "task": full_task,
@@ -211,6 +224,15 @@ async def run_agent_session(session_id: str) -> None:
             summary=f"Task {'completed successfully' if is_successful else 'finished with errors'}",
         )
 
+    except BudgetExceededError as e:
+        logger.info("Session %s stopped: %s", session_id, e)
+        await crud.update_session(session_id, status="stopped")
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="completion",
+            summary=f"Stopped: {e}",
+        )
     except Exception as e:
         logger.exception("Agent session %s failed: %s", session_id, e)
         await crud.update_session(session_id, status="error")
