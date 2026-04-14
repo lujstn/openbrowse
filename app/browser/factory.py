@@ -51,45 +51,53 @@ class DisplayManager:
                 novnc_port=novnc_port,
             )
 
-            # Start Xvfb
-            slot.xvfb_proc = subprocess.Popen(
-                [
-                    "Xvfb",
-                    f":{display_num}",
-                    "-screen", "0", "1920x1080x24",
-                    "-ac",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            await asyncio.sleep(0.5)
+            try:
+                # Start Xvfb
+                slot.xvfb_proc = subprocess.Popen(
+                    [
+                        "Xvfb",
+                        f":{display_num}",
+                        "-screen", "0", "1920x1080x24",
+                        "-ac",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                await asyncio.sleep(0.5)
 
-            # Start x11vnc
-            slot.vnc_proc = subprocess.Popen(
-                [
-                    "x11vnc",
-                    "-display", f":{display_num}",
-                    "-rfbport", str(vnc_port),
-                    "-nopw",
-                    "-forever",
-                    "-shared",
-                    "-quiet",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+                # Start x11vnc
+                slot.vnc_proc = subprocess.Popen(
+                    [
+                        "x11vnc",
+                        "-display", f":{display_num}",
+                        "-rfbport", str(vnc_port),
+                        "-nopw",
+                        "-forever",
+                        "-shared",
+                        "-quiet",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
 
-            # Start noVNC websockify proxy
-            slot.novnc_proc = subprocess.Popen(
-                [
-                    "websockify",
-                    "--web", "/usr/share/novnc",
-                    str(novnc_port),
-                    f"localhost:{vnc_port}",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+                # Start noVNC websockify proxy
+                slot.novnc_proc = subprocess.Popen(
+                    [
+                        "websockify",
+                        "--web", "/usr/share/novnc",
+                        str(novnc_port),
+                        f"localhost:{vnc_port}",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                # Clean up any processes that did start
+                for proc_name in ("novnc_proc", "vnc_proc", "xvfb_proc"):
+                    proc = getattr(slot, proc_name)
+                    if proc and proc.poll() is None:
+                        proc.terminate()
+                raise
 
             self._slots[display_num] = slot
             logger.info(
