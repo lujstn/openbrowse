@@ -170,11 +170,11 @@ Wants=tailscaled.service
 [Service]
 Type=simple
 User=lucas
-WorkingDirectory=/home/lucas/browser-use-raspberrypi
-EnvironmentFile=/home/lucas/browser-use-raspberrypi/.env
-ExecStart=/home/lucas/browser-use-raspberrypi/.venv/bin/python -m app.main
-ExecStartPost=/usr/bin/tailscale funnel --bg 8420
-ExecStopPost=/usr/bin/tailscale funnel --bg off
+WorkingDirectory=/home/lucas/Developer/browser-use-raspberrypi
+EnvironmentFile=/home/lucas/Developer/browser-use-raspberrypi/.env
+ExecStart=/home/lucas/Developer/browser-use-raspberrypi/.venv/bin/python -m app.main
+ExecStartPost=+/usr/bin/tailscale funnel --bg 8420
+ExecStopPost=-+/usr/bin/tailscale funnel --bg off
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -182,6 +182,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 
 The `ExecStartPost` line automatically enables Tailscale Funnel when the service starts, and `ExecStopPost` disables it on stop. To run **without** the funnel (local network only), remove those two lines.
