@@ -2,40 +2,40 @@
 
 from unittest.mock import patch
 
-from browser_use import Controller
+from browser_use import Tools
 
 
 def test_register_fetch_tool() -> None:
-    controller = Controller()
+    tools = Tools()
     from app.agent.tools import register_fetch_tool
 
-    register_fetch_tool(controller)
-    assert "http_fetch" in controller.registry.registry.actions
+    register_fetch_tool(tools)
+    assert "http_fetch" in tools.registry.registry.actions
 
 
 def test_register_capsolver_with_key() -> None:
     with patch("app.agent.tools.settings") as mock_settings:
         mock_settings.capsolver_api_key = "test-key"
-        controller = Controller()
+        tools = Tools()
         from app.agent.tools import register_capsolver_tool
 
-        register_capsolver_tool(controller)
-        assert "solve_captcha" in controller.registry.registry.actions
+        register_capsolver_tool(tools)
+        assert "solve_captcha" in tools.registry.registry.actions
 
 
 def test_register_capsolver_without_key() -> None:
     with patch("app.agent.tools.settings") as mock_settings:
         mock_settings.capsolver_api_key = ""
-        controller = Controller()
+        tools = Tools()
         from app.agent.tools import register_capsolver_tool
 
-        register_capsolver_tool(controller)
-        assert "solve_captcha" not in controller.registry.registry.actions
+        register_capsolver_tool(tools)
+        assert "solve_captcha" not in tools.registry.registry.actions
 
 
 def test_register_python_sandbox() -> None:
-    controller = Controller()
+    tools = Tools()
     from app.agent.tools import register_python_sandbox_tool
 
-    register_python_sandbox_tool(controller)
-    assert "run_python" in controller.registry.registry.actions
+    register_python_sandbox_tool(tools)
+    assert "run_python" in tools.registry.registry.actions

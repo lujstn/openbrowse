@@ -1,13 +1,11 @@
 """Custom browser-use tools — Capsolver CAPTCHA solving, Python sandbox, HTTP fetch."""
 
-from __future__ import annotations
-
 import json
 import logging
+from typing import Any
 
 import httpx
-from browser_use import ActionResult, Controller
-from browser_use.browser.context import BrowserContext
+from browser_use import ActionResult, BrowserSession, Tools
 
 from app.config import settings
 
@@ -16,13 +14,29 @@ logger = logging.getLogger(__name__)
 CAPSOLVER_API = "https://api.capsolver.com"
 
 
-def register_fetch_tool(controller: Controller) -> None:
+async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
+    """Execute JavaScript via BrowserSession's CDP connection."""
+    cdp = getattr(browser_session, "cdp_client", None) or getattr(
+        browser_session, "_cdp_client", None
+    )
+    if not cdp:
+        raise RuntimeError("Cannot access CDP client from BrowserSession")
+    result = await cdp.send(
+        "Runtime.evaluate",
+        {"expression": expression, "returnByValue": True, "awaitPromise": True},
+    )
+    if "exceptionDetails" in result:
+        raise RuntimeError(f"JS error: {result['exceptionDetails']}")
+    return result.get("result", {}).get("value")
+
+
+def register_fetch_tool(tools: Tools) -> None:
     """Register an HTTP fetch tool — the v3 cloud 'FETCH' capability.
 
     Allows the agent to call external APIs without going through the browser.
     """
 
-    @controller.action(
+    @tools.action(
         "Make an HTTP request to an external API. Use this for JSON APIs, "
         "REST endpoints, or any HTTP call that doesn't need a browser. "
         "Do NOT use this for loading web pages — use browser_navigate instead."
@@ -67,34 +81,35 @@ def register_fetch_tool(controller: Controller) -> None:
             return ActionResult(error=f"HTTP request failed: {e}")
 
 
-def register_capsolver_tool(controller: Controller) -> None:
-    """Register the Capsolver CAPTCHA-solving tool on a Controller."""
+def register_capsolver_tool(tools: Tools) -> None:
+    """Register the Capsolver CAPTCHA-solving tool on a Tools instance."""
 
     if not settings.capsolver_api_key:
         logger.warning("CAPSOLVER_API_KEY not set — CAPTCHA tool disabled")
         return
 
-    @controller.action(
+    @tools.action(
         "Solve a CAPTCHA challenge on the current page. "
         "Call this when you encounter a Cloudflare challenge, reCAPTCHA, hCaptcha, or similar."
     )
     async def solve_captcha(
         captcha_type: str,
         site_key: str | None = None,
-        browser: BrowserContext | None = None,
+        browser_session: BrowserSession = None,
+        page_url: str = "",
     ) -> ActionResult:
         """Attempt to solve a CAPTCHA using Capsolver.
 
         Args:
             captcha_type: One of 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', 'turnstile'
             site_key: The site key from the page's CAPTCHA widget (if detectable)
-            browser: Injected by browser-use
+            browser_session: Injected by browser-use
+            page_url: Injected by browser-use — the current page URL
         """
-        if not browser:
-            return ActionResult(error="No browser context available")
+        if not browser_session:
+            return ActionResult(error="No browser session available")
 
-        page = await browser.get_current_page()
-        current_url = page.url
+        current_url = page_url or ""
 
         task_type_map: dict[str, str] = {
             "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
@@ -111,16 +126,17 @@ def register_capsolver_tool(controller: Controller) -> None:
 
         if not site_key:
             try:
-                site_key = await page.evaluate(
-                    """() => {
-                        const rc = document.querySelector('[data-sitekey]');
+                site_key = await _eval_js(
+                    browser_session,
+                    """(function() {
+                        var rc = document.querySelector('[data-sitekey]');
                         if (rc) return rc.getAttribute('data-sitekey');
-                        const cf = document.querySelector('[data-cf-turnstile-sitekey]')
+                        var cf = document.querySelector('[data-cf-turnstile-sitekey]')
                             || document.querySelector('.cf-turnstile');
                         if (cf) return cf.getAttribute('data-sitekey')
                             || cf.getAttribute('data-cf-turnstile-sitekey');
                         return null;
-                    }"""
+                    })()""",
                 )
             except Exception:
                 pass
@@ -161,7 +177,7 @@ def register_capsolver_tool(controller: Controller) -> None:
                     solution = result.get("solution", {})
                     token = solution.get("gRecaptchaResponse") or solution.get("token")
                     if token:
-                        await _inject_token(page, captcha_type, token)
+                        await _inject_token(browser_session, captcha_type, token)
                         return ActionResult(
                             extracted_content="CAPTCHA solved successfully"
                         )
@@ -189,7 +205,7 @@ def register_capsolver_tool(controller: Controller) -> None:
                             or solution.get("text")
                         )
                         if token:
-                            await _inject_token(page, captcha_type, token)
+                            await _inject_token(browser_session, captcha_type, token)
                             return ActionResult(
                                 extracted_content="CAPTCHA solved successfully"
                             )
@@ -205,44 +221,52 @@ def register_capsolver_tool(controller: Controller) -> None:
             return ActionResult(error=f"Capsolver HTTP error: {e}")
 
 
-async def _inject_token(page: object, captcha_type: str, token: str) -> None:
-    """Inject the solved CAPTCHA token into the page."""
+async def _inject_token(
+    browser_session: BrowserSession, captcha_type: str, token: str
+) -> None:
+    """Inject the solved CAPTCHA token into the page via CDP."""
+    token_json = json.dumps(token)
     if captcha_type in ("recaptcha_v2", "recaptcha_v3"):
-        await page.evaluate(  # type: ignore[attr-defined]
-            """(token) => {
+        await _eval_js(
+            browser_session,
+            f"""(function() {{
+                var token = {token_json};
                 document.getElementById('g-recaptcha-response').value = token;
-                if (typeof ___grecaptcha_cfg !== 'undefined') {
-                    Object.entries(___grecaptcha_cfg.clients).forEach(([k, v]) => {
-                        const cb = v?.S?.S?.callback || v?.R?.R?.callback;
+                if (typeof ___grecaptcha_cfg !== 'undefined') {{
+                    Object.entries(___grecaptcha_cfg.clients).forEach(function(entry) {{
+                        var k = entry[0]; var v = entry[1];
+                        var cb = (v && v.S && v.S.S && v.S.S.callback)
+                            || (v && v.R && v.R.R && v.R.R.callback);
                         if (cb) cb(token);
-                    });
-                }
-            }""",
-            token,
+                    }});
+                }}
+            }})()""",
         )
     elif captcha_type == "hcaptcha":
-        await page.evaluate(  # type: ignore[attr-defined]
-            """(token) => {
-                const textarea = document.querySelector('[name="h-captcha-response"]');
+        await _eval_js(
+            browser_session,
+            f"""(function() {{
+                var token = {token_json};
+                var textarea = document.querySelector('[name="h-captcha-response"]');
                 if (textarea) textarea.value = token;
-            }""",
-            token,
+            }})()""",
         )
     elif captcha_type == "turnstile":
-        await page.evaluate(  # type: ignore[attr-defined]
-            """(token) => {
-                const input = document.querySelector('[name="cf-turnstile-response"]');
+        await _eval_js(
+            browser_session,
+            f"""(function() {{
+                var token = {token_json};
+                var input = document.querySelector('[name="cf-turnstile-response"]');
                 if (input) input.value = token;
-                if (window.turnstile) turnstile.getResponse = () => token;
-            }""",
-            token,
+                if (window.turnstile) turnstile.getResponse = function() {{ return token; }};
+            }})()""",
         )
 
 
-def register_python_sandbox_tool(controller: Controller) -> None:
+def register_python_sandbox_tool(tools: Tools) -> None:
     """Register a Python code execution sandbox — the v3 cloud sandbox capability."""
 
-    @controller.action(
+    @tools.action(
         "Execute Python code in a sandboxed environment. Use this for data processing, "
         "parsing HTML/JSON, calculations, string manipulation, or any task that's easier "
         "in Python than in the browser. The code runs in an isolated subprocess. "
