@@ -305,7 +305,7 @@ playwright install-deps
 Then verify cloakbrowser resolves an executable:
 
 ```bash
-python3 -c "import cloakbrowser; print(cloakbrowser.executable_path())"
+python3 -c "import cloakbrowser; print(cloakbrowser.ensure_binary())"
 ```
 
 If the path doesn't exist, reinstall:

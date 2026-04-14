@@ -95,7 +95,7 @@ def register_capsolver_tool(tools: Tools) -> None:
     async def solve_captcha(
         captcha_type: str,
         site_key: str | None = None,
-        browser_session: BrowserSession = None,
+        browser_session: BrowserSession | None = None,
         page_url: str = "",
     ) -> ActionResult:
         """Attempt to solve a CAPTCHA using Capsolver.

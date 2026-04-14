@@ -147,7 +147,7 @@ class DisplayManager:
 async def wait_for_cdp(port: int, timeout: float = 30.0) -> None:
     """Poll http://127.0.0.1:{port}/json/version until 200 or timeout."""
     url = f"http://127.0.0.1:{port}/json/version"
-    deadline = asyncio.get_event_loop().time() + timeout
+    deadline = asyncio.get_running_loop().time() + timeout
     async with httpx.AsyncClient() as client:
         while True:
             try:
@@ -156,7 +156,7 @@ async def wait_for_cdp(port: int, timeout: float = 30.0) -> None:
                     return
             except Exception:
                 pass
-            if asyncio.get_event_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Chrome CDP not ready on port {port} after {timeout}s")
             await asyncio.sleep(0.5)
 
