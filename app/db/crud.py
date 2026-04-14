@@ -146,8 +146,7 @@ async def create_message(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (msg_id, session_id, role, data, msg_type, summary, screenshot_path, int(hidden), now),
         )
-        await db.commit()
-        # Also bump session step_count and last_step_summary
+        # Bump session step_count and last_step_summary atomically with the insert
         await db.execute(
             """UPDATE sessions
                SET step_count = step_count + 1, last_step_summary = ?, updated_at = ?
