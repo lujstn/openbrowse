@@ -94,21 +94,21 @@ Expected output:
 
 ```
 INFO:     Initializing database...
-INFO:     Server ready on 0.0.0.0:8000
+INFO:     Server ready on 0.0.0.0:8420
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:8420
 ```
 
 Open the admin dashboard in a browser on your local network:
 
 ```
-http://<pi-ip>:8000/
+http://<pi-ip>:8420/
 ```
 
 Confirm the API is responding:
 
 ```bash
-curl http://<pi-ip>:8000/health
+curl http://<pi-ip>:8420/health
 # {"status":"ok","active_sessions":0}
 ```
 
@@ -119,7 +119,7 @@ curl http://<pi-ip>:8000/health
 Tailscale Funnel exposes the server to the internet over HTTPS with a stable hostname.
 
 ```bash
-sudo tailscale funnel 8000
+sudo tailscale funnel 8420
 ```
 
 Your URL will be in the format:
@@ -353,13 +353,13 @@ tailscale funnel status
 If the output is empty, re-run:
 
 ```bash
-sudo tailscale funnel 8000
+sudo tailscale funnel 8420
 ```
 
-**Check 2:** Confirm the server is listening on port 8000:
+**Check 2:** Confirm the server is listening on port 8420:
 
 ```bash
-ss -tlnp | grep 8000
+ss -tlnp | grep 8420
 ```
 
 **Check 3:** Funnel requires HTTPS — make sure you're not using `http://` in the URL.

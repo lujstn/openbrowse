@@ -42,7 +42,7 @@ class Settings:
     cdp_base_port: int = 9222
     # Server
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8420
 
 
 settings = Settings()
