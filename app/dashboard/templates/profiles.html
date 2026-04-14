@@ -1,0 +1,25 @@
+{% extends "base.html" %} {% block title %}Profiles — Browser Use Pi{% endblock
+%} {% block content %}
+<h1>Profiles <span class="badge">{{ total }}</span></h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Profile ID</th>
+      <th>Name</th>
+      <th>Last Used</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in profiles %}
+    <tr>
+      <td class="mono">{{ p.id }}</td>
+      <td>{{ p.name or '—' }}</td>
+      <td>{{ format_relative(p.last_used_at) if p.last_used_at else '—' }}</td>
+      <td>{{ format_relative(p.created_at) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

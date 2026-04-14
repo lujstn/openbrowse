@@ -1,0 +1,29 @@
+{% extends "base.html" %} {% block title %}Sessions — Browser Use Pi{% endblock
+%} {% block content %}
+<h1>Sessions <span class="badge">{{ total }}</span></h1>
+
+<div
+  hx-ext="sse"
+  sse-connect="/sse/sessions"
+  sse-swap="sessions"
+  hx-target="#session-rows"
+  hx-swap="innerHTML"
+>
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Name</th>
+        <th>Session ID</th>
+        <th>Profile ID</th>
+        <th>Started</th>
+        <th>Duration</th>
+        <th>Claude Tokens</th>
+      </tr>
+    </thead>
+    <tbody id="session-rows">
+      {% include "_session_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

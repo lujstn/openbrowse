@@ -1,0 +1,171 @@
+{% extends "base.html" %} {% block title %}Session {{ session.id[:8] }} —
+Browser Use Pi{% endblock %} {% block head %}
+<style>
+  .detail-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    height: calc(100vh - 140px);
+  }
+  .log-panel {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .browser-panel {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+  .browser-panel iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  .no-live {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #666;
+  }
+  .session-header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .session-header .mono {
+    font-size: 14px;
+  }
+  .msg-row {
+    padding: 6px 0;
+    border-bottom: 1px solid #1a1a1a;
+    font-size: 13px;
+    display: flex;
+    gap: 8px;
+  }
+  .msg-time {
+    color: #555;
+    font-family: monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    min-width: 70px;
+  }
+  .msg-type {
+    color: #888;
+    font-family: monospace;
+    font-size: 11px;
+    min-width: 120px;
+  }
+  .msg-type.browser_action {
+    color: #60a5fa;
+  }
+  .msg-type.browser_action_error {
+    color: #ef4444;
+  }
+  .msg-type.completion {
+    color: #22c55e;
+  }
+  .msg-type.planning {
+    color: #eab308;
+  }
+  .msg-summary {
+    flex: 1;
+  }
+  .stat-row {
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .stat-row dt {
+    color: #666;
+  }
+  .stat-row dd {
+    color: #e5e5e5;
+    font-family: monospace;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="session-header">
+  <a href="/">&larr; Sessions</a>
+  <span class="status status-{{ session.status }}">
+    <span class="status-dot"></span>
+    <span id="session-status">{{ session.status }}</span>
+  </span>
+  <span class="mono">{{ session.id }}</span>
+  <span class="badge">{{ session.model or 'sonnet' }}</span>
+</div>
+
+<dl class="stat-row" id="session-stats">
+  <dt>Steps</dt>
+  <dd id="stat-steps">{{ session.step_count or 0 }}</dd>
+  <dt>Tokens</dt>
+  <dd id="stat-tokens">
+    {{ '{:,}'.format((session.total_input_tokens or 0) +
+    (session.total_output_tokens or 0)) }}
+  </dd>
+  <dt>Cost</dt>
+  <dd id="stat-cost">${{ '{:.4f}'.format(session.llm_cost_usd or 0) }}</dd>
+  <dt>Started</dt>
+  <dd>{{ format_relative(session.created_at) }}</dd>
+</dl>
+
+<div
+  class="detail-layout"
+  hx-ext="sse"
+  sse-connect="/sse/session/{{ session.id }}/messages"
+>
+  <div class="log-panel" id="log-panel">
+    <div id="messages" sse-swap="messages" hx-swap="beforeend">
+      {% for m in messages %}
+      <div class="msg-row">
+        <span class="msg-time">{{ format_relative(m.created_at) }}</span>
+        <span class="msg-type {{ m.type }}">{{ m.type or 'info' }}</span>
+        <span class="msg-summary">{{ m.summary }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="browser-panel">
+    {% if session.live_url and session.status in ('running', 'created') %}
+    <iframe
+      src="{{ session.live_url }}"
+      allow="clipboard-read; clipboard-write"
+    ></iframe>
+    {% else %}
+    <div class="no-live">
+      {% if session.status in ('stopped', 'error') %} Session ended — no live
+      view {% else %} Waiting for browser to start... {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  document.body.addEventListener("sse:status", function (e) {
+    try {
+      const data = JSON.parse(e.detail.data);
+      document.getElementById("stat-steps").textContent = data.stepCount || 0;
+      const tokens =
+        (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
+      document.getElementById("stat-tokens").textContent =
+        tokens.toLocaleString();
+      document.getElementById("stat-cost").textContent =
+        "$" + parseFloat(data.llmCostUsd || 0).toFixed(4);
+      document.getElementById("session-status").textContent = data.status;
+    } catch (e) {}
+  });
+  const logPanel = document.getElementById("log-panel");
+  new MutationObserver(() => {
+    logPanel.scrollTop = logPanel.scrollHeight;
+  }).observe(document.getElementById("messages"), { childList: true });
+</script>
+{% endblock %}

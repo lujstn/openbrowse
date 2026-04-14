@@ -1,0 +1,23 @@
+{% for s in sessions %}
+<tr onclick="window.location='/session/{{ s.id }}'">
+  <td>
+    <span class="status status-{{ s.status }}"
+      ><span class="status-dot"></span> {{ s.status }}</span
+    >
+  </td>
+  <td>
+    {{ s.title or s.task[:40] + '...' if s.task and s.task|length > 40 else
+    s.task or '—' }}
+  </td>
+  <td class="mono">{{ s.id[:8] }}...</td>
+  <td class="mono">{{ s.profile_id[:8] + '...' if s.profile_id else '—' }}</td>
+  <td>{{ format_relative(s.created_at) }}</td>
+  <td class="mono">
+    {{ format_duration(s.created_at, s.updated_at, s.status) }}
+  </td>
+  <td class="mono">
+    {{ '{:,}'.format((s.total_input_tokens or 0) + (s.total_output_tokens or 0))
+    }}
+  </td>
+</tr>
+{% endfor %}

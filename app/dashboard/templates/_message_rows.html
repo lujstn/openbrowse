@@ -1,0 +1,7 @@
+{% for m in messages %}
+<div class="msg-row">
+  <span class="msg-time">{{ format_relative(m.created_at) }}</span>
+  <span class="msg-type {{ m.type }}">{{ m.type or 'info' }}</span>
+  <span class="msg-summary">{{ m.summary }}</span>
+</div>
+{% endfor %}

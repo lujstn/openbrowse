@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Browser Use Pi{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: #0a0a0a;
+        color: #e5e5e5;
+      }
+      a {
+        color: #60a5fa;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      nav {
+        background: #111;
+        border-bottom: 1px solid #222;
+        padding: 12px 24px;
+        display: flex;
+        gap: 24px;
+        align-items: center;
+      }
+      nav .brand {
+        font-weight: 700;
+        font-size: 14px;
+        color: #fff;
+        letter-spacing: -0.02em;
+      }
+      nav a {
+        color: #999;
+        font-size: 13px;
+      }
+      nav a:hover,
+      nav a.active {
+        color: #fff;
+        text-decoration: none;
+      }
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        text-align: left;
+        padding: 8px 12px;
+        color: #666;
+        font-weight: 500;
+        border-bottom: 1px solid #222;
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+      }
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #1a1a1a;
+      }
+      tr:hover {
+        background: #111;
+      }
+      tr {
+        cursor: pointer;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .status-running .status-dot {
+        background: #22c55e;
+        box-shadow: 0 0 6px #22c55e;
+      }
+      .status-created .status-dot {
+        background: #eab308;
+      }
+      .status-stopped .status-dot {
+        background: #666;
+      }
+      .status-error .status-dot {
+        background: #ef4444;
+      }
+      .status-idle .status-dot {
+        background: #3b82f6;
+      }
+      .mono {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 12px;
+        color: #888;
+      }
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 16px;
+      }
+      .badge {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 11px;
+      }
+    </style>
+    {% block head %}{% endblock %}
+  </head>
+  <body>
+    <nav>
+      <span class="brand">Browser Use Pi</span>
+      <a href="/">Sessions</a>
+      <a href="/profiles">Profiles</a>
+    </nav>
+    <div class="container">{% block content %}{% endblock %}</div>
+  </body>
+</html>

@@ -13,6 +13,7 @@ from app.api.profiles import router as profiles_router
 from app.api.sessions import router as sessions_router
 from app.browser.factory import display_manager
 from app.config import settings
+from app.dashboard.routes import router as dashboard_router
 from app.db.models import init_db
 
 logging.basicConfig(
@@ -50,6 +51,7 @@ app.add_middleware(
 
 app.include_router(sessions_router)
 app.include_router(profiles_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
