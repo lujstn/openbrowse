@@ -43,7 +43,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 pip install -e ".[dev]"
-pip install cloakbrowser
 
 playwright install chromium
 playwright install-deps
@@ -230,7 +229,7 @@ Change this to pass your Pi's base URL and API key:
 get client(): BrowserUse {
   if (!this._client) {
     this._client = new BrowserUse({
-      baseURL: process.env.PI_BROWSER_USE_URL,
+      baseUrl: process.env.PI_BROWSER_USE_URL,
       apiKey: process.env.PI_BROWSER_USE_API_KEY,
     });
   }
@@ -269,7 +268,7 @@ curl https://llmpi.tail12345.ts.net/v3/profiles \
 If you have existing cookies in a cloud Browser Use profile, export the storage state as a JSON file in [Playwright storage state format](https://playwright.dev/docs/api/class-browsercontext#browser-context-storage-state) and copy it to the Pi:
 
 ```bash
-scp cookies.json lucas@<pi-ip>:~/browser-use-raspberrypi/data/profiles/<profile-id>/storage_state.json
+scp cookies.json lucas@<pi-ip>:~/browser-use-raspberrypi/data/profiles/<profile-id>.json
 ```
 
 The storage state file uses the format:
@@ -384,13 +383,13 @@ free -h
 dmesg | grep -i oom
 ```
 
-Reduce concurrency temporarily by setting `MAX_CONCURRENT_SESSIONS` in `.env`:
+To reduce concurrency, edit `max_concurrent_sessions` in `app/config.py` directly:
 
-```
-MAX_CONCURRENT_SESSIONS=1
+```python
+max_concurrent_sessions: int = 1  # default is 3
 ```
 
-Or increase swap:
+Then restart the service. Or increase swap:
 
 ```bash
 sudo dphys-swapfile swapoff
