@@ -94,22 +94,21 @@ def register_capsolver_tool(tools: Tools) -> None:
     )
     async def solve_captcha(
         captcha_type: str,
+        browser_session: BrowserSession,
         site_key: str | None = None,
-        browser_session: BrowserSession | None = None,
-        page_url: str = "",
     ) -> ActionResult:
         """Attempt to solve a CAPTCHA using Capsolver.
 
         Args:
             captcha_type: One of 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', 'turnstile'
+            browser_session: Injected by browser-use — must be named exactly this
             site_key: The site key from the page's CAPTCHA widget (if detectable)
-            browser_session: Injected by browser-use
-            page_url: Injected by browser-use — the current page URL
         """
-        if not browser_session:
-            return ActionResult(error="No browser session available")
-
-        current_url = page_url or ""
+        current_url = ""
+        try:
+            current_url = await _eval_js(browser_session, "window.location.href") or ""
+        except Exception:
+            pass
 
         task_type_map: dict[str, str] = {
             "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
