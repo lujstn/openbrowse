@@ -19,6 +19,7 @@ async def setup(tmp_path, monkeypatch):
         data_dir=tmp_path / "data",
         profiles_dir=tmp_path / "data" / "profiles",
         api_key="",
+        allow_insecure_no_auth=True,
     )
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)

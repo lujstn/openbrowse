@@ -7,17 +7,18 @@ import json
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
+from app.auth import require_dashboard_auth
 from app.db import crud
 
 _template_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_template_dir))
 
-router = APIRouter(tags=["dashboard"])
+router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
 
 
 def _format_duration_secs(seconds: float) -> str:

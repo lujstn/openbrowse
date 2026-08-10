@@ -17,6 +17,16 @@ _BASE = Path(__file__).resolve().parent.parent
 class Settings:
     # Auth
     api_key: str = field(default_factory=lambda: os.environ.get("API_KEY", ""))
+    dashboard_user: str = field(
+        default_factory=lambda: os.environ.get("DASHBOARD_USER", "admin")
+    )
+    dashboard_password: str = field(
+        default_factory=lambda: os.environ.get("DASHBOARD_PASSWORD", "")
+    )
+    allow_insecure_no_auth: bool = field(
+        default_factory=lambda: os.environ.get("ALLOW_INSECURE_NO_AUTH", "").lower()
+        in ("1", "true", "yes")
+    )
     # Anthropic
     anthropic_api_key: str = field(
         default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
