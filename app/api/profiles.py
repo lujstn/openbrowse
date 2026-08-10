@@ -72,7 +72,7 @@ def _to_view(row: dict[str, Any]) -> ProfileView:
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 
-@router.post("", response_model=ProfileView)
+@router.post("", response_model=ProfileView, status_code=201)
 async def create_profile(
     body: ProfileCreateRequest | None = None,
     _: str = Depends(require_api_key),
@@ -90,9 +90,10 @@ async def create_profile(
 async def list_profiles(
     page: int = 1,
     page_size: int = 20,
+    query: str | None = None,
     _: str = Depends(require_api_key),
 ):
-    profiles, total = await crud.list_profiles(page=page, page_size=page_size)
+    profiles, total = await crud.list_profiles(page=page, page_size=page_size, query=query)
     return ProfileListResponse(
         items=[_to_view(p) for p in profiles],
         totalItems=total,
@@ -109,6 +110,7 @@ async def get_profile(profile_id: str, _: str = Depends(require_api_key)):
     return _to_view(profile)
 
 
+@router.patch("/{profile_id}", response_model=ProfileView)
 @router.put("/{profile_id}", response_model=ProfileView)
 async def update_profile(
     profile_id: str,

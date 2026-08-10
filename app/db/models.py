@@ -10,7 +10,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'created',
-    model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+    model TEXT NOT NULL DEFAULT 'claude-sonnet-5',
     task TEXT,
     title TEXT,
     output TEXT,
@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     screenshot_path TEXT,
     display_num INTEGER,
     system_prompt_extension TEXT,
+    keep_alive INTEGER NOT NULL DEFAULT 0,
+    thinking_effort TEXT NOT NULL DEFAULT 'off',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (profile_id) REFERENCES profiles(id)
@@ -71,11 +73,25 @@ async def get_db() -> aiosqlite.Connection:
     return db
 
 
+async def _migrate(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "keep_alive" not in columns:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN keep_alive INTEGER NOT NULL DEFAULT 0"
+        )
+    if "thinking_effort" not in columns:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'off'"
+        )
+
+
 async def init_db() -> None:
     """Initialize the database schema."""
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
+        await _migrate(db)
         await db.commit()
     finally:
         await db.close()

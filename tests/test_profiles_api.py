@@ -44,7 +44,7 @@ async def client(app):
 
 async def test_create_profile(client):
     resp = await client.post("/v3/profiles", json={"name": "Test"})
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Test"
     assert "id" in data

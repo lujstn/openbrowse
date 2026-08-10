@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/v3/sessions", tags=["sessions"])
 
 class RunTaskRequest(BaseModel):
     task: str | None = None
-    model: str = "claude-sonnet-4.6"
+    model: str = "claude-sonnet-5"
     sessionId: str | None = None
     keepAlive: bool = False
     maxCostUsd: float | None = None
@@ -31,6 +31,7 @@ class RunTaskRequest(BaseModel):
     skills: bool = True
     enableRecording: bool = False
     proxyCountryCode: str | None = None
+    thinkingEffort: Literal["off", "low", "medium", "high"] = "off"
 
 
 class SessionResponse(BaseModel):
@@ -54,8 +55,12 @@ class SessionResponse(BaseModel):
     llmCostUsd: str = "0"
     proxyCostUsd: str = "0"
     browserCostUsd: str = "0"
+    proxyUsedMb: str = "0"
     totalCostUsd: str = "0"
     screenshotUrl: str | None = None
+    thinkingEffort: str = "off"
+    agentmailEmail: str | None = None
+    integrationsUsed: list[str] = []
     createdAt: str
     updatedAt: str
 
@@ -124,6 +129,7 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
         totalOutputTokens=row.get("total_output_tokens", 0),
         llmCostUsd=str(row.get("llm_cost_usd", 0)),
         totalCostUsd=str(row.get("total_cost_usd", 0)),
+        thinkingEffort=row.get("thinking_effort", "off"),
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
     )
@@ -173,6 +179,8 @@ async def create_session(
             sensitive_data=json.dumps(body.sensitiveData) if body.sensitiveData else None,
             system_prompt_extension=body.systemPromptExtension,
             max_cost_usd=body.maxCostUsd,
+            keep_alive=int(body.keepAlive),
+            thinking_effort=body.thinkingEffort,
         )
         await pool.submit(body.sessionId)
         return _to_session_response(session)
@@ -185,6 +193,8 @@ async def create_session(
         sensitive_data=body.sensitiveData,
         system_prompt_extension=body.systemPromptExtension,
         max_cost_usd=body.maxCostUsd,
+        keep_alive=body.keepAlive,
+        thinking_effort=body.thinkingEffort,
     )
 
     if body.task:

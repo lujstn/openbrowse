@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
-    "browser-use>=0.12.0",
+    "browser-use>=0.13.7,<0.14",
     "cloakbrowser>=0.3.0",
     "aiosqlite>=0.20.0",
     "python-dotenv>=1.0.0",

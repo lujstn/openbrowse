@@ -16,7 +16,8 @@ _SESSION_COLUMNS = {
     "step_count", "last_step_summary", "is_task_successful", "live_url",
     "profile_id", "sensitive_data", "max_cost_usd", "total_input_tokens",
     "total_output_tokens", "llm_cost_usd", "total_cost_usd",
-    "screenshot_path", "display_num", "system_prompt_extension", "updated_at",
+    "screenshot_path", "display_num", "system_prompt_extension",
+    "keep_alive", "thinking_effort", "updated_at",
 }
 
 _PROFILE_COLUMNS = {
@@ -38,12 +39,14 @@ def _new_id() -> str:
 async def create_session(
     *,
     task: str | None = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-sonnet-5",
     profile_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     sensitive_data: dict[str, str] | None = None,
     system_prompt_extension: str | None = None,
     max_cost_usd: float | None = None,
+    keep_alive: bool = False,
+    thinking_effort: str = "off",
 ) -> dict[str, Any]:
     session_id = _new_id()
     now = _now()
@@ -53,8 +56,8 @@ async def create_session(
             """INSERT INTO sessions
                (id, status, model, task, profile_id, output_schema,
                 sensitive_data, system_prompt_extension, max_cost_usd,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                keep_alive, thinking_effort, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 "created",
@@ -65,6 +68,8 @@ async def create_session(
                 json.dumps(sensitive_data) if sensitive_data else None,
                 system_prompt_extension,
                 max_cost_usd,
+                int(keep_alive),
+                thinking_effort,
                 now,
                 now,
             ),
@@ -251,16 +256,21 @@ async def get_profile(
 
 
 async def list_profiles(
-    *, page: int = 1, page_size: int = 20
+    *, page: int = 1, page_size: int = 20, query: str | None = None
 ) -> tuple[list[dict[str, Any]], int]:
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM profiles")
+        where = ""
+        params: list[Any] = []
+        if query:
+            where = "WHERE name LIKE ?"
+            params.append(f"%{query}%")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM profiles {where}", params)
         total = (await cursor.fetchone())[0]
         offset = (page - 1) * page_size
         cursor = await db.execute(
-            "SELECT * FROM profiles ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (page_size, offset),
+            f"SELECT * FROM profiles {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params + [page_size, offset],
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows], total

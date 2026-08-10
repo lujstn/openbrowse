@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any
 
-from browser_use import Agent, BrowserSession, ChatAnthropic, Tools
+from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
 
 from app.agent.tools import register_capsolver_tool, register_fetch_tool, register_python_sandbox_tool
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
@@ -23,18 +23,103 @@ logger = logging.getLogger(__name__)
 class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
 
-MODEL_MAP: dict[str, str] = {
+_ANTHROPIC_MODELS: dict[str, str] = {
+    "claude-sonnet-5": "claude-sonnet-5",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "bu-max": "claude-sonnet-4-6",
+    "claude-opus-5": "claude-opus-5",
+    "claude-opus-4.8": "claude-opus-4-8",
+    "claude-opus-4-8": "claude-opus-4-8",
+    "claude-opus-4.7": "claude-opus-4-7",
+    "claude-opus-4-7": "claude-opus-4-7",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6": "claude-opus-4-6",
-    "bu-ultra": "claude-opus-4-6",
+    "bu-max": "claude-sonnet-5",
+    "bu-ultra": "claude-opus-4-8",
+}
+
+_OPENAI_MODELS: dict[str, str] = {
+    "gpt-5.6": "gpt-5.6-sol",
+    "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-luna": "gpt-5.6-luna",
+}
+
+_THINKING_BUDGETS: dict[str, int] = {
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+}
+
+_ADAPTIVE_THINKING_MODELS = {
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+}
+
+_OPENAI_REASONING: dict[str, str] = {
+    "off": "none",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
 }
 
 
-def _resolve_model(model: str) -> str:
-    return MODEL_MAP.get(model, model)
+def _resolve_model(model: str) -> tuple[str, str]:
+    key = (model or "").strip()
+    if key in _ANTHROPIC_MODELS:
+        return "anthropic", _ANTHROPIC_MODELS[key]
+    if key in _OPENAI_MODELS:
+        return "openai", _OPENAI_MODELS[key]
+    if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
+        return "openai", key
+    return "anthropic", key
+
+
+def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
+    provider, model_id = _resolve_model(model)
+    if provider == "openai":
+        if not settings.openai_api_key:
+            raise ValueError(f"Model '{model}' needs OPENAI_API_KEY, which is not configured")
+        llm = ChatOpenAI(
+            model=model_id,
+            api_key=settings.openai_api_key,
+            reasoning_effort=_OPENAI_REASONING.get(thinking_effort, "low"),
+            timeout=90,
+            max_retries=3,
+        )
+        return provider, model_id, llm
+
+    if not settings.anthropic_api_key:
+        raise ValueError(f"Model '{model}' needs ANTHROPIC_API_KEY, which is not configured")
+    kwargs: dict[str, Any] = {
+        "model": model_id,
+        "api_key": settings.anthropic_api_key,
+        "timeout": 90,
+        "max_retries": 3,
+    }
+    if thinking_effort != "off":
+        if model_id in _ADAPTIVE_THINKING_MODELS:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": thinking_effort}
+        else:
+            budget = _THINKING_BUDGETS.get(thinking_effort, 8192)
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            kwargs["max_tokens"] = budget + 8192
+    return provider, model_id, ChatAnthropic(**kwargs)
+
+
+_storage_locks: dict[str, asyncio.Lock] = {}
+
+
+def _storage_lock(path: str) -> asyncio.Lock:
+    lock = _storage_locks.get(path)
+    if lock is None:
+        lock = asyncio.Lock()
+        _storage_locks[path] = lock
+    return lock
 
 
 async def run_agent_session(session_id: str) -> None:
@@ -49,11 +134,25 @@ async def run_agent_session(session_id: str) -> None:
         await crud.update_session(session_id, status="error")
         return
 
-    model = _resolve_model(session.get("model", "claude-sonnet-4-6"))
+    requested_model = session.get("model") or settings.default_model
+    thinking_effort = session.get("thinking_effort") or "off"
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
     max_cost = session.get("max_cost_usd")
+
+    try:
+        provider, model, llm = _build_llm(requested_model, thinking_effort)
+    except ValueError as e:
+        logger.error("Session %s LLM setup failed: %s", session_id, e)
+        await crud.update_session(session_id, status="error")
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="browser_action_error",
+            summary=str(e)[:200],
+        )
+        return
 
     # Load profile storage state path
     storage_state_path: str | None = None
@@ -82,6 +181,7 @@ async def run_agent_session(session_id: str) -> None:
             status="running",
             display_num=slot.display_num,
             live_url=live_url,
+            title=(task[:80] if task else None),
         )
         await crud.create_message(
             session_id=session_id,
@@ -94,15 +194,6 @@ async def run_agent_session(session_id: str) -> None:
         browser_session = BrowserSession(
             cdp_url=cdp_url,
             storage_state=storage_state_path,
-        )
-
-        # Create LLM — now from browser-use, not langchain
-        llm = ChatAnthropic(
-            model=model,
-            api_key=settings.anthropic_api_key,
-            temperature=0.0,
-            timeout=90,
-            max_retries=3,
         )
 
         # Create tools and register custom actions
@@ -206,9 +297,10 @@ async def run_agent_session(session_id: str) -> None:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        final_status = "idle" if session.get("keep_alive") else "stopped"
         await crud.update_session(
             session_id,
-            status="stopped",
+            status=final_status,
             output=output,
             is_task_successful=int(is_successful),
             total_input_tokens=total_input,
@@ -245,6 +337,18 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         if browser_session:
+            if storage_state_path:
+                try:
+                    async with _storage_lock(storage_state_path):
+                        await asyncio.shield(
+                            browser_session.export_storage_state(storage_state_path)
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist storage state for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
             try:
                 await browser_session.stop()
             except Exception:

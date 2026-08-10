@@ -21,6 +21,9 @@ class Settings:
     anthropic_api_key: str = field(
         default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
     )
+    openai_api_key: str = field(
+        default_factory=lambda: os.environ.get("OPENAI_API_KEY", "")
+    )
     # Capsolver
     capsolver_api_key: str = field(
         default_factory=lambda: os.environ.get("CAPSOLVER_API_KEY", "")
@@ -33,8 +36,8 @@ class Settings:
         default_factory=lambda: _BASE / "data" / "screenshots"
     )
     # Limits
-    max_concurrent_sessions: int = 3
-    default_model: str = "claude-sonnet-4-6"
+    max_concurrent_sessions: int = 5
+    default_model: str = "claude-sonnet-5"
     # noVNC
     novnc_base_port: int = 6080
     vnc_base_port: int = 5900

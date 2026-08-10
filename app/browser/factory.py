@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -27,6 +28,7 @@ class DisplaySlot:
     vnc_proc: subprocess.Popen | None = None
     novnc_proc: subprocess.Popen | None = None
     chrome_proc: asyncio.subprocess.Process | None = None
+    user_data_dir: str | None = None
 
 
 class DisplayManager:
@@ -131,6 +133,9 @@ class DisplayManager:
                     except subprocess.TimeoutExpired:
                         proc.kill()
 
+            if slot.user_data_dir:
+                shutil.rmtree(slot.user_data_dir, ignore_errors=True)
+
             logger.info("Released display :%d", display_num)
 
     async def cleanup_all(self) -> None:
@@ -171,8 +176,14 @@ async def launch_chrome(slot: DisplaySlot) -> str:
     binary_path = cloakbrowser.ensure_binary()
     stealth_args = cloakbrowser.get_default_stealth_args()
 
+    # @nonobvious(forced-by) Chromium SingletonLocks a shared user-data-dir, so concurrent sessions each need their own or only the first binds its CDP port
+    user_data_dir = f"/tmp/bu-chrome-{slot.display_num}"
+    shutil.rmtree(user_data_dir, ignore_errors=True)
+    slot.user_data_dir = user_data_dir
+
     args = [binary_path] + list(stealth_args) + [
         f"--remote-debugging-port={slot.cdp_port}",
+        f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
