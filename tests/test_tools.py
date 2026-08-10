@@ -39,3 +39,13 @@ def test_register_python_sandbox() -> None:
 
     register_python_sandbox_tool(tools)
     assert "run_python" in tools.registry.registry.actions
+
+
+def test_parse_capsolver_cost() -> None:
+    from app.agent.tools import _parse_capsolver_cost
+
+    assert _parse_capsolver_cost({"cost": "0.0008"}) == 0.0008
+    assert _parse_capsolver_cost({"cost": 0.0012}) == 0.0012
+    assert _parse_capsolver_cost({}) == 0.0
+    assert _parse_capsolver_cost({"cost": None}) == 0.0
+    assert _parse_capsolver_cost({"cost": "not-a-number"}) == 0.0

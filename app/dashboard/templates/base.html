@@ -125,6 +125,30 @@
         padding: 2px 8px;
         font-size: 11px;
       }
+      .cost-cell {
+        position: relative;
+        cursor: default;
+      }
+      .cost-tip {
+        display: none;
+        position: absolute;
+        left: 0;
+        top: 100%;
+        margin-top: 4px;
+        z-index: 20;
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: nowrap;
+        color: #e5e5e5;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      }
+      .cost-cell:hover .cost-tip {
+        display: block;
+      }
     </style>
     {% block head %}{% endblock %}
   </head>

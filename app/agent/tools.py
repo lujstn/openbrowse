@@ -81,8 +81,20 @@ def register_fetch_tool(tools: Tools) -> None:
             return ActionResult(error=f"HTTP request failed: {e}")
 
 
-def register_capsolver_tool(tools: Tools) -> None:
-    """Register the Capsolver CAPTCHA-solving tool on a Tools instance."""
+def _parse_capsolver_cost(result: dict[str, Any]) -> float:
+    """Read the per-solve USD cost Capsolver returns in its task result."""
+    try:
+        return float(result.get("cost") or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) -> None:
+    """Register the Capsolver CAPTCHA-solving tool on a Tools instance.
+
+    Each solved CAPTCHA's real cost (from Capsolver's response) is appended to
+    ``cost_sink`` if given, so the caller can fold it into the run's total cost.
+    """
 
     if not settings.capsolver_api_key:
         logger.warning("CAPSOLVER_API_KEY not set — CAPTCHA tool disabled")
@@ -176,6 +188,8 @@ def register_capsolver_tool(tools: Tools) -> None:
                     solution = result.get("solution", {})
                     token = solution.get("gRecaptchaResponse") or solution.get("token")
                     if token:
+                        if cost_sink is not None:
+                            cost_sink.append(_parse_capsolver_cost(result))
                         await _inject_token(browser_session, captcha_type, token)
                         return ActionResult(
                             extracted_content="CAPTCHA solved successfully"
@@ -197,6 +211,8 @@ def register_capsolver_tool(tools: Tools) -> None:
                     result = resp.json()
                     status = result.get("status")
                     if status == "ready":
+                        if cost_sink is not None:
+                            cost_sink.append(_parse_capsolver_cost(result))
                         solution = result.get("solution", {})
                         token = (
                             solution.get("gRecaptchaResponse")

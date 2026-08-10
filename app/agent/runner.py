@@ -232,7 +232,8 @@ async def run_agent_session(session_id: str) -> None:
         tools = Tools()
         register_fetch_tool(tools)
         register_python_sandbox_tool(tools)
-        register_capsolver_tool(tools)
+        capsolver_costs: list[float] = []
+        register_capsolver_tool(tools, capsolver_costs)
 
         # Append output schema to task if provided
         full_task = task
@@ -282,21 +283,21 @@ async def run_agent_session(session_id: str) -> None:
                 summary=summary or f"Step {step_count}",
             )
 
-            computed_cost = cost.history_cost(
-                agent_instance.token_cost_service.usage_history,
-                now=datetime.now(timezone.utc),
-            )
-            summary_usage = agent_instance.history.usage
+            usage_history = agent_instance.token_cost_service.usage_history
+            llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+            capsolver_cost = sum(capsolver_costs)
+            total_cost = llm_cost + capsolver_cost
             await crud.update_session(
                 session_id,
-                llm_cost_usd=computed_cost,
-                total_cost_usd=computed_cost,
-                total_input_tokens=(summary_usage.total_prompt_tokens if summary_usage else 0),
-                total_output_tokens=(summary_usage.total_completion_tokens if summary_usage else 0),
+                llm_cost_usd=llm_cost,
+                capsolver_cost_usd=capsolver_cost,
+                total_cost_usd=total_cost,
+                total_input_tokens=sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage),
+                total_output_tokens=sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage),
             )
-            if max_cost and computed_cost >= max_cost:
+            if max_cost and total_cost >= max_cost:
                 raise BudgetExceededError(
-                    f"Cost ${computed_cost:.4f} exceeded budget ${max_cost:.2f}"
+                    f"Cost ${total_cost:.4f} exceeded budget ${max_cost:.2f}"
                 )
 
         # Build and run agent
@@ -319,17 +320,12 @@ async def run_agent_session(session_id: str) -> None:
         output = history.final_result() or ""
         is_successful = history.is_done() and not history.has_errors()
 
-        total_cost = cost.history_cost(
-            agent.token_cost_service.usage_history,
-            now=datetime.now(timezone.utc),
-        )
-        usage = history.usage
-        if usage:
-            total_input = usage.total_prompt_tokens
-            total_output = usage.total_completion_tokens
-        else:
-            total_input = 0
-            total_output = 0
+        usage_history = agent.token_cost_service.usage_history
+        llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+        capsolver_cost = sum(capsolver_costs)
+        total_cost = llm_cost + capsolver_cost
+        total_input = sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
+        total_output = sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
 
         # Validate output against schema if provided
         if output_schema and output:
@@ -347,7 +343,8 @@ async def run_agent_session(session_id: str) -> None:
             is_task_successful=int(is_successful),
             total_input_tokens=total_input,
             total_output_tokens=total_output,
-            llm_cost_usd=total_cost,
+            llm_cost_usd=llm_cost,
+            capsolver_cost_usd=capsolver_cost,
             total_cost_usd=total_cost,
         )
 

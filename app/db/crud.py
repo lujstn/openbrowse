@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,10 +16,12 @@ _SESSION_COLUMNS = {
     "status", "model", "task", "title", "output", "output_schema",
     "step_count", "last_step_summary", "is_task_successful", "live_url",
     "profile_id", "sensitive_data", "max_cost_usd", "total_input_tokens",
-    "total_output_tokens", "llm_cost_usd", "total_cost_usd",
+    "total_output_tokens", "llm_cost_usd", "total_cost_usd", "capsolver_cost_usd",
     "screenshot_path", "display_num", "system_prompt_extension",
     "keep_alive", "thinking_effort", "updated_at",
 }
+
+_SAFE_PROFILE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _PROFILE_COLUMNS = {
     "name", "user_id", "storage_state_path", "last_used_at", "updated_at",
@@ -364,6 +367,8 @@ async def rename_profile(old_id: str, new_id: str) -> dict[str, Any] | None:
     new_id = (new_id or "").strip()
     if not new_id:
         raise ValueError("new profile id must not be empty")
+    if ".." in new_id or not _SAFE_PROFILE_ID.match(new_id):
+        raise ValueError("profile id may only contain letters, digits, dot, dash and underscore")
     if new_id == old_id:
         return await get_profile(old_id)
     now = _now()

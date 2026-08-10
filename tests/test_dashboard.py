@@ -160,6 +160,19 @@ async def test_profile_rename_uuid_repoints_session_and_renames_file(client, tmp
     assert (tmp_path / "data" / "profiles" / f"{new_id}.json").exists()
 
 
+async def test_profile_rename_rejects_path_escape(client):
+    from app.db import crud
+
+    profile = await crud.create_profile(name="P")
+    resp = await client.post(
+        f"/profiles/{profile['id']}/edit",
+        data={"name": "P", "user_id": "", "new_id": "../evil"},
+        headers=_basic("admin", "secret-key"),
+    )
+    assert resp.status_code == 400
+    assert await crud.get_profile(profile["id"]) is not None
+
+
 async def test_profile_delete_cascade_nulls_session(client, tmp_path):
     from app.db import crud
 

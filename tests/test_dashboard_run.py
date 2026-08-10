@@ -5,6 +5,7 @@ from app.dashboard.routes import (
     THINKING_OPTIONS,
     _live_sessions,
     _novnc_port_for_display,
+    model_provider,
 )
 
 
@@ -31,6 +32,13 @@ def test_model_options_curated_list():
 def test_thinking_options_off_default_first():
     assert THINKING_OPTIONS[0][0] == "off"
     assert [v for v, _ in THINKING_OPTIONS] == ["off", "low", "medium", "high"]
+
+
+def test_model_provider_labels():
+    assert model_provider("gpt-5.6-luna") == "OpenAI"
+    assert model_provider("claude-opus-4-8[1m]") == "Anthropic"
+    assert model_provider("claude-sonnet-5") == "Anthropic"
+    assert model_provider(None) == "Anthropic"
 
 
 def test_live_sessions_filters_running_with_url_and_caps():

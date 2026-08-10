@@ -69,6 +69,15 @@ def _live_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return live[: settings.max_concurrent_sessions]
 
 
+def model_provider(model: str | None) -> str:
+    key = (model or "").strip()
+    if key.endswith("[1m]"):
+        key = key[:-4]
+    if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
+        return "OpenAI"
+    return "Anthropic"
+
+
 def _format_duration_secs(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.0f}s"
@@ -165,6 +174,7 @@ async def sessions_page(request: Request):
             "total": total,
             "format_duration": _format_duration,
             "format_relative": _format_relative_time,
+            "model_provider": model_provider,
         },
     )
 
@@ -184,6 +194,7 @@ async def session_detail(request: Request, session_id: str):
             "output_types": ["planning", "result", "completion"],
             "format_duration": _format_duration,
             "format_relative": _format_relative_time,
+            "model_provider": model_provider,
         },
     )
 
@@ -259,6 +270,7 @@ async def sse_sessions(request: Request):
                 sessions=sessions,
                 format_duration=_format_duration,
                 format_relative=_format_relative_time,
+                model_provider=model_provider,
             )
             yield {"event": "sessions", "data": rows_html}
             await asyncio.sleep(2)
@@ -316,6 +328,9 @@ async def sse_session_messages(request: Request, session_id: str):
                         "totalInputTokens": session.get("total_input_tokens", 0),
                         "totalOutputTokens": session.get("total_output_tokens", 0),
                         "llmCostUsd": str(session.get("llm_cost_usd", 0)),
+                        "capsolverCostUsd": str(session.get("capsolver_cost_usd", 0)),
+                        "totalCostUsd": str(session.get("total_cost_usd", 0)),
+                        "provider": model_provider(session.get("model")),
                         "output": session.get("output") or "",
                     }),
                 }

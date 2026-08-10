@@ -72,6 +72,18 @@ def test_openai_cached_and_cache_write():
     assert round(c, 10) == round((86 * 0.2 + 1920 * 0.02 + 300 * 1.2) / 1_000_000, 10)
 
 
+def test_openai_cache_write_priced():
+    u = _usage(
+        prompt_tokens=1000,
+        prompt_cached_tokens=200,
+        prompt_cache_creation_tokens=300,
+        completion_tokens=100,
+    )
+    c = cost.usage_cost("gpt-5.6-sol", u, now=_AUG)
+    expected = (500 * 5 + 200 * 0.5 + 300 * 6.25 + 100 * 30) / 1_000_000
+    assert round(c, 10) == round(expected, 10)
+
+
 def test_openai_long_context_tier():
     short = cost.usage_cost("gpt-5.6-sol", _usage(prompt_tokens=100_000, completion_tokens=0), now=_AUG)
     long = cost.usage_cost("gpt-5.6-sol", _usage(prompt_tokens=300_000, completion_tokens=0), now=_AUG)

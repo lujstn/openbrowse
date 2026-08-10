@@ -15,6 +15,14 @@
   <td class="mono">
     {{ format_duration(s.created_at, s.updated_at, s.status) }}
   </td>
-  <td class="mono">${{ '{:.4f}'.format(s.llm_cost_usd or 0) }}</td>
+  <td class="mono">
+    <span class="cost-cell"
+      >${{ '{:.4f}'.format(s.total_cost_usd or 0) }}<span class="cost-tip"
+        >{{ model_provider(s.model) }}: ${{ '{:.4f}'.format(s.llm_cost_usd or 0)
+        }}<br />CapSolver: ${{ '{:.4f}'.format(s.capsolver_cost_usd or 0)
+        }}</span
+      ></span
+    >
+  </td>
 </tr>
 {% endfor %}

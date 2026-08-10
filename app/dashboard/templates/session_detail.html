@@ -142,7 +142,15 @@ Browser Use Pi{% endblock %} {% block head %}
     (session.total_output_tokens or 0)) }}
   </dd>
   <dt>Cost</dt>
-  <dd id="stat-cost">${{ '{:.4f}'.format(session.llm_cost_usd or 0) }}</dd>
+  <dd class="cost-cell">
+    <span id="cost-total">${{ '{:.4f}'.format(session.total_cost_usd or 0) }}</span>
+    <span class="cost-tip">
+      <span id="cost-provider">{{ model_provider(session.model) }}</span>:
+      <span id="cost-llm">${{ '{:.4f}'.format(session.llm_cost_usd or 0) }}</span
+      ><br />CapSolver:
+      <span id="cost-capsolver">${{ '{:.4f}'.format(session.capsolver_cost_usd or 0) }}</span>
+    </span>
+  </dd>
   <dt>Started</dt>
   <dd>{{ format_relative(session.created_at) }}</dd>
 </dl>
@@ -242,8 +250,15 @@ Browser Use Pi{% endblock %} {% block head %}
         (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
       document.getElementById("stat-tokens").textContent =
         tokens.toLocaleString();
-      document.getElementById("stat-cost").textContent =
+      document.getElementById("cost-total").textContent =
+        "$" + parseFloat(data.totalCostUsd || data.llmCostUsd || 0).toFixed(4);
+      document.getElementById("cost-llm").textContent =
         "$" + parseFloat(data.llmCostUsd || 0).toFixed(4);
+      document.getElementById("cost-capsolver").textContent =
+        "$" + parseFloat(data.capsolverCostUsd || 0).toFixed(4);
+      if (data.provider) {
+        document.getElementById("cost-provider").textContent = data.provider;
+      }
       document.getElementById("session-status").textContent = data.status;
       if (data.output) {
         resultBox.textContent = data.output;

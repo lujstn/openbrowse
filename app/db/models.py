@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     llm_cost_usd REAL NOT NULL DEFAULT 0.0,
     total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    capsolver_cost_usd REAL NOT NULL DEFAULT 0.0,
     screenshot_path TEXT,
     display_num INTEGER,
     system_prompt_extension TEXT,
@@ -83,6 +84,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "thinking_effort" not in columns:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'off'"
+        )
+    if "capsolver_cost_usd" not in columns:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN capsolver_cost_usd REAL NOT NULL DEFAULT 0.0"
         )
 
 
