@@ -34,6 +34,7 @@ def test_resolve_sonnet5_and_opus48():
 def test_resolve_aliases():
     assert _resolve_model("bu-max") == ("anthropic", "claude-sonnet-5")
     assert _resolve_model("bu-ultra") == ("anthropic", "claude-opus-4-8")
+    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-luna")
 
 
 def test_resolve_openai_gpt56():
