@@ -15,9 +15,6 @@
   <td class="mono">
     {{ format_duration(s.created_at, s.updated_at, s.status) }}
   </td>
-  <td class="mono">
-    {{ '{:,}'.format((s.total_input_tokens or 0) + (s.total_output_tokens or 0))
-    }}
-  </td>
+  <td class="mono">${{ '{:.4f}'.format(s.llm_cost_usd or 0) }}</td>
 </tr>
 {% endfor %}

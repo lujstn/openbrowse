@@ -144,11 +144,6 @@ class DisplayManager:
         for dn in display_nums:
             await self.release(dn)
 
-    def get_live_url(self, slot: DisplaySlot, base_url: str) -> str:
-        """Get the noVNC URL for a display slot."""
-        return f"{base_url}:{slot.novnc_port}/vnc.html?autoconnect=true&resize=scale"
-
-
 async def wait_for_cdp(port: int, timeout: float = 30.0) -> None:
     """Poll http://127.0.0.1:{port}/json/version until 200 or timeout."""
     url = f"http://127.0.0.1:{port}/json/version"

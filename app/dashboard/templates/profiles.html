@@ -1,23 +1,167 @@
 {% extends "base.html" %} {% block title %}Profiles — Browser Use Pi{% endblock
-%} {% block content %}
+%} {% block head %}
+<style>
+  .create-card {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 24px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .create-card .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .create-card label {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cell-input,
+  .create-card input {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 7px 9px;
+  }
+  .cell-input:focus,
+  .create-card input:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .cell-input.mono {
+    font-family: "SF Mono", "Menlo", monospace;
+    width: 100%;
+    min-width: 260px;
+  }
+  .btn {
+    border: 1px solid #333;
+    background: #1a1a1a;
+    color: #e5e5e5;
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn:hover {
+    border-color: #444;
+  }
+  .btn-primary {
+    background: #60a5fa;
+    color: #0a0a0a;
+    border-color: #60a5fa;
+    font-weight: 600;
+  }
+  .btn-primary:hover {
+    background: #7db8fb;
+  }
+  .btn-danger:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+  table td {
+    vertical-align: middle;
+  }
+  .hint {
+    color: #666;
+    font-size: 11px;
+    margin-bottom: 16px;
+  }
+</style>
+{% endblock %} {% block content %}
 <h1>Profiles <span class="badge">{{ total }}</span></h1>
+
+<form class="create-card" method="post" action="/profiles/create">
+  <div class="field">
+    <label for="new-name">Name</label>
+    <input id="new-name" name="name" placeholder="My profile" />
+  </div>
+  <div class="field">
+    <label for="new-user">User ID</label>
+    <input id="new-user" name="user_id" placeholder="optional" />
+  </div>
+  <button class="btn btn-primary" type="submit">Create profile</button>
+</form>
+
+<p class="hint">
+  Editing a UUID rewrites the profile's stored cookie file and repoints every
+  session that used it. Blank Name or User ID clears the value.
+</p>
+
+{% for p in profiles %}
+<form id="edit-{{ p.id }}" method="post" action="/profiles/{{ p.id }}/edit"></form>
+<form id="del-{{ p.id }}" method="post" action="/profiles/{{ p.id }}/delete"></form>
+{% endfor %}
 
 <table>
   <thead>
     <tr>
-      <th>Profile ID</th>
+      <th>UUID</th>
       <th>Name</th>
+      <th>User ID</th>
       <th>Last Used</th>
       <th>Created</th>
+      <th></th>
     </tr>
   </thead>
   <tbody>
     {% for p in profiles %}
     <tr>
-      <td class="mono">{{ p.id }}</td>
-      <td>{{ p.name or '—' }}</td>
+      <td>
+        <input
+          class="cell-input mono"
+          form="edit-{{ p.id }}"
+          name="new_id"
+          value="{{ p.id }}"
+        />
+      </td>
+      <td>
+        <input
+          class="cell-input"
+          form="edit-{{ p.id }}"
+          name="name"
+          value="{{ p.name or '' }}"
+        />
+      </td>
+      <td>
+        <input
+          class="cell-input"
+          form="edit-{{ p.id }}"
+          name="user_id"
+          value="{{ p.user_id or '' }}"
+        />
+      </td>
       <td>{{ format_relative(p.last_used_at) if p.last_used_at else '—' }}</td>
       <td>{{ format_relative(p.created_at) }}</td>
+      <td>
+        <div class="actions">
+          <button class="btn btn-primary" form="edit-{{ p.id }}" type="submit">
+            Save
+          </button>
+          <button
+            class="btn btn-danger"
+            form="del-{{ p.id }}"
+            type="submit"
+            onclick="return confirm('Delete this profile? Sessions that used it will keep their history but lose the profile link.');"
+          >
+            Delete
+          </button>
+        </div>
+      </td>
     </tr>
     {% endfor %}
   </tbody>

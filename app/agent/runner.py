@@ -11,6 +11,7 @@ from typing import Any
 
 from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
 
+from app.agent import cost
 from app.agent.tools import register_capsolver_tool, register_fetch_tool, register_python_sandbox_tool
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
 from app.browser.vnc import wait_for_novnc
@@ -19,9 +20,31 @@ from app.db import crud
 
 logger = logging.getLogger(__name__)
 
+ONE_M_BETA = "context-1m-2025-08-07"
+
 
 class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
+
+
+class _CacheAwareChatOpenAI(ChatOpenAI):
+    """ChatOpenAI that also records OpenAI cache-write tokens, which browser-use drops."""
+
+    def _get_usage(self, response: Any):
+        usage = super()._get_usage(response)
+        if usage is None or getattr(response, "usage", None) is None:
+            return usage
+        details = getattr(response.usage, "prompt_tokens_details", None)
+        if details is None:
+            return usage
+        cache_write = getattr(details, "cache_write_tokens", None)
+        if cache_write is None:
+            extra = getattr(details, "model_extra", None)
+            if extra:
+                cache_write = extra.get("cache_write_tokens")
+        if cache_write:
+            usage.prompt_cache_creation_tokens = cache_write
+        return usage
 
 _ANTHROPIC_MODELS: dict[str, str] = {
     "claude-sonnet-5": "claude-sonnet-5",
@@ -70,6 +93,8 @@ _OPENAI_REASONING: dict[str, str] = {
 
 def _resolve_model(model: str) -> tuple[str, str]:
     key = (model or "").strip()
+    if key.endswith("[1m]"):
+        key = key[:-4]
     if key in _ANTHROPIC_MODELS:
         return "anthropic", _ANTHROPIC_MODELS[key]
     if key in _OPENAI_MODELS:
@@ -80,11 +105,12 @@ def _resolve_model(model: str) -> tuple[str, str]:
 
 
 def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
+    want_1m = (model or "").strip().endswith("[1m]")
     provider, model_id = _resolve_model(model)
     if provider == "openai":
         if not settings.openai_api_key:
             raise ValueError(f"Model '{model}' needs OPENAI_API_KEY, which is not configured")
-        llm = ChatOpenAI(
+        llm = _CacheAwareChatOpenAI(
             model=model_id,
             api_key=settings.openai_api_key,
             reasoning_effort=_OPENAI_REASONING.get(thinking_effort, "low"),
@@ -101,6 +127,8 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
         "timeout": 90,
         "max_retries": 3,
     }
+    if want_1m:
+        kwargs["betas"] = [ONE_M_BETA]
     if thinking_effort != "off":
         if model_id in _ADAPTIVE_THINKING_MODELS:
             kwargs["thinking"] = {"type": "adaptive"}
@@ -254,13 +282,22 @@ async def run_agent_session(session_id: str) -> None:
                 summary=summary or f"Step {step_count}",
             )
 
-            # Budget enforcement
-            if max_cost:
-                usage = agent_instance.history.usage
-                if usage and usage.total_cost >= max_cost:
-                    raise BudgetExceededError(
-                        f"Cost ${usage.total_cost:.4f} exceeded budget ${max_cost:.2f}"
-                    )
+            computed_cost = cost.history_cost(
+                agent_instance.token_cost_service.usage_history,
+                now=datetime.now(timezone.utc),
+            )
+            summary_usage = agent_instance.history.usage
+            await crud.update_session(
+                session_id,
+                llm_cost_usd=computed_cost,
+                total_cost_usd=computed_cost,
+                total_input_tokens=(summary_usage.total_prompt_tokens if summary_usage else 0),
+                total_output_tokens=(summary_usage.total_completion_tokens if summary_usage else 0),
+            )
+            if max_cost and computed_cost >= max_cost:
+                raise BudgetExceededError(
+                    f"Cost ${computed_cost:.4f} exceeded budget ${max_cost:.2f}"
+                )
 
         # Build and run agent
         agent_kwargs: dict[str, Any] = {
@@ -282,16 +319,17 @@ async def run_agent_session(session_id: str) -> None:
         output = history.final_result() or ""
         is_successful = history.is_done() and not history.has_errors()
 
-        # Cost from built-in tracking
+        total_cost = cost.history_cost(
+            agent.token_cost_service.usage_history,
+            now=datetime.now(timezone.utc),
+        )
         usage = history.usage
         if usage:
             total_input = usage.total_prompt_tokens
             total_output = usage.total_completion_tokens
-            total_cost = usage.total_cost
         else:
             total_input = 0
             total_output = 0
-            total_cost = 0.0
 
         # Validate output against schema if provided
         if output_schema and output:

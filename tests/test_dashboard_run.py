@@ -20,6 +20,7 @@ def test_model_options_curated_list():
     assert values == [
         "claude-sonnet-5",
         "claude-opus-4-8",
+        "claude-opus-4-8[1m]",
         "claude-opus-5",
         "gpt-5.6-luna",
         "gpt-5.6-terra",

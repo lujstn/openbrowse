@@ -31,6 +31,7 @@ vnc_router = APIRouter(tags=["dashboard-vnc"])
 MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-5", "Claude Sonnet 5"),
     ("claude-opus-4-8", "Claude Opus 4.8"),
+    ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
     ("claude-opus-5", "Claude Opus 5"),
     ("gpt-5.6-luna", "GPT-5.6 Luna"),
     ("gpt-5.6-terra", "GPT-5.6 Terra"),
@@ -199,6 +200,52 @@ async def profiles_page(request: Request):
             "format_relative": _format_relative_time,
         },
     )
+
+
+def _profile_state_file(storage_state_path: str):
+    return settings.data_dir / storage_state_path
+
+
+@router.post("/profiles/create")
+async def profiles_create(name: str = Form(""), user_id: str = Form("")):
+    profile = await crud.create_profile(name=(name or None), user_id=(user_id or None))
+    state_file = _profile_state_file(profile["storage_state_path"])
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"cookies": [], "origins": []}))
+    return RedirectResponse("/profiles", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/edit")
+async def profiles_edit(
+    profile_id: str,
+    name: str = Form(""),
+    user_id: str = Form(""),
+    new_id: str = Form(""),
+):
+    await crud.update_profile(profile_id, name=(name or None), user_id=(user_id or None))
+    new_id = (new_id or "").strip()
+    if new_id and new_id != profile_id:
+        existing = await crud.get_profile(profile_id)
+        try:
+            renamed = await crud.rename_profile(profile_id, new_id)
+        except ValueError as exc:
+            return HTMLResponse(f"Cannot rename profile: {exc}", status_code=400)
+        if renamed and existing and existing.get("storage_state_path"):
+            old_file = _profile_state_file(existing["storage_state_path"])
+            new_file = _profile_state_file(renamed["storage_state_path"])
+            if old_file.exists():
+                new_file.parent.mkdir(parents=True, exist_ok=True)
+                old_file.replace(new_file)
+    return RedirectResponse("/profiles", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/delete")
+async def profiles_delete(profile_id: str):
+    profile = await crud.get_profile(profile_id)
+    await crud.delete_profile_cascade(profile_id)
+    if profile and profile.get("storage_state_path"):
+        _profile_state_file(profile["storage_state_path"]).unlink(missing_ok=True)
+    return RedirectResponse("/profiles", status_code=303)
 
 
 @router.get("/sse/sessions")

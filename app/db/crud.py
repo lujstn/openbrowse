@@ -306,3 +306,46 @@ async def delete_profile(profile_id: str) -> bool:
         return cursor.rowcount > 0
     finally:
         await db.close()
+
+
+async def rename_profile(old_id: str, new_id: str) -> dict[str, Any] | None:
+    new_id = (new_id or "").strip()
+    if not new_id:
+        raise ValueError("new profile id must not be empty")
+    if new_id == old_id:
+        return await get_profile(old_id)
+    now = _now()
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT 1 FROM profiles WHERE id = ?", (new_id,))
+        if await cursor.fetchone():
+            raise ValueError(f"profile id {new_id} already exists")
+        cursor = await db.execute("SELECT 1 FROM profiles WHERE id = ?", (old_id,))
+        if not await cursor.fetchone():
+            return None
+        await db.execute("PRAGMA defer_foreign_keys = ON")
+        await db.execute(
+            "UPDATE profiles SET id = ?, storage_state_path = ?, updated_at = ? WHERE id = ?",
+            (new_id, f"profiles/{new_id}.json", now, old_id),
+        )
+        await db.execute(
+            "UPDATE sessions SET profile_id = ? WHERE profile_id = ?",
+            (new_id, old_id),
+        )
+        await db.commit()
+        return await get_profile(new_id, db=db)
+    finally:
+        await db.close()
+
+
+async def delete_profile_cascade(profile_id: str) -> bool:
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE sessions SET profile_id = NULL WHERE profile_id = ?", (profile_id,)
+        )
+        cursor = await db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()

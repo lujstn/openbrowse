@@ -111,3 +111,45 @@ def test_build_llm_openai_reasoning_effort(monkeypatch):
     provider, model_id, llm = runner._build_llm("gpt-5.6-luna", "medium")
     assert (provider, model_id) == ("openai", "gpt-5.6-luna")
     assert llm.reasoning_effort == "medium"
+
+
+def test_resolve_opus_1m_suffix_strips_to_base():
+    assert _resolve_model("claude-opus-4-8[1m]") == ("anthropic", "claude-opus-4-8")
+    assert _resolve_model("claude-opus-5") == ("anthropic", "claude-opus-5")
+
+
+def test_build_llm_1m_sets_betas_and_stays_adaptive(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    provider, model_id, llm = runner._build_llm("claude-opus-4-8[1m]", "high")
+    assert (provider, model_id) == ("anthropic", "claude-opus-4-8")
+    assert llm.betas == [runner.ONE_M_BETA]
+    assert llm.thinking == {"type": "adaptive"}
+
+
+def test_build_llm_opus5_builds(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    provider, model_id, _ = runner._build_llm("claude-opus-5", "off")
+    assert (provider, model_id) == ("anthropic", "claude-opus-5")
+
+
+def test_openai_subclass_captures_cache_write(monkeypatch):
+    import types
+
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
+    _, _, llm = runner._build_llm("gpt-5.6-luna", "off")
+    details = types.SimpleNamespace(cached_tokens=100, cache_write_tokens=50)
+    usage = types.SimpleNamespace(
+        prompt_tokens=1000,
+        prompt_tokens_details=details,
+        completion_tokens=200,
+        total_tokens=1200,
+    )
+    result = llm._get_usage(types.SimpleNamespace(usage=usage))
+    assert result.prompt_cached_tokens == 100
+    assert result.prompt_cache_creation_tokens == 50
