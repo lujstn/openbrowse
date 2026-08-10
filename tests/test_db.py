@@ -54,6 +54,39 @@ async def test_create_and_list_messages():
     assert not has_more
 
 
+async def test_reconcile_interrupted_sessions():
+    running = await crud.create_session(task="live task")
+    await crud.update_session(running["id"], status="running")
+    queued = await crud.create_session(task="queued task")
+    shell = await crud.create_session()
+    done = await crud.create_session(task="done")
+    await crud.update_session(done["id"], status="stopped")
+
+    reconciled = await crud.reconcile_interrupted_sessions()
+    assert reconciled == 2
+
+    assert (await crud.get_session(running["id"]))["status"] == "error"
+    assert (await crud.get_session(queued["id"]))["status"] == "error"
+    assert (await crud.get_session(shell["id"]))["status"] == "created"
+    assert (await crud.get_session(done["id"]))["status"] == "stopped"
+
+
+async def test_expire_stale_sessions_only_taskless_created():
+    shell = await crud.create_session()
+    with_task = await crud.create_session(task="has work")
+
+    expired = await crud.expire_stale_sessions(older_than_minutes=-1)
+    assert expired == 1
+    assert (await crud.get_session(shell["id"]))["status"] == "expired"
+    assert (await crud.get_session(with_task["id"]))["status"] == "created"
+
+
+async def test_expire_stale_sessions_spares_fresh_shells():
+    await crud.create_session()
+    expired = await crud.expire_stale_sessions(older_than_minutes=15)
+    assert expired == 0
+
+
 async def test_create_and_get_profile():
     profile = await crud.create_profile(name="Test Profile")
     assert profile["name"] == "Test Profile"

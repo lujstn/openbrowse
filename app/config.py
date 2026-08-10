@@ -48,6 +48,8 @@ class Settings:
     # Limits
     max_concurrent_sessions: int = 5
     default_model: str = "claude-sonnet-5"
+    stale_session_minutes: int = 15
+    reconcile_interval_seconds: int = 60
     # noVNC
     novnc_base_port: int = 6080
     vnc_base_port: int = 5900

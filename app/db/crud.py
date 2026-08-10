@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
@@ -139,6 +139,58 @@ async def delete_session(session_id: str) -> bool:
         cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         await db.commit()
         return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def reconcile_interrupted_sessions() -> int:
+    """Mark sessions orphaned by a server restart as errored.
+
+    Call once at startup, when the pool is provably empty: any session still
+    marked 'running', or 'created' with a task it never got to submit, was
+    interrupted mid-flight and can never resume, so its status is a lie.
+    """
+    now = _now()
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE sessions
+               SET status = 'error',
+                   last_step_summary = 'Interrupted by server restart',
+                   updated_at = ?
+               WHERE status = 'running'
+                  OR (status = 'created' AND task IS NOT NULL)""",
+            (now,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def expire_stale_sessions(older_than_minutes: int) -> int:
+    """Expire task-less 'created' shells that were never given work.
+
+    A session created via /v3/sessions with no task never reaches the pool, so
+    it sits at 'created' forever and renders as a perpetually-ongoing row. Once
+    older than the TTL it is a dead shell and is moved to a terminal state.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)
+    ).isoformat()
+    now = _now()
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE sessions
+               SET status = 'expired',
+                   last_step_summary = 'Expired: created without a task',
+                   updated_at = ?
+               WHERE status = 'created' AND task IS NULL AND created_at < ?""",
+            (now, cutoff),
+        )
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()
 
