@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hmac
 
 from fastapi import Header, HTTPException, Security
@@ -35,18 +36,51 @@ async def require_api_key(
     return presented
 
 
+def _expected_dashboard_password() -> str:
+    return settings.dashboard_password or settings.api_key
+
+
+def check_dashboard_credentials(username: str, password: str) -> bool:
+    """Constant-time check of Basic credentials against the dashboard user and password."""
+    expected = _expected_dashboard_password()
+    if not expected:
+        return settings.allow_insecure_no_auth
+    user_ok = hmac.compare_digest(username, settings.dashboard_user)
+    pass_ok = hmac.compare_digest(password, expected)
+    return user_ok and pass_ok
+
+
+def dashboard_auth_ok(authorization: str | None) -> bool:
+    """Verify a raw Basic ``Authorization`` header.
+
+    For routes that cannot use the ``Security(HTTPBasic)`` dependency cleanly, such as
+    WebSocket handshakes and the noVNC asset passthrough.
+    """
+    if not _expected_dashboard_password():
+        return settings.allow_insecure_no_auth
+    if not authorization:
+        return False
+    scheme, _, encoded = authorization.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        username, sep, password = base64.b64decode(encoded).decode("utf-8").partition(":")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not sep:
+        return False
+    return check_dashboard_credentials(username, password)
+
+
 async def require_dashboard_auth(
     credentials: HTTPBasicCredentials = Security(_basic),
 ) -> str:
     """Gate the dashboard behind HTTP Basic auth (dashboard user + password, or the API key)."""
-    password = settings.dashboard_password or settings.api_key
-    if not password:
+    if not _expected_dashboard_password():
         if settings.allow_insecure_no_auth:
             return "dev"
         raise HTTPException(status_code=503, detail="Dashboard authentication is not configured")
-    user_ok = hmac.compare_digest(credentials.username, settings.dashboard_user)
-    pass_ok = hmac.compare_digest(credentials.password, password)
-    if not (user_ok and pass_ok):
+    if not check_dashboard_credentials(credentials.username, credentials.password):
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",

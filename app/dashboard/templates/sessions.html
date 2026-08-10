@@ -1,7 +1,69 @@
 {% extends "base.html" %} {% block title %}Sessions — Browser Use Pi{% endblock
-%} {% block content %}
+%} {% block head %}
+<style>
+  .live-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .grid-tile {
+    display: block;
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .grid-tile:hover {
+    border-color: #333;
+    text-decoration: none;
+  }
+  .grid-tile-feed {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #000;
+  }
+  .grid-tile-feed iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    pointer-events: none;
+  }
+  .grid-tile-label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+  }
+  .live-grid-empty {
+    color: #666;
+    font-size: 13px;
+    padding: 24px 0;
+  }
+  .section-label {
+    color: #666;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 4px 0 12px;
+  }
+</style>
+{% endblock %} {% block content %}
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
 
+<div class="section-label">Live</div>
+<div id="live-grid" class="live-grid">{% include "_live_grid.html" %}</div>
+<div
+  id="live-grid-empty"
+  class="live-grid-empty"
+  style="display: {% if live_sessions %}none{% endif %}"
+>
+  No live sessions
+</div>
+
+<div class="section-label">History</div>
 <div
   hx-ext="sse"
   sse-connect="/sse/sessions"
@@ -26,4 +88,62 @@
     </tbody>
   </table>
 </div>
+
+<script>
+  (function () {
+    const grid = document.getElementById("live-grid");
+    const empty = document.getElementById("live-grid-empty");
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        }[c];
+      });
+    }
+    function buildTile(item) {
+      const a = document.createElement("a");
+      a.className = "grid-tile";
+      a.href = "/session/" + item.id;
+      a.setAttribute("data-session-id", item.id);
+      a.innerHTML =
+        '<div class="grid-tile-feed"><iframe src="' +
+        esc(item.liveUrl) +
+        '" tabindex="-1" scrolling="no"></iframe></div>' +
+        '<div class="grid-tile-label"><span class="status status-' +
+        esc(item.status) +
+        '"><span class="status-dot"></span> ' +
+        esc(item.status) +
+        '</span><span class="badge">' +
+        esc(item.model || "sonnet") +
+        "</span></div>";
+      return a;
+    }
+    function reconcile(items) {
+      const incoming = new Set(items.map((i) => i.id));
+      grid.querySelectorAll(".grid-tile").forEach((tile) => {
+        if (!incoming.has(tile.getAttribute("data-session-id"))) tile.remove();
+      });
+      items.forEach((item) => {
+        if (
+          !grid.querySelector(
+            '.grid-tile[data-session-id="' + CSS.escape(item.id) + '"]'
+          )
+        ) {
+          grid.appendChild(buildTile(item));
+        }
+      });
+      empty.style.display = grid.querySelector(".grid-tile") ? "none" : "";
+    }
+    const src = new EventSource("/sse/live-grid");
+    src.addEventListener("live-grid", function (e) {
+      try {
+        reconcile(JSON.parse(e.data));
+      } catch (err) {}
+    });
+  })();
+</script>
 {% endblock %}

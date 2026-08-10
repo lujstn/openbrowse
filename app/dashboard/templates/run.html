@@ -1,0 +1,191 @@
+{% extends "base.html" %} {% block title %}Run — Browser Use Pi{% endblock %} {%
+block head %}
+<style>
+  .run-wrap {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  .run-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .run-head h1 {
+    margin-bottom: 0;
+  }
+  .capacity {
+    color: #666;
+    font-size: 12px;
+  }
+  .run-card {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .run-card textarea {
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #e5e5e5;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 14px;
+  }
+  .run-card textarea:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .run-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .field label {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .field select,
+  .field input[type="number"] {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+  .field select:focus,
+  .field input:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .field-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  .field-inline input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #60a5fa;
+  }
+  .field-inline label {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    color: #e5e5e5;
+  }
+  .run-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+  .run-btn {
+    background: #60a5fa;
+    color: #0a0a0a;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px 22px;
+    cursor: pointer;
+  }
+  .run-btn:hover {
+    background: #7db8fb;
+  }
+  .icon {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    vertical-align: middle;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="run-wrap">
+  <div class="run-head">
+    <h1>Run a task</h1>
+    <span class="capacity">{{ active_count }}/{{ max_concurrent }} running</span>
+  </div>
+  <form class="run-card" method="post" action="/run">
+    <textarea
+      name="task"
+      placeholder="Describe what the browser agent should do…"
+      required
+      autofocus
+    ></textarea>
+    <div class="run-controls">
+      <div class="field">
+        <label for="model">Model</label>
+        <select id="model" name="model">
+          {% for value, label in models %}
+          <option value="{{ value }}" {% if value == default_model %}selected{% endif %}>
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="profile_id">
+          <svg class="icon" viewBox="0 0 24 24">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 20c0-4 4-6 8-6s8 2 8 6" />
+          </svg>
+          Profile
+        </label>
+        <select id="profile_id" name="profile_id">
+          <option value="">None</option>
+          {% for p in profiles %}
+          <option value="{{ p.id }}">{{ p.name or p.id[:8] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="max_cost_usd">Budget cap (USD)</label>
+        <input
+          id="max_cost_usd"
+          name="max_cost_usd"
+          type="number"
+          min="0"
+          step="0.01"
+          value="0.50"
+        />
+      </div>
+      <div class="field">
+        <label for="thinking_effort">Additional Step Thinking</label>
+        <select id="thinking_effort" name="thinking_effort">
+          {% for value, label in thinking_options %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field field-inline">
+        <input id="keep_alive" name="keep_alive" type="checkbox" />
+        <label for="keep_alive">Keep browser alive after task</label>
+      </div>
+    </div>
+    <div class="run-actions">
+      <button class="run-btn" type="submit">Run</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

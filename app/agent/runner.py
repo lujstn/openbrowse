@@ -176,7 +176,10 @@ async def run_agent_session(session_id: str) -> None:
         await wait_for_novnc(slot.novnc_port)
         cdp_url = await launch_chrome(slot)
 
-        live_url = f"http://localhost:{slot.novnc_port}/vnc.html?autoconnect=true&resize=scale"
+        live_url = (
+            f"/vnc/{session_id}/vnc.html?autoconnect=true&resize=scale"
+            f"&path=vnc/{session_id}/websockify"
+        )
         await crud.update_session(
             session_id,
             status="running",
