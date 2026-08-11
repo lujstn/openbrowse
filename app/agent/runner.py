@@ -90,7 +90,9 @@ class _RepairingChatAnthropic(ChatAnthropic):
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
         sid = getattr(self, "_activity_session", None)
         if sid:
-            set_activity(sid, "Waiting for model response")
+            last = getattr(self, "_last_action", None)
+            label = "Model thinking" + (f" · next step after {last}" if last else "")
+            set_activity(sid, label, spin=True)
         try:
             try:
                 return await super().ainvoke(messages, output_format, **kwargs)
@@ -122,7 +124,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 raise
         finally:
             if sid:
-                set_activity(sid, "Acting")
+                set_activity(sid, "Running actions")
 
 
 _ANTHROPIC_MODELS: dict[str, str] = {
@@ -203,7 +205,7 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
     kwargs: dict[str, Any] = {
         "model": model_id,
         "api_key": settings.anthropic_api_key,
-        "timeout": 90,
+        "timeout": 180,
         "max_retries": 3,
         "max_tokens": 16384,
     }
@@ -498,7 +500,8 @@ async def run_agent_session(session_id: str) -> None:
                 msg_type=msg_type,
                 summary=summary or f"Step {step_count}",
             )
-            set_activity(session_id, "Working")
+            llm._last_action = action_name
+            set_activity(session_id, "Running actions")
 
             usage_history = agent_instance.token_cost_service.usage_history
             llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
@@ -524,6 +527,7 @@ async def run_agent_session(session_id: str) -> None:
             "browser": browser_session,
             "tools": tools,
             "calculate_cost": True,
+            "llm_timeout": 180,
         }
         if output_model is not None:
             agent_kwargs["output_model_schema"] = output_model

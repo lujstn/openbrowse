@@ -3,9 +3,13 @@
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}
 <div class="msg-row" data-type="{{ m.type }}">
-  <span class="msg-time">{{ format_relative(m.created_at) }}</span>
+  <span class="msg-left">
+    <span class="msg-time" data-ts="{{ m.created_at }}"></span>
+    {% if d.duration_s %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
+  </span>
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
-  <span class="msg-summary{% if d.code %} msg-code{% endif %}">{{ m.summary }}</span>
-  {% if d.duration_s %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
+  <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>
+  <span class="msg-caret" aria-hidden="true">▾</span>
+  {% if d.step %}<span class="msg-step">#{{ d.step }}</span>{% endif %}
 </div>
 {% endfor %}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -40,28 +41,59 @@ def _safe_fromjson(value: str) -> dict:
 
 templates.env.filters["fromjson"] = _safe_fromjson
 
+_SELECTOR_RE = re.compile(
+    r"^[a-zA-Z][a-zA-Z0-9]*(\[[a-zA-Z_:][\w:-]*(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\])*$"
+)
+_SELECTOR_ATTR_RE = re.compile(r"\[([a-zA-Z_:][\w:-]*)(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\]")
+_SELECTOR_ACTIONS = {"find_elements", "search_page"}
+_CODE_ACTIONS = {"evaluate", "find_elements", "search_page"}
+
+
+def _htmlify_selector(selector: str) -> str | None:
+    sel = selector.strip()
+    if not sel or not _SELECTOR_RE.match(sel):
+        return None
+    tag = re.match(r"^[a-zA-Z][a-zA-Z0-9]*", sel).group(0)
+    attrs = _SELECTOR_ATTR_RE.findall(sel)
+    return "<" + " ".join([tag] + attrs) + ">"
+
 
 def message_display(m: dict) -> dict:
-    """Category + label for a feed row, derived at render time so it works for old
-    runs (whose stored data predates categorisation) as well as new ones."""
+    """Category, label, cleaned summary and code-style flag for a feed row, derived
+    at render time so it works for old runs (whose stored data predates
+    categorisation) as well as new ones."""
     t = m.get("type") or "info"
+    summary = m.get("summary") or ""
     if t == "browser_action_error":
-        return {"category": "error", "label": "error"}
+        return {"category": "error", "label": "error", "summary": summary, "code": False}
     if t == "planning":
-        return {"category": "planning", "label": "planning"}
+        return {"category": "planning", "label": "planning", "summary": summary, "code": False}
     if t == "completion":
-        return {"category": "completion", "label": "done"}
+        return {"category": "completion", "label": "done", "summary": summary, "code": False}
     data = _safe_fromjson(m.get("data") or "")
     action = data.get("action")
     category = data.get("category")
-    summary = m.get("summary") or ""
     if not action:
         first = summary.split(" ", 1)[0] if summary else ""
         if first and ("_" in first or (first.isalpha() and first.islower())):
             action = first
     if not category:
         category = _category_for(action or summary)
-    return {"category": category, "label": action or category}
+
+    cleaned = summary
+    if action and cleaned.startswith(action + " "):
+        cleaned = cleaned[len(action) + 1 :]
+
+    code = bool(data.get("code")) or action in _CODE_ACTIONS
+
+    if action in _SELECTOR_ACTIONS:
+        htmlified = _htmlify_selector(cleaned)
+        if htmlified:
+            cleaned = htmlified
+    elif action == "click" and cleaned.strip().isdigit():
+        cleaned = "element #" + cleaned.strip()
+
+    return {"category": category, "label": action or category, "summary": cleaned, "code": code}
 
 
 templates.env.globals["message_display"] = message_display

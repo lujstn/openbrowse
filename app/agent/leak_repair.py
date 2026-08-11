@@ -14,7 +14,10 @@ without browser-use installed.
 from __future__ import annotations
 
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _ACTION_BLOCK_RE = re.compile(r"<action>.*?</action>", re.DOTALL)
 _STRAY_TAGS_RE = re.compile(r"</?(?:AgentOutput|thinking|action)>")
@@ -53,28 +56,56 @@ def _first_json_array(text: str) -> str | None:
     return None
 
 
+def _parse_action_array(array_str: str) -> list | None:
+    try:
+        parsed = json.loads(array_str)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(parsed, list) and parsed and all(isinstance(x, dict) for x in parsed):
+        return parsed
+    return None
+
+
+def _extract_action_array(text: str) -> list | None:
+    """Best-effort recovery of a leaked action list from a string: the payload
+    right after an ``<action>`` tag when present, else the last balanced ``[...]``
+    that parses to a non-empty list of objects (handles a missing opening tag).
+    """
+    if "<action>" in text:
+        after = _first_json_array(text.split("<action>", 1)[1])
+        if after:
+            parsed = _parse_action_array(after)
+            if parsed:
+                return parsed
+    best = None
+    idx = text.find("[")
+    while idx != -1:
+        arr = _first_json_array(text[idx:])
+        if arr:
+            parsed = _parse_action_array(arr)
+            if parsed:
+                best = parsed
+        idx = text.find("[", idx + 1)
+    return best
+
+
 def hoist_leaked_action(tool_input: dict) -> bool:
     """Recover a leaked action list into ``tool_input['action']``.
 
-    If *tool_input* has no usable ``action`` but one of its string fields
-    contains a ``<action>[...]</action>`` block, extract that JSON array into
-    ``tool_input['action']`` and strip the stray tags from the field. Mutates
-    *tool_input* in place and returns True when a repair was made.
+    If *tool_input* has no usable ``action`` but one of its string fields contains
+    a leaked action array (typically inside ``<action>...</action>``, but tolerant
+    of a missing opening tag), extract it into ``tool_input['action']`` and strip
+    the stray tags. Mutates *tool_input* in place; returns True on a repair.
     """
     if not isinstance(tool_input, dict) or tool_input.get("action"):
         return False
     for key, value in list(tool_input.items()):
-        if not isinstance(value, str) or "<action>" not in value:
+        if not isinstance(value, str):
             continue
-        after = value.split("<action>", 1)[1]
-        array_str = _first_json_array(after)
-        if not array_str:
+        if "<action>" not in value and "</action>" not in value and "[{" not in value:
             continue
-        try:
-            parsed = json.loads(array_str)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(parsed, list) or not parsed:
+        parsed = _extract_action_array(value)
+        if not parsed:
             continue
         tool_input["action"] = parsed
         cleaned = _ACTION_BLOCK_RE.sub("", value)
@@ -96,8 +127,15 @@ def repair_anthropic_message(response: object) -> int:
         if getattr(block, "type", None) != "tool_use":
             continue
         tool_input = getattr(block, "input", None)
-        if isinstance(tool_input, dict) and hoist_leaked_action(tool_input):
+        if not isinstance(tool_input, dict) or tool_input.get("action"):
+            continue
+        if hoist_leaked_action(tool_input):
             repaired += 1
+        else:
+            snippet = {
+                k: (v[:200] if isinstance(v, str) else v) for k, v in tool_input.items()
+            }
+            logger.warning("action-leak repair could not salvage tool input: %r", snippet)
     return repaired
 
 

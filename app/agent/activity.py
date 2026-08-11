@@ -13,12 +13,15 @@ from datetime import datetime, timezone
 _activity: dict[str, dict] = {}
 
 
-def set_activity(session_id: str, label: str, step: int | None = None) -> None:
+def set_activity(
+    session_id: str, label: str, step: int | None = None, spin: bool = False
+) -> None:
     prev = _activity.get(session_id) or {}
     _activity[session_id] = {
         "label": label,
         "startedAt": datetime.now(timezone.utc).isoformat(),
         "step": step if step is not None else prev.get("step"),
+        "spin": spin,
     }
 
 

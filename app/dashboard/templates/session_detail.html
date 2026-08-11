@@ -70,7 +70,6 @@ Browser Use Pi{% endblock %} {% block head %}
     font-family: monospace;
     font-size: 11px;
     white-space: nowrap;
-    min-width: 70px;
   }
   .msg-type {
     color: #888;
@@ -255,13 +254,19 @@ Browser Use Pi{% endblock %} {% block head %}
     flex: none;
   }
   .act-spin {
-    width: 12px;
-    height: 12px;
+    width: 13px;
+    height: 13px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.12);
-    border-top-color: #9ca3af;
     flex: none;
-    animation: spin 0.7s linear infinite;
+    background: conic-gradient(
+      from 0deg,
+      rgba(156, 163, 175, 0) 0deg,
+      #9ca3af 300deg,
+      rgba(156, 163, 175, 0) 360deg
+    );
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.6px), #000 calc(100% - 1.6px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 1.6px), #000 calc(100% - 1.6px));
+    animation: spin 0.85s linear infinite;
   }
   .act-label {
     flex: 1;
@@ -270,21 +275,35 @@ Browser Use Pi{% endblock %} {% block head %}
     font-variant-numeric: tabular-nums;
     color: #6b7280;
   }
+  .msg-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 0 0 auto;
+    align-self: flex-start;
+  }
   .msg-dur {
+    color: #64748b;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .msg-step {
     margin-left: auto;
     color: #64748b;
+    font-family: monospace;
     font-size: 11px;
-    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     flex: 0 0 auto;
     align-self: flex-start;
   }
   .msg-cat {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 4px;
     font-size: 11px;
     font-family: monospace;
-    min-width: 96px;
     max-width: 150px;
     padding: 1px 6px;
     border-radius: 4px;
@@ -322,6 +341,28 @@ Browser Use Pi{% endblock %} {% block head %}
     -webkit-line-clamp: unset;
     overflow: visible;
     word-break: break-word;
+  }
+  .msg-caret {
+    display: none;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    color: #71717a;
+    font-size: 9px;
+    line-height: 1.5;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  .msg-row.has-overflow .msg-caret {
+    display: inline-block;
+  }
+  .msg-caret:hover {
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .msg-row.expanded .msg-caret {
+    color: #9ca3af;
   }
   .cc-outhead {
     display: flex;
@@ -433,25 +474,30 @@ Browser Use Pi{% endblock %} {% block head %}
   let currentOutput = "";
   let activityState = null;
   let lastStatus = browserPanel.dataset.status;
+  let activityIndicatorType = null;
   const activityBar = document.getElementById("activity-bar");
 
   function renderActivity() {
     if (!activityState || TERMINAL.includes(lastStatus)) {
       activityBar.classList.add("hidden");
+      activityIndicatorType = null;
       return;
     }
     const started = Date.parse(activityState.startedAt);
     const secs = isNaN(started) ? 0 : Math.max(0, (Date.now() - started) / 1000);
     const stepLabel = activityState.step ? " · step " + activityState.step : "";
-    const waiting = /waiting/i.test(activityState.label || "");
-    const indicator = waiting
-      ? '<span class="act-spin"></span>'
-      : '<span class="act-dot"></span>';
+    const type = activityState.spin ? "spin" : "dot";
+
     activityBar.classList.remove("hidden");
-    activityBar.innerHTML =
-      indicator + '<span class="act-label">' +
-      esc(activityState.label) + stepLabel +
-      '</span><span class="act-timer">' + secs.toFixed(1) + "s</span>";
+    if (type !== activityIndicatorType) {
+      activityIndicatorType = type;
+      const indicator =
+        type === "spin" ? '<span class="act-spin"></span>' : '<span class="act-dot"></span>';
+      activityBar.innerHTML =
+        indicator + '<span class="act-label"></span><span class="act-timer"></span>';
+    }
+    activityBar.querySelector(".act-label").textContent = (activityState.label || "") + stepLabel;
+    activityBar.querySelector(".act-timer").textContent = secs.toFixed(1) + "s";
   }
   setInterval(renderActivity, 100);
 
@@ -459,6 +505,25 @@ Browser Use Pi{% endblock %} {% block head %}
     const d = document.createElement("div");
     d.textContent = s == null ? "" : String(s);
     return d.innerHTML;
+  }
+
+  function formatTimes(root) {
+    (root || document).querySelectorAll(".msg-time[data-ts]").forEach(function (el) {
+      const d = new Date(el.dataset.ts);
+      if (isNaN(d.getTime())) return;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      el.textContent = hh + ":" + mm;
+    });
+  }
+
+  function detectOverflow(root) {
+    (root || document).querySelectorAll(".msg-row").forEach(function (row) {
+      if (row.classList.contains("expanded")) return;
+      const sum = row.querySelector(".msg-summary");
+      if (!sum) return;
+      row.classList.toggle("has-overflow", sum.scrollHeight > sum.clientHeight + 1);
+    });
   }
 
   function displayStatus(status, success) {
@@ -578,6 +643,7 @@ Browser Use Pi{% endblock %} {% block head %}
   function handleRows(html) {
     const tpl = document.createElement("template");
     tpl.innerHTML = (html || "").trim();
+    formatTimes(tpl.content);
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
       const type = row.dataset.type || "info";
       const sumEl = row.querySelector(".msg-summary");
@@ -589,18 +655,23 @@ Browser Use Pi{% endblock %} {% block head %}
       }
       feedRows.insertBefore(row.cloneNode(true), feedRows.firstChild);
     });
+    detectOverflow(feedRows);
     outputPanel.scrollTop = 0;
   }
 
   feedRows.addEventListener("click", function (e) {
-    const sum = e.target.closest(".msg-summary");
-    if (sum) {
-      const row = sum.closest(".msg-row");
-      if (row) row.classList.toggle("expanded");
-    }
+    const target = e.target.closest(".msg-summary, .msg-caret");
+    if (!target) return;
+    const row = target.closest(".msg-row");
+    if (!row) return;
+    row.classList.toggle("expanded");
+    const caret = row.querySelector(".msg-caret");
+    if (caret) caret.textContent = row.classList.contains("expanded") ? "▴" : "▾";
   });
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
+  formatTimes();
+  detectOverflow(feedRows);
 
   document.getElementById("copy-json").onclick = async function () {
     const btn = this;
