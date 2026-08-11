@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.activity import get_activity
 from app.agent.pool import pool
+from app.agent.runner import _category_for
 from app.api.sessions import _to_session_response
 from app.auth import dashboard_auth_ok, require_dashboard_auth
 from app.config import settings
@@ -38,6 +39,32 @@ def _safe_fromjson(value: str) -> dict:
 
 
 templates.env.filters["fromjson"] = _safe_fromjson
+
+
+def message_display(m: dict) -> dict:
+    """Category + label for a feed row, derived at render time so it works for old
+    runs (whose stored data predates categorisation) as well as new ones."""
+    t = m.get("type") or "info"
+    if t == "browser_action_error":
+        return {"category": "error", "label": "error"}
+    if t == "planning":
+        return {"category": "planning", "label": "planning"}
+    if t == "completion":
+        return {"category": "completion", "label": "done"}
+    data = _safe_fromjson(m.get("data") or "")
+    action = data.get("action")
+    category = data.get("category")
+    summary = m.get("summary") or ""
+    if not action:
+        first = summary.split(" ", 1)[0] if summary else ""
+        if first and ("_" in first or (first.isalpha() and first.islower())):
+            action = first
+    if not category:
+        category = _category_for(action or summary)
+    return {"category": category, "label": action or category}
+
+
+templates.env.globals["message_display"] = message_display
 
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
 vnc_router = APIRouter(tags=["dashboard-vnc"])
