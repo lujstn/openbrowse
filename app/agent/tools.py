@@ -1,5 +1,6 @@
 """Custom browser-use tools — Capsolver CAPTCHA solving, Python sandbox, HTTP fetch."""
 
+import asyncio
 import json
 import logging
 import re
@@ -7,12 +8,52 @@ from typing import Any
 
 import httpx
 from browser_use import ActionResult, BrowserSession, Tools
+from browser_use.browser.events import NavigateToUrlEvent, SwitchTabEvent
+from browser_use.filesystem.file_system import FileSystem
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 CAPSOLVER_API = "https://api.capsolver.com"
+
+_MAX_INLINE_FETCH_CHARS = 3000
+_FETCH_PREVIEW_CHARS = 2000
+_SANDBOX_STDOUT_PREVIEW_CHARS = 2500
+_FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
+
+
+def _normalise_fs_name(name: str, default_ext: str = "json") -> str:
+    """Coerce a caller-supplied name into a FileSystem-valid filename with a
+    supported extension so ``write_file`` accepts it.
+    """
+    base = ((name or "").strip() or f"output.{default_ext}").rsplit("/", 1)[-1]
+    if "." in base and base.rsplit(".", 1)[1].lower() in _FS_EXTENSIONS:
+        return base
+    return f"{base}.{default_ext}"
+
+
+def _fs_name_from_url(url: str, content_type: str = "", body: str = "") -> str:
+    """A stable, readable filename derived from a URL (same URL -> same file, so a
+    re-fetch overwrites rather than duplicates), with an extension inferred from
+    the content type or body.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    base = re.sub(r"[^a-zA-Z0-9_\-]", "_", f"{parsed.netloc}{parsed.path}".strip("/"))[:60]
+    base = base.strip("_") or "response"
+    ct = (content_type or "").lower()
+    head = (body or "").lstrip()[:16].lower()
+    if "json" in ct or head[:1] in ("{", "["):
+        ext = "json"
+    elif "html" in ct or head.startswith(("<!doctype html", "<html")):
+        ext = "html"
+    elif "xml" in ct or head.startswith("<?xml"):
+        ext = "xml"
+    else:
+        ext = "txt"
+    return f"fetch_{base}.{ext}"
 
 
 async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
@@ -78,12 +119,16 @@ def register_fetch_tool(tools: Tools) -> None:
     """
 
     @tools.action(
-        "Make a single HTTP request to an external JSON API or REST endpoint "
-        "(server-side, no CORS). For fetching page HTML, embedded page data, or "
-        "bulk/parallel fetches, prefer the code sandbox's fetch() helper instead."
+        "Make a single server-side HTTP request to an external JSON API or REST "
+        "endpoint (no CORS). Large responses (>3000 chars) are saved to a file and "
+        "only previewed here — read specific keys/slices via read_file or the "
+        "run_python sandbox (read_json) instead of re-fetching. For fetching page "
+        "HTML, embedded page data, or bulk/parallel fetches, prefer the code "
+        "sandbox's fetch() helper instead."
     )
     async def http_fetch(
         url: str,
+        file_system: FileSystem,
         method: str = "GET",
         headers: str | None = None,
         body: str | None = None,
@@ -92,6 +137,7 @@ def register_fetch_tool(tools: Tools) -> None:
 
         Args:
             url: The URL to request
+            file_system: Injected by browser-use — must be named exactly this
             method: HTTP method (GET, POST, PUT, DELETE, PATCH)
             headers: JSON string of headers, e.g. '{"Authorization": "Bearer ..."}'
             body: Request body as string (for POST/PUT/PATCH)
@@ -111,13 +157,44 @@ def register_fetch_tool(tools: Tools) -> None:
                     headers=parsed_headers,
                     content=body,
                 )
-                text = resp.text[:50_000]
+            text = resp.text
+            total = len(text)
+            if total <= _MAX_INLINE_FETCH_CHARS:
                 result = {
                     "status_code": resp.status_code,
                     "headers": dict(resp.headers),
                     "body": text,
                 }
                 return ActionResult(extracted_content=json.dumps(result, indent=2))
+
+            saved: str | None = _fs_name_from_url(
+                url, resp.headers.get("content-type", ""), text
+            )
+            try:
+                await file_system.write_file(saved, text)
+            except Exception:
+                logger.warning("http_fetch: failed to save large body to FileSystem", exc_info=True)
+                saved = None
+            result = {
+                "status_code": resp.status_code,
+                "headers": dict(resp.headers),
+                "body_preview": text[:_FETCH_PREVIEW_CHARS],
+                "total_chars": total,
+                "saved_file": saved,
+                "note": (
+                    f"Body is {total} chars; only the first {_FETCH_PREVIEW_CHARS} are shown. "
+                    + (
+                        f"Full body saved to '{saved}' — read specific parts via read_file "
+                        "or the run_python sandbox (read_json) rather than re-fetching."
+                        if saved
+                        else "Saving the full body failed; narrow the request instead of re-fetching."
+                    )
+                ),
+            }
+            return ActionResult(
+                extracted_content=json.dumps(result, indent=2),
+                long_term_memory=f"Fetched {url} ({total} chars) -> {saved or 'preview only'}",
+            )
         except httpx.HTTPError as e:
             return ActionResult(error=f"HTTP request failed: {e}")
 
@@ -320,39 +397,61 @@ async def _inject_token(
         )
 
 
-def register_python_sandbox_tool(tools: Tools) -> None:
+def register_python_sandbox_tool(
+    tools: Tools, clipboard: dict[str, Any] | None = None
+) -> None:
     """Register a stateful, browser-connected Python sandbox — the v3 cloud sandbox
     capability. Code runs in-process against the live page with a namespace that
     persists across calls, so the agent can read embedded page data
     (``window.__NEXT_DATA__``, ``__appData``, JSON-LD) and bulk-fetch detail pages
-    the way the cloud does.
+    the way the cloud does. Large data is kept out of the model context: it lives in
+    sandbox variables (which persist) or in FileSystem files via ``save_json``.
 
     @nonobvious(forced-by): in-process ``exec`` (not a subprocess) is required so the
     code can reach the live BrowserSession/CDP; acceptable on this single-tenant,
     owner-operated Pi.
     """
     namespace: dict[str, Any] = {}
+    if clipboard is None:
+        clipboard = {}
 
     @tools.action(
         "Execute Python in a persistent, browser-connected sandbox. Variables persist "
-        "across calls; use top-level await. Helpers: browser.evaluate(js), "
-        "browser.get_html(selector=None), browser.navigate(url); fetch(url, method='GET', "
-        "headers=None, body=None) returning an object with .status_code/.text/.json() "
-        "for server-side HTTP (no CORS); save_json(obj, name). Plus asyncio, json, re and "
-        "the standard library. Ideal for parsing embedded page JSON and bulk-fetching "
-        "detail pages. Print results with print()."
+        "across calls (assign large results to a variable instead of re-fetching); use "
+        "top-level await. Helpers: browser.evaluate(js), browser.get_html(selector=None), "
+        "browser.navigate(url); fetch(url, method='GET', headers=None, body=None) returning "
+        "an object with .status_code/.text/.json() for server-side HTTP (no CORS); "
+        "await save_json(obj, name) / await read_json(name) to persist/read JSON as "
+        "FileSystem files the native read_file also sees; remember(key, value)/recall(key) "
+        "for the shared clipboard. Plus asyncio, json, re and the standard library. STDOUT "
+        "is truncated to a small preview — never print whole blobs; save them and print "
+        "only specific keys/slices."
     )
-    async def run_python(code: str, browser_session: BrowserSession) -> ActionResult:
+    async def run_python(
+        code: str, browser_session: BrowserSession, file_system: FileSystem
+    ) -> ActionResult:
         import ast
-        import asyncio
         import contextlib
         import io
 
-        results: dict[str, Any] = namespace.setdefault("__results__", {})
+        async def _save_json(obj: Any, name: str = "output.json") -> str:
+            fname = _normalise_fs_name(name, "json")
+            await file_system.write_file(fname, json.dumps(obj, indent=2, default=str))
+            return fname
 
-        def _save_json(obj: Any, name: str = "output.json") -> str:
-            results[name] = obj
-            return name
+        async def _read_json(name: str) -> Any:
+            fname = _normalise_fs_name(name, "json")
+            file_obj = file_system.get_file(fname) or file_system.get_file(name)
+            if file_obj is None:
+                raise FileNotFoundError(f"No saved file named {name!r}")
+            return json.loads(file_obj.read())
+
+        def _remember(key: str, value: Any) -> str:
+            clipboard[str(key)] = value
+            return str(key)
+
+        def _recall(key: str, default: Any = None) -> Any:
+            return clipboard.get(str(key), default)
 
         async def _fetch(
             url: str,
@@ -374,6 +473,9 @@ def register_python_sandbox_tool(tools: Tools) -> None:
                 "fetch": _fetch,
                 "save_json": _save_json,
                 "save_checkpoint_json": _save_json,
+                "read_json": _read_json,
+                "remember": _remember,
+                "recall": _recall,
                 "asyncio": asyncio,
                 "json": json,
                 "re": re,
@@ -407,7 +509,198 @@ def register_python_sandbox_tool(tools: Tools) -> None:
             tail = f"\n--- stdout ---\n{out}" if out else ""
             return ActionResult(error=f"{type(e).__name__}: {e}{tail}"[:10000])
 
-        out = stdout.getvalue()[:50_000]
-        if results:
-            out = (out + "\n" + "\n".join(f"[saved {k}]" for k in results)).strip()
-        return ActionResult(extracted_content=out or "(no output)")
+        out = stdout.getvalue()
+        total = len(out)
+        preview = out[:_SANDBOX_STDOUT_PREVIEW_CHARS]
+        if total > _SANDBOX_STDOUT_PREVIEW_CHARS:
+            preview += (
+                f"\n\n[stdout truncated: {total} chars total. Assign large results to a "
+                "variable (it persists across cells) or save_json(obj,'name.json') then "
+                "print only specific keys/slices; never print whole blobs.]"
+            )
+        return ActionResult(extracted_content=preview or "(no output)")
+
+
+def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
+    """Register a per-session key/value clipboard (shared with the sandbox's
+    ``remember``/``recall``) so the agent can stash URLs, IDs and counts and
+    return to them after detours.
+    """
+
+    @tools.action(
+        "Save a value to the session clipboard under a key so you can return to it "
+        "later (e.g. a listings URL, an id, a running count). Persists across steps "
+        "and is shared with the run_python sandbox (remember/recall)."
+    )
+    async def remember(key: str, value: str) -> ActionResult:
+        clipboard[str(key)] = value
+        return ActionResult(
+            extracted_content=f"Remembered {key}", long_term_memory=f"remember({key})"
+        )
+
+    @tools.action(
+        "Fetch a value previously saved with remember (or an auto-populated key such "
+        "as startUrl / primaryUrl) from the session clipboard."
+    )
+    async def recall(key: str) -> ActionResult:
+        if str(key) not in clipboard:
+            known = ", ".join(sorted(clipboard)) or "(empty)"
+            return ActionResult(
+                extracted_content=f"No value stored for '{key}'. Known keys: {known}"
+            )
+        value = clipboard[str(key)]
+        return ActionResult(
+            extracted_content=str(value),
+            long_term_memory=f"recall({key})={str(value)[:100]}",
+        )
+
+
+class TabManager:
+    """Per-session lazy multi-tab manager. A stable ordered queue maps index ``n``
+    (the nth queued URL) to a browser-use tab. URLs are queued as lightweight
+    about:blank tabs and only loaded on demand; at most the base/start tab plus the
+    two most recently loaded tabs stay live, older loaded tabs revert to about:blank
+    to free memory while keeping their queue slot so ``goto_tab(n)`` can reopen them.
+    """
+
+    MAX_QUEUED = 48
+    MAX_LOADED = 2
+
+    def __init__(self, session: BrowserSession) -> None:
+        self._session = session
+        self._urls: list[str] = []
+        self._target_ids: list[str | None] = []
+        self._loaded: list[int] = []
+        self._base_target_id: str | None = None
+
+    async def _open_blank(self) -> str | None:
+        before = {t.target_id for t in await self._session.get_tabs()}
+        event = self._session.event_bus.dispatch(
+            NavigateToUrlEvent(url="about:blank", new_tab=True)
+        )
+        await event
+        await event.event_result(raise_if_any=False, raise_if_none=False)
+        after = await self._session.get_tabs()
+        new = [t for t in after if t.target_id not in before]
+        return new[0].target_id if new else None
+
+    async def _switch(self, target_id: str | None) -> None:
+        if not target_id:
+            return
+        event = self._session.event_bus.dispatch(SwitchTabEvent(target_id=target_id))
+        await event
+        await event.event_result(raise_if_any=False, raise_if_none=False)
+
+    async def _navigate_current(self, url: str) -> None:
+        event = self._session.event_bus.dispatch(
+            NavigateToUrlEvent(url=url, new_tab=False)
+        )
+        await event
+        await event.event_result(raise_if_any=False, raise_if_none=False)
+
+    async def _is_valid(self, target_id: str | None) -> bool:
+        if not target_id:
+            return False
+        try:
+            return await self._session.session_manager.is_target_valid(target_id)
+        except Exception:
+            return False
+
+    async def open_tabs(self, urls: list[str]) -> str:
+        if self._base_target_id is None:
+            self._base_target_id = self._session.agent_focus_target_id
+        remaining = self.MAX_QUEUED - len(self._urls)
+        if remaining <= 0:
+            return (
+                f"Queue is full ({self.MAX_QUEUED} tabs). goto_tab(n) still works on "
+                "the existing slots."
+            )
+        start = len(self._urls)
+        queued = 0
+        for url in urls[:remaining]:
+            self._urls.append(url)
+            self._target_ids.append(await self._open_blank())
+            queued += 1
+        await self._switch(self._base_target_id)
+        return (
+            f"Queued {queued} URL(s) as blank/unloaded tabs at indices "
+            f"{start}..{len(self._urls) - 1} (0-based). They are NOT loaded; call "
+            f"goto_tab(n) to load one on demand. Your start/base tab is unaffected."
+        )
+
+    async def goto_tab(self, n: int) -> str:
+        if not self._urls:
+            return "No tabs queued yet; call open_tabs([...]) first."
+        if n < 0 or n >= len(self._urls):
+            return f"No tab at index {n}. Valid range: 0..{len(self._urls) - 1}."
+
+        url = self._urls[n]
+        if not await self._is_valid(self._target_ids[n]):
+            self._target_ids[n] = await self._open_blank()
+            await self._switch(self._base_target_id)
+        target_id = self._target_ids[n]
+        if not target_id:
+            return f"Could not open a live tab for index {n}."
+
+        await self._switch(target_id)
+        await self._navigate_current(url)
+        await asyncio.sleep(1.0)
+
+        if n in self._loaded:
+            self._loaded.remove(n)
+        self._loaded.append(n)
+
+        reverted: list[int] = []
+        while len(self._loaded) > self.MAX_LOADED:
+            old = self._loaded.pop(0)
+            if old == n:
+                self._loaded.append(old)
+                break
+            old_target = self._target_ids[old]
+            if await self._is_valid(old_target):
+                try:
+                    await self._switch(old_target)
+                    await self._navigate_current("about:blank")
+                    reverted.append(old)
+                except Exception:
+                    logger.debug("goto_tab: failed to revert tab %s", old, exc_info=True)
+
+        await self._switch(target_id)
+        note = f"Loaded index {n} ({url}) and switched to it."
+        if reverted:
+            note += (
+                f" Reverted older loaded tab(s) {reverted} to about:blank to free "
+                "memory; goto_tab reopens them."
+            )
+        return note
+
+
+def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
+    """Register the lazy multi-tab fan-out actions on a Tools instance."""
+
+    @tools.action(
+        "Queue many URLs as lightweight, UNLOADED background tabs for efficient "
+        "fan-out (hard cap 48 total). Each becomes a blank about:blank tab at a stable "
+        "0-based index; the real URL is only fetched when you call goto_tab(n). Your "
+        "current/start tab is left untouched."
+    )
+    async def open_tabs(urls: list[str]) -> ActionResult:
+        try:
+            note = await tab_manager.open_tabs(urls)
+            return ActionResult(extracted_content=note, long_term_memory=note)
+        except Exception as e:
+            return ActionResult(error=f"open_tabs failed: {type(e).__name__}: {e}")
+
+    @tools.action(
+        "Load and switch to queued tab index n (0-based, from open_tabs): navigate it "
+        "from about:blank to its URL and focus it. Memory-bounded — only the base tab "
+        "plus the two most recently loaded tabs stay live; older loaded tabs revert to "
+        "about:blank but keep their index so goto_tab(n) reopens them. n always means "
+        "the nth queued URL regardless of live state."
+    )
+    async def goto_tab(n: int) -> ActionResult:
+        try:
+            note = await tab_manager.goto_tab(n)
+            return ActionResult(extracted_content=note, long_term_memory=note)
+        except Exception as e:
+            return ActionResult(error=f"goto_tab failed: {type(e).__name__}: {e}")

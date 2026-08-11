@@ -254,19 +254,30 @@ Browser Use Pi{% endblock %} {% block head %}
     flex: none;
   }
   .act-spin {
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
+    position: relative;
+    width: 14px;
+    height: 14px;
     flex: none;
-    background: conic-gradient(
-      from 0deg,
-      rgba(156, 163, 175, 0) 0deg,
-      #9ca3af 300deg,
-      rgba(156, 163, 175, 0) 360deg
-    );
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.6px), #000 calc(100% - 1.6px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 1.6px), #000 calc(100% - 1.6px));
-    animation: spin 0.85s linear infinite;
+    opacity: 0.65;
+  }
+  .act-spin i {
+    position: absolute;
+    top: 0;
+    left: 43.75%;
+    width: 12.5%;
+    height: 30%;
+    border-radius: 999px;
+    background: #9ca3af;
+    transform-origin: 50% 166.7%;
+    animation: spinner-leaf-fade 0.8s linear infinite;
+  }
+  @keyframes spinner-leaf-fade {
+    0% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.15;
+    }
   }
   .act-label {
     flex: 1;
@@ -477,6 +488,15 @@ Browser Use Pi{% endblock %} {% block head %}
   let activityIndicatorType = null;
   const activityBar = document.getElementById("activity-bar");
 
+  function buildSpinBars() {
+    let bars = "";
+    for (let i = 0; i < 8; i++) {
+      const delay = -(7 - i) * 100;
+      bars += '<i style="transform:rotate(' + i * 45 + 'deg);animation-delay:' + delay + 'ms"></i>';
+    }
+    return '<span class="act-spin">' + bars + "</span>";
+  }
+
   function renderActivity() {
     if (!activityState || TERMINAL.includes(lastStatus)) {
       activityBar.classList.add("hidden");
@@ -491,8 +511,7 @@ Browser Use Pi{% endblock %} {% block head %}
     activityBar.classList.remove("hidden");
     if (type !== activityIndicatorType) {
       activityIndicatorType = type;
-      const indicator =
-        type === "spin" ? '<span class="act-spin"></span>' : '<span class="act-dot"></span>';
+      const indicator = type === "spin" ? buildSpinBars() : '<span class="act-dot"></span>';
       activityBar.innerHTML =
         indicator + '<span class="act-label"></span><span class="act-timer"></span>';
     }

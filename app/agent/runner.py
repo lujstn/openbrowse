@@ -16,8 +16,17 @@ from browser_use.llm.exceptions import ModelOutputTruncatedError
 from app.agent import cost
 from app.agent.activity import clear_activity, set_activity
 from app.agent.leak_repair import is_missing_action_error, repair_anthropic_message
+from app.agent.reminder import PrimaryUrlReminder, links_opened
 from app.agent.schema import json_schema_to_pydantic
-from app.agent.tools import register_capsolver_tool, register_fetch_tool, register_python_sandbox_tool
+from app.agent.tools import (
+    TabManager,
+    _eval_js,
+    register_capsolver_tool,
+    register_clipboard_tools,
+    register_fetch_tool,
+    register_python_sandbox_tool,
+    register_tab_tools,
+)
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
 from app.browser.vnc import wait_for_novnc
 from app.config import settings
@@ -31,6 +40,12 @@ _SCHEMA_COMPLETENESS_EXTENSION = (
     "If a schema field is missing but likely lives on a linked page or in data "
     "embedded in the current page, navigate there and extract it before finishing; "
     "never guess, and leave a field null only when it genuinely cannot be found."
+)
+
+_PRIMARY_URL_EXTENSION = (
+    "startUrl is saved for you to recall automatically. If you are primarily "
+    "working from a different URL, you must save it: remember('primaryUrl', <url>). "
+    "Ensure you keep the primaryUrl up-to-date."
 )
 
 
@@ -409,12 +424,17 @@ async def run_agent_session(session_id: str) -> None:
         browser_session = BrowserSession(
             cdp_url=cdp_url,
             storage_state=storage_state_path,
+            cross_origin_iframes=True,
         )
 
         # Create tools and register custom actions
+        clipboard: dict[str, Any] = {}
+        tab_manager = TabManager(browser_session)
         tools = Tools()
         register_fetch_tool(tools)
-        register_python_sandbox_tool(tools)
+        register_python_sandbox_tool(tools, clipboard)
+        register_clipboard_tools(tools, clipboard)
+        register_tab_tools(tools, tab_manager)
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
 
@@ -440,6 +460,7 @@ async def run_agent_session(session_id: str) -> None:
         # Step callback for real-time dashboard streaming
         step_count = 0
         step_started_at: dict[str, Any] = {"t": None}
+        reminder = PrimaryUrlReminder()
 
         async def on_step_start(agent_instance: Agent) -> None:
             step_started_at["t"] = datetime.now(timezone.utc)
@@ -448,10 +469,36 @@ async def run_agent_session(session_id: str) -> None:
         async def on_step_end(agent_instance: Agent) -> None:
             nonlocal step_count
             step_count += 1
+
+            current_url = None
+            try:
+                current_url = await _eval_js(browser_session, "window.location.href")
+            except Exception:
+                pass
+            if (
+                current_url
+                and clipboard.get("startUrl") is None
+                and not str(current_url).startswith("about:")
+            ):
+                clipboard["startUrl"] = current_url
+
             steps = agent_instance.history.history
             if not steps:
                 return
             step = steps[-1]
+
+            nudge = reminder.observe(
+                step_count,
+                current_url,
+                links_opened(step.model_output.action if step.model_output else None),
+                clipboard.get("primaryUrl"),
+                clipboard.get("startUrl"),
+            )
+            if nudge:
+                try:
+                    agent_instance._message_manager.add_new_task(nudge)
+                except Exception:
+                    logger.debug("primaryUrl reminder injection failed", exc_info=True)
 
             summary = ""
             is_code = False
@@ -531,7 +578,15 @@ async def run_agent_session(session_id: str) -> None:
         }
         if output_model is not None:
             agent_kwargs["output_model_schema"] = output_model
-        extension_parts = [p for p in (system_prompt_extension, _SCHEMA_COMPLETENESS_EXTENSION) if p]
+        extension_parts = [
+            p
+            for p in (
+                system_prompt_extension,
+                _SCHEMA_COMPLETENESS_EXTENSION,
+                _PRIMARY_URL_EXTENSION,
+            )
+            if p
+        ]
         agent_kwargs["extend_system_message"] = "\n\n".join(extension_parts)
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data
