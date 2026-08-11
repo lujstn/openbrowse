@@ -121,6 +121,115 @@ Browser Use Pi{% endblock %} {% block head %}
     color: #e5e5e5;
     font-family: monospace;
   }
+  .spinner {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.14);
+    border-top-color: #60a5fa;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .no-live {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .feed-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .feed-btn {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #cbd5e1;
+    border-radius: 5px;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .feed-btn:hover {
+    border-color: #444;
+    color: #fff;
+  }
+  .step-row {
+    display: flex;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid #1a1a1a;
+    font-size: 13px;
+  }
+  .step-num {
+    color: #555;
+    font-family: monospace;
+    font-size: 12px;
+    min-width: 26px;
+    text-align: right;
+  }
+  .step-text {
+    flex: 1;
+    color: #d4d4d4;
+  }
+  .step-row.browser_action_error .step-text {
+    color: #f87171;
+  }
+  .completion-card {
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .completion-card.hidden {
+    display: none;
+  }
+  .cc-head {
+    color: #22c55e;
+    font-weight: 600;
+    font-size: 13px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .cc-out {
+    position: relative;
+    margin-top: 10px;
+  }
+  .cc-out pre {
+    background: #0a0a0a;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 10px 10px 10px 10px;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    max-height: 40vh;
+    overflow: auto;
+  }
+  .cc-copy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #cbd5e1;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .cc-copy:hover {
+    border-color: #444;
+    color: #fff;
+  }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
@@ -159,7 +268,7 @@ Browser Use Pi{% endblock %} {% block head %}
   <div class="panel">
     <div class="panel-head">Steps</div>
     <div class="panel-body" id="steps-panel">
-      <div id="steps-messages"></div>
+      <div id="steps-list"></div>
     </div>
   </div>
 
@@ -169,58 +278,79 @@ Browser Use Pi{% endblock %} {% block head %}
     data-status="{{ session.status }}"
     data-live-url="{{ session.live_url or '' }}"
   >
-    <div class="no-live">Connecting to live view…</div>
+    <div class="no-live"><div class="spinner"></div><div>Starting browser…</div></div>
   </div>
 
   <div class="panel">
-    <div class="panel-head">Text / Output</div>
+    <div class="panel-head feed-head">
+      <span>Live Feed</span>
+      <button id="copy-json" class="feed-btn" title="Copy the full step-by-step log as JSON">
+        {} Copy JSON
+      </button>
+    </div>
     <div class="panel-body" id="output-panel">
-      <div
-        id="result-box"
-        class="result-box"
-        style="display: {% if session.output %}block{% else %}none{% endif %}"
-      >
-        {{ session.output }}
-      </div>
-      <div id="output-messages"></div>
+      <div id="completion-card" class="completion-card hidden"></div>
+      <div id="feed-rows"></div>
     </div>
   </div>
 </div>
 
 <script>
-  const OUTPUT_TYPES = ["planning", "result", "completion"];
+  const STEP_TYPES = ["browser_action", "browser_action_error", "result"];
   const TERMINAL = ["stopped", "error", "idle", "expired"];
-  const stepsMessages = document.getElementById("steps-messages");
-  const outputMessages = document.getElementById("output-messages");
+  const SESSION_ID = "{{ session.id }}";
+  const stepsList = document.getElementById("steps-list");
+  const feedRows = document.getElementById("feed-rows");
   const stepsPanel = document.getElementById("steps-panel");
   const outputPanel = document.getElementById("output-panel");
-  const resultBox = document.getElementById("result-box");
+  const completionCard = document.getElementById("completion-card");
   const browserPanel = document.getElementById("browser-panel");
+
+  let stepCount = 0;
+  let completionSummary = "";
+  let currentOutput = "";
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text || "");
+    } catch (e) {
+      const ta = document.createElement("textarea");
+      ta.value = text || "";
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e2) {}
+      document.body.removeChild(ta);
+    }
+  }
+
+  function flash(btn, label) {
+    const prev = btn.textContent;
+    btn.textContent = label;
+    setTimeout(function () { btn.textContent = prev; }, 1200);
+  }
 
   function liveViewUrl(u) {
     const m = String(u || "").match(/\/vnc\/([^/]+)\//);
     if (!m) return "";
     const id = m[1];
-    return `/vnc/${id}/vnc_lite.html?path=vnc/${id}/websockify&scale=true&view_only=1`;
+    return `/vnc/${id}/view?path=vnc/${id}/websockify`;
   }
 
-  function stripVncChrome(iframe) {
-    iframe.addEventListener("load", function () {
-      try {
-        const d = iframe.contentDocument;
-        if (!d) return;
-        const s = d.createElement("style");
-        s.textContent =
-          "#top_bar,#sendCtrlAltDelButton{display:none!important}" +
-          "html,body{background:#000!important;margin:0!important}#screen{height:100vh!important}";
-        d.head.appendChild(s);
-      } catch (e) {}
-    });
-  }
+  const ENDED_SVG =
+    '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5">' +
+    '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="#666" stroke="none"/></svg>';
 
   function setBrowser(status, liveUrl) {
     if (TERMINAL.includes(status)) {
-      browserPanel.innerHTML = '<div class="no-live">Stream ended</div>';
+      browserPanel.innerHTML = '<div class="no-live">' + ENDED_SVG + "<div>Stream ended</div></div>";
       return;
     }
     const url = liveViewUrl(liveUrl);
@@ -228,33 +358,76 @@ Browser Use Pi{% endblock %} {% block head %}
       if (browserPanel.querySelector("iframe")) return;
       const iframe = document.createElement("iframe");
       iframe.src = url;
-      iframe.setAttribute("allow", "clipboard-read; clipboard-write");
-      stripVncChrome(iframe);
       browserPanel.innerHTML = "";
       browserPanel.appendChild(iframe);
     } else if (!browserPanel.querySelector("iframe")) {
-      browserPanel.innerHTML = '<div class="no-live">Waiting for browser to start…</div>';
+      browserPanel.innerHTML =
+        '<div class="no-live"><div class="spinner"></div><div>Starting browser…</div></div>';
     }
   }
 
-  function routeRows(html) {
+  function renderCompletion() {
+    if (!completionSummary && !currentOutput) {
+      completionCard.classList.add("hidden");
+      return;
+    }
+    completionCard.classList.remove("hidden");
+    let html =
+      '<div class="cc-head"><span>✓</span><span>' +
+      esc(completionSummary || "Task completed") + "</span></div>";
+    if (currentOutput) {
+      html +=
+        '<div class="cc-out"><button class="cc-copy" title="Copy output">Copy</button><pre>' +
+        esc(currentOutput) + "</pre></div>";
+    }
+    completionCard.innerHTML = html;
+    const btn = completionCard.querySelector(".cc-copy");
+    if (btn) btn.onclick = function () { copyText(currentOutput).then(function () { flash(btn, "Copied"); }); };
+  }
+
+  function handleRows(html) {
     const tpl = document.createElement("template");
     tpl.innerHTML = (html || "").trim();
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
       const typeEl = row.querySelector(".msg-type");
-      const isOutput =
-        typeEl && OUTPUT_TYPES.some((t) => typeEl.classList.contains(t));
-      (isOutput ? outputMessages : stepsMessages).appendChild(row);
+      const type = (typeEl ? typeEl.className.replace("msg-type", "").trim() : "") || "info";
+      const sumEl = row.querySelector(".msg-summary");
+      const summary = (sumEl ? sumEl.textContent : "").trim();
+      if (type === "completion") {
+        completionSummary = summary || "Task completed";
+        renderCompletion();
+        return;
+      }
+      feedRows.insertBefore(row.cloneNode(true), feedRows.firstChild);
+      if (STEP_TYPES.indexOf(type) !== -1) {
+        stepCount += 1;
+        const step = document.createElement("div");
+        step.className = "step-row " + type;
+        step.innerHTML =
+          '<span class="step-num">' + stepCount + '.</span><span class="step-text">' +
+          esc(summary) + "</span>";
+        stepsList.appendChild(step);
+      }
     });
     stepsPanel.scrollTop = stepsPanel.scrollHeight;
-    outputPanel.scrollTop = outputPanel.scrollHeight;
+    outputPanel.scrollTop = 0;
   }
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
 
-  const es = new EventSource("/sse/session/{{ session.id }}/messages");
+  document.getElementById("copy-json").onclick = async function () {
+    const btn = this;
+    try {
+      const resp = await fetch("/session/" + SESSION_ID + "/log");
+      const data = await resp.json();
+      await copyText(JSON.stringify(data, null, 2));
+      flash(btn, "Copied");
+    } catch (e) {}
+  };
+
+  const es = new EventSource("/sse/session/" + SESSION_ID + "/messages");
   es.addEventListener("messages", function (e) {
-    try { routeRows(e.data); } catch (err) {}
+    try { handleRows(e.data); } catch (err) {}
   });
   es.addEventListener("status", function (e) {
     try {
@@ -272,9 +445,9 @@ Browser Use Pi{% endblock %} {% block head %}
       document.getElementById("session-status").textContent = data.status;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-" + data.status;
-      if (data.output) {
-        resultBox.textContent = data.output;
-        resultBox.style.display = "block";
+      if (data.output && data.output !== currentOutput) {
+        currentOutput = data.output;
+        renderCompletion();
       }
       setBrowser(data.status, data.liveUrl);
     } catch (e) {}

@@ -11,7 +11,7 @@ from typing import Any, AsyncGenerator
 import httpx
 import websockets
 from fastapi import APIRouter, Depends, Form, Request, WebSocket
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
@@ -200,6 +200,29 @@ async def session_detail(request: Request, session_id: str):
     )
 
 
+@router.get("/session/{session_id}/log")
+async def session_log(session_id: str):
+    session = await crud.get_session(session_id)
+    messages, _ = await crud.list_messages(session_id, limit=1000)
+    return JSONResponse(
+        {
+            "sessionId": session_id,
+            "status": session.get("status") if session else None,
+            "model": session.get("model") if session else None,
+            "task": session.get("task") if session else None,
+            "output": session.get("output") if session else None,
+            "messages": [
+                {
+                    "createdAt": m.get("created_at"),
+                    "type": m.get("type"),
+                    "summary": m.get("summary"),
+                }
+                for m in messages
+            ],
+        }
+    )
+
+
 @router.get("/profiles", response_class=HTMLResponse)
 async def profiles_page(request: Request):
     profiles, total = await crud.list_profiles(page=1, page_size=50)
@@ -340,6 +363,45 @@ async def sse_session_messages(request: Request, session_id: str):
             await asyncio.sleep(1)
 
     return EventSourceResponse(event_generator())
+
+
+_VNC_VIEW_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>live view</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}div#screen{position:fixed;inset:0}div#screen canvas{display:block}.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#8a8a8a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}.overlay.hidden{display:none}.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:#60a5fa;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.ended-icon{opacity:.85}</style></head>
+<body>
+  <div id="screen"></div>
+  <div id="loading" class="overlay"><div class="spinner"></div><div>Connecting to live view…</div></div>
+  <div id="ended" class="overlay hidden">
+    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="#666" stroke="none"/></svg>
+    <div>Stream ended</div>
+  </div>
+  <script type="module">
+    import RFB from './core/rfb.js';
+    function qv(n, d){ const m = location.href.match(new RegExp('[?&]' + n + '=([^&]*)')); return m ? decodeURIComponent(m[1]) : d; }
+    const path = qv('path', 'websockify');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = proto + '://' + location.host + '/' + path;
+    const loading = document.getElementById('loading');
+    const ended = document.getElementById('ended');
+    try {
+      const rfb = new RFB(document.getElementById('screen'), url);
+      rfb.viewOnly = true;
+      rfb.scaleViewport = true;
+      rfb.addEventListener('connect', () => loading.classList.add('hidden'));
+      rfb.addEventListener('disconnect', () => { loading.classList.add('hidden'); ended.classList.remove('hidden'); });
+    } catch (e) {
+      loading.classList.add('hidden');
+      ended.classList.remove('hidden');
+    }
+  </script>
+</body></html>"""
+
+
+@vnc_router.get("/vnc/{session_id}/view")
+async def vnc_view(request: Request, session_id: str):
+    if not dashboard_auth_ok(request.headers.get("authorization")):
+        return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
+    return HTMLResponse(_VNC_VIEW_HTML)
 
 
 @vnc_router.get("/vnc/{session_id}/{asset:path}")

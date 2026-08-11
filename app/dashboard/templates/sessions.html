@@ -104,20 +104,7 @@
       const m = String(u || "").match(/\/vnc\/([^/]+)\//);
       if (!m) return "";
       const id = m[1];
-      return `/vnc/${id}/vnc_lite.html?path=vnc/${id}/websockify&scale=true&view_only=1`;
-    }
-    function stripVncChrome(iframe) {
-      iframe.addEventListener("load", function () {
-        try {
-          const d = iframe.contentDocument;
-          if (!d) return;
-          const s = d.createElement("style");
-          s.textContent =
-            "#top_bar,#sendCtrlAltDelButton{display:none!important}" +
-            "html,body{background:#000!important;margin:0!important}#screen{height:100vh!important}";
-          d.head.appendChild(s);
-        } catch (e) {}
-      });
+      return `/vnc/${id}/view?path=vnc/${id}/websockify`;
     }
     function buildTile(item) {
       const a = document.createElement("a");
@@ -130,7 +117,6 @@
       iframe.src = liveViewUrl(item.liveUrl);
       iframe.setAttribute("tabindex", "-1");
       iframe.setAttribute("scrolling", "no");
-      stripVncChrome(iframe);
       feed.appendChild(iframe);
       const label = document.createElement("div");
       label.className = "grid-tile-label";
