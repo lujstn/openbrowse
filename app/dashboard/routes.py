@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
+from app.agent.activity import get_activity
 from app.agent.pool import pool
 from app.auth import dashboard_auth_ok, require_dashboard_auth
 from app.config import settings
@@ -25,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 _template_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_template_dir))
+
+
+def _safe_fromjson(value: str) -> dict:
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+templates.env.filters["fromjson"] = _safe_fromjson
 
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
 vnc_router = APIRouter(tags=["dashboard-vnc"])
@@ -148,11 +160,26 @@ async def run_task(
     max_cost_usd: float = Form(0.50),
     keep_alive: bool = Form(False),
     thinking_effort: str = Form("off"),
+    output_schema: str = Form(""),
 ):
+    parsed_schema: dict[str, Any] | None = None
+    schema_text = (output_schema or "").strip()
+    if schema_text:
+        try:
+            candidate = json.loads(schema_text)
+        except json.JSONDecodeError:
+            return HTMLResponse("Invalid output schema: not valid JSON", status_code=400)
+        if not isinstance(candidate, dict):
+            return HTMLResponse(
+                "Invalid output schema: must be a JSON object", status_code=400
+            )
+        parsed_schema = candidate
+
     session = await crud.create_session(
         task=task,
         model=model,
         profile_id=(profile_id or None),
+        output_schema=parsed_schema,
         max_cost_usd=max_cost_usd,
         keep_alive=keep_alive,
         thinking_effort=thinking_effort,
@@ -358,6 +385,7 @@ async def sse_session_messages(request: Request, session_id: str):
                         "totalCostUsd": str(session.get("total_cost_usd", 0)),
                         "provider": model_provider(session.get("model")),
                         "output": session.get("output") or "",
+                        "activity": get_activity(session_id),
                     }),
                 }
             await asyncio.sleep(1)

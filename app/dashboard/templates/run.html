@@ -183,9 +183,57 @@ block head %}
         <label for="keep_alive">Keep browser alive after task</label>
       </div>
     </div>
+    <div class="field" style="margin-top: 14px">
+      <div class="field field-inline">
+        <input id="use_schema" type="checkbox" />
+        <label for="use_schema">Force output schema (JSON)</label>
+      </div>
+      <textarea
+        id="output_schema"
+        name="output_schema"
+        placeholder='{"type": "object", "properties": { ... }}'
+        style="display: none; min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 8px"
+      ></textarea>
+      <div id="schema_error" style="display: none; color: #f87171; font-size: 12px; margin-top: 6px"></div>
+    </div>
     <div class="run-actions">
       <button class="run-btn" type="submit">Run</button>
     </div>
   </form>
 </div>
+<script>
+  (function () {
+    var toggle = document.getElementById("use_schema");
+    var ta = document.getElementById("output_schema");
+    var err = document.getElementById("schema_error");
+    var form = ta.closest("form");
+    toggle.addEventListener("change", function () {
+      ta.style.display = toggle.checked ? "block" : "none";
+      if (!toggle.checked) {
+        err.style.display = "none";
+      }
+    });
+    form.addEventListener("submit", function (e) {
+      if (!toggle.checked) {
+        ta.value = "";
+        return;
+      }
+      var v = ta.value.trim();
+      if (!v) {
+        return;
+      }
+      try {
+        var parsed = JSON.parse(v);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("schema must be a JSON object");
+        }
+        err.style.display = "none";
+      } catch (ex) {
+        e.preventDefault();
+        err.textContent = "Invalid JSON schema: " + ex.message;
+        err.style.display = "block";
+      }
+    });
+  })();
+</script>
 {% endblock %}

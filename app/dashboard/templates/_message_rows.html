@@ -1,7 +1,9 @@
 {% for m in messages %}
+{% set d = (m.data | fromjson) if m.data else {} %}
 <div class="msg-row">
   <span class="msg-time">{{ format_relative(m.created_at) }}</span>
   <span class="msg-type {{ m.type }}">{{ m.type or 'info' }}</span>
   <span class="msg-summary">{{ m.summary }}</span>
+  {% if d.duration_s %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
 </div>
 {% endfor %}

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -15,19 +16,59 @@ CAPSOLVER_API = "https://api.capsolver.com"
 
 
 async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
-    """Execute JavaScript via BrowserSession's CDP connection."""
-    cdp = getattr(browser_session, "cdp_client", None) or getattr(
-        browser_session, "_cdp_client", None
+    """Execute JavaScript via BrowserSession's CDP connection.
+
+    @nonobvious(forced-by): browser-use 0.13.7's CDP client only supports the typed
+    ``send.Runtime.evaluate(params=..., session_id=...)`` form via a per-target
+    ``get_or_create_cdp_session()``, not ``send(method, params)``.
+    """
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    result = await cdp_session.cdp_client.send.Runtime.evaluate(
+        params={"expression": expression, "returnByValue": True, "awaitPromise": True},
+        session_id=cdp_session.session_id,
     )
-    if not cdp:
-        raise RuntimeError("Cannot access CDP client from BrowserSession")
-    result = await cdp.send(
-        "Runtime.evaluate",
-        {"expression": expression, "returnByValue": True, "awaitPromise": True},
-    )
-    if "exceptionDetails" in result:
+    if result.get("exceptionDetails"):
         raise RuntimeError(f"JS error: {result['exceptionDetails']}")
     return result.get("result", {}).get("value")
+
+
+class _SandboxBrowser:
+    """Read-side browser bridge exposed to the code sandbox (like the cloud's
+    ``browser`` handle): JavaScript eval and DOM access against the live page.
+    """
+
+    def __init__(self, session: BrowserSession) -> None:
+        self._session = session
+
+    async def evaluate(self, js: str) -> Any:
+        return await _eval_js(self._session, js)
+
+    async def get_html(self, selector: str | None = None) -> str:
+        if selector:
+            js = (
+                "(function(){var el=document.querySelector("
+                + json.dumps(selector)
+                + ");return el?el.outerHTML:''})()"
+            )
+        else:
+            js = "document.documentElement.outerHTML"
+        return await _eval_js(self._session, js) or ""
+
+    async def navigate(self, url: str) -> None:
+        import asyncio
+
+        await _eval_js(self._session, "window.location.assign(" + json.dumps(url) + ")")
+        await asyncio.sleep(1.5)
+
+
+class _FetchResult:
+    def __init__(self, resp: httpx.Response) -> None:
+        self.status_code = resp.status_code
+        self.headers = dict(resp.headers)
+        self.text = resp.text
+
+    def json(self) -> Any:
+        return json.loads(self.text)
 
 
 def register_fetch_tool(tools: Tools) -> None:
@@ -37,9 +78,9 @@ def register_fetch_tool(tools: Tools) -> None:
     """
 
     @tools.action(
-        "Make an HTTP request to an external API. Use this for JSON APIs, "
-        "REST endpoints, or any HTTP call that doesn't need a browser. "
-        "Do NOT use this for loading web pages — use browser_navigate instead."
+        "Make a single HTTP request to an external JSON API or REST endpoint "
+        "(server-side, no CORS). For fetching page HTML, embedded page data, or "
+        "bulk/parallel fetches, prefer the code sandbox's fetch() helper instead."
     )
     async def http_fetch(
         url: str,
@@ -280,61 +321,93 @@ async def _inject_token(
 
 
 def register_python_sandbox_tool(tools: Tools) -> None:
-    """Register a Python code execution sandbox — the v3 cloud sandbox capability."""
+    """Register a stateful, browser-connected Python sandbox — the v3 cloud sandbox
+    capability. Code runs in-process against the live page with a namespace that
+    persists across calls, so the agent can read embedded page data
+    (``window.__NEXT_DATA__``, ``__appData``, JSON-LD) and bulk-fetch detail pages
+    the way the cloud does.
+
+    @nonobvious(forced-by): in-process ``exec`` (not a subprocess) is required so the
+    code can reach the live BrowserSession/CDP; acceptable on this single-tenant,
+    owner-operated Pi.
+    """
+    namespace: dict[str, Any] = {}
 
     @tools.action(
-        "Execute Python code in a sandboxed environment. Use this for data processing, "
-        "parsing HTML/JSON, calculations, string manipulation, or any task that's easier "
-        "in Python than in the browser. The code runs in an isolated subprocess. "
-        "You can use standard library modules. Print results to stdout."
+        "Execute Python in a persistent, browser-connected sandbox. Variables persist "
+        "across calls; use top-level await. Helpers: browser.evaluate(js), "
+        "browser.get_html(selector=None), browser.navigate(url); fetch(url, method='GET', "
+        "headers=None, body=None) returning an object with .status_code/.text/.json() "
+        "for server-side HTTP (no CORS); save_json(obj, name). Plus asyncio, json, re and "
+        "the standard library. Ideal for parsing embedded page JSON and bulk-fetching "
+        "detail pages. Print results with print()."
     )
-    async def run_python(
-        code: str,
-    ) -> ActionResult:
-        """Execute Python code and return stdout/stderr.
-
-        Args:
-            code: Python code to execute. Use print() to output results.
-        """
+    async def run_python(code: str, browser_session: BrowserSession) -> ActionResult:
+        import ast
         import asyncio
-        import tempfile
-        from pathlib import Path
+        import contextlib
+        import io
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False
-        ) as f:
-            f.write(code)
-            script_path = f.name
+        results: dict[str, Any] = namespace.setdefault("__results__", {})
+
+        def _save_json(obj: Any, name: str = "output.json") -> str:
+            results[name] = obj
+            return name
+
+        async def _fetch(
+            url: str,
+            method: str = "GET",
+            headers: dict | None = None,
+            body: str | None = None,
+            output_format: str = "raw",
+            timeout_ms: int = 30000,
+        ) -> _FetchResult:
+            async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
+                resp = await client.request(
+                    method.upper(), url, headers=headers or {}, content=body
+                )
+            return _FetchResult(resp)
+
+        namespace.update(
+            {
+                "browser": _SandboxBrowser(browser_session),
+                "fetch": _fetch,
+                "save_json": _save_json,
+                "save_checkpoint_json": _save_json,
+                "asyncio": asyncio,
+                "json": json,
+                "re": re,
+            }
+        )
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3",
-                script_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            compiled = compile(
+                code, "<sandbox>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=30.0
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                return ActionResult(
-                    error="Python execution timed out after 30 seconds"
-                )
+        except SyntaxError as e:
+            return ActionResult(error=f"Syntax error: {e}")
 
-            stdout_str = stdout.decode("utf-8", errors="replace")[:50_000]
-            stderr_str = stderr.decode("utf-8", errors="replace")[:10_000]
+        stdout = io.StringIO()
 
-            if proc.returncode != 0:
-                return ActionResult(
-                    error=f"Python exited with code {proc.returncode}\nstderr: {stderr_str}"
-                )
+        async def _run() -> None:
+            with contextlib.redirect_stdout(stdout):
+                coro = eval(compiled, namespace)
+                if coro is not None:
+                    await coro
 
-            result = stdout_str
-            if stderr_str:
-                result += f"\n--- stderr ---\n{stderr_str}"
+        try:
+            await asyncio.wait_for(_run(), timeout=45.0)
+        except asyncio.TimeoutError:
+            return ActionResult(
+                error="Python execution timed out after 45 seconds. Keep cells small; "
+                "fetch with bounded concurrency and save progress."
+            )
+        except Exception as e:
+            out = stdout.getvalue()
+            tail = f"\n--- stdout ---\n{out}" if out else ""
+            return ActionResult(error=f"{type(e).__name__}: {e}{tail}"[:10000])
 
-            return ActionResult(extracted_content=result)
-        finally:
-            Path(script_path).unlink(missing_ok=True)
+        out = stdout.getvalue()[:50_000]
+        if results:
+            out = (out + "\n" + "\n".join(f"[saved {k}]" for k in results)).strip()
+        return ActionResult(extracted_content=out or "(no output)")

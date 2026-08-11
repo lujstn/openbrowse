@@ -230,6 +230,46 @@ Browser Use Pi{% endblock %} {% block head %}
     border-color: #444;
     color: #fff;
   }
+  .activity-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: #0d1b2a;
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #cbd5e1;
+  }
+  .activity-bar.hidden {
+    display: none;
+  }
+  .act-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #60a5fa;
+    flex: none;
+    animation: actpulse 1s ease-in-out infinite;
+  }
+  @keyframes actpulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .act-label {
+    flex: 1;
+  }
+  .act-timer {
+    font-variant-numeric: tabular-nums;
+    color: #94a3b8;
+  }
+  .msg-dur {
+    margin-left: auto;
+    color: #64748b;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
@@ -290,6 +330,7 @@ Browser Use Pi{% endblock %} {% block head %}
     </div>
     <div class="panel-body" id="output-panel">
       <div id="completion-card" class="completion-card hidden"></div>
+      <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="feed-rows"></div>
     </div>
   </div>
@@ -309,6 +350,25 @@ Browser Use Pi{% endblock %} {% block head %}
   let stepCount = 0;
   let completionSummary = "";
   let currentOutput = "";
+  let activityState = null;
+  let lastStatus = browserPanel.dataset.status;
+  const activityBar = document.getElementById("activity-bar");
+
+  function renderActivity() {
+    if (!activityState || TERMINAL.includes(lastStatus)) {
+      activityBar.classList.add("hidden");
+      return;
+    }
+    const started = Date.parse(activityState.startedAt);
+    const secs = isNaN(started) ? 0 : Math.max(0, (Date.now() - started) / 1000);
+    const stepLabel = activityState.step ? " · step " + activityState.step : "";
+    activityBar.classList.remove("hidden");
+    activityBar.innerHTML =
+      '<span class="act-dot"></span><span class="act-label">' +
+      esc(activityState.label) + stepLabel +
+      '</span><span class="act-timer">' + secs.toFixed(1) + "s</span>";
+  }
+  setInterval(renderActivity, 100);
 
   function esc(s) {
     const d = document.createElement("div");
@@ -445,6 +505,9 @@ Browser Use Pi{% endblock %} {% block head %}
       document.getElementById("session-status").textContent = data.status;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-" + data.status;
+      lastStatus = data.status;
+      activityState = data.activity || null;
+      renderActivity();
       if (data.output && data.output !== currentOutput) {
         currentOutput = data.output;
         renderCompletion();
