@@ -326,6 +326,7 @@ async def sse_session_messages(request: Request, session_id: str):
                     "event": "status",
                     "data": json.dumps({
                         "status": session["status"],
+                        "liveUrl": session.get("live_url"),
                         "stepCount": session.get("step_count", 0),
                         "totalInputTokens": session.get("total_input_tokens", 0),
                         "totalOutputTokens": session.get("total_output_tokens", 0),

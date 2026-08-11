@@ -205,8 +205,8 @@ async def run_agent_session(session_id: str) -> None:
         cdp_url = await launch_chrome(slot)
 
         live_url = (
-            f"/vnc/{session_id}/vnc.html?autoconnect=true&resize=scale"
-            f"&path=vnc/{session_id}/websockify"
+            f"/vnc/{session_id}/vnc_lite.html?path=vnc/{session_id}/websockify"
+            f"&scale=true&view_only=1"
         )
         await crud.update_session(
             session_id,

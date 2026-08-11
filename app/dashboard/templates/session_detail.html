@@ -155,38 +155,21 @@ Browser Use Pi{% endblock %} {% block head %}
   <dd>{{ format_relative(session.created_at) }}</dd>
 </dl>
 
-<div
-  class="detail-layout"
-  hx-ext="sse"
-  sse-connect="/sse/session/{{ session.id }}/messages"
->
+<div class="detail-layout">
   <div class="panel">
     <div class="panel-head">Steps</div>
     <div class="panel-body" id="steps-panel">
-      <div id="steps-messages">
-        {% for m in messages %} {% if m.type not in output_types %}
-        <div class="msg-row">
-          <span class="msg-time">{{ format_relative(m.created_at) }}</span>
-          <span class="msg-type {{ m.type }}">{{ m.type or 'info' }}</span>
-          <span class="msg-summary">{{ m.summary }}</span>
-        </div>
-        {% endif %} {% endfor %}
-      </div>
+      <div id="steps-messages"></div>
     </div>
   </div>
 
-  <div class="browser-panel">
-    {% if session.live_url and session.status in ('running', 'created') %}
-    <iframe
-      src="{{ session.live_url }}"
-      allow="clipboard-read; clipboard-write"
-    ></iframe>
-    {% else %}
-    <div class="no-live">
-      {% if session.status in ('stopped', 'error', 'idle') %} Session ended — no
-      live view {% else %} Waiting for browser to start... {% endif %}
-    </div>
-    {% endif %}
+  <div
+    class="browser-panel"
+    id="browser-panel"
+    data-status="{{ session.status }}"
+    data-live-url="{{ session.live_url or '' }}"
+  >
+    <div class="no-live">Connecting to live view…</div>
   </div>
 
   <div class="panel">
@@ -199,26 +182,60 @@ Browser Use Pi{% endblock %} {% block head %}
       >
         {{ session.output }}
       </div>
-      <div id="output-messages">
-        {% for m in messages %} {% if m.type in output_types %}
-        <div class="msg-row">
-          <span class="msg-time">{{ format_relative(m.created_at) }}</span>
-          <span class="msg-type {{ m.type }}">{{ m.type or 'info' }}</span>
-          <span class="msg-summary">{{ m.summary }}</span>
-        </div>
-        {% endif %} {% endfor %}
-      </div>
+      <div id="output-messages"></div>
     </div>
   </div>
 </div>
 
 <script>
   const OUTPUT_TYPES = ["planning", "result", "completion"];
+  const TERMINAL = ["stopped", "error", "idle", "expired"];
   const stepsMessages = document.getElementById("steps-messages");
   const outputMessages = document.getElementById("output-messages");
   const stepsPanel = document.getElementById("steps-panel");
   const outputPanel = document.getElementById("output-panel");
   const resultBox = document.getElementById("result-box");
+  const browserPanel = document.getElementById("browser-panel");
+
+  function liveViewUrl(u) {
+    const m = String(u || "").match(/\/vnc\/([^/]+)\//);
+    if (!m) return "";
+    const id = m[1];
+    return `/vnc/${id}/vnc_lite.html?path=vnc/${id}/websockify&scale=true&view_only=1`;
+  }
+
+  function stripVncChrome(iframe) {
+    iframe.addEventListener("load", function () {
+      try {
+        const d = iframe.contentDocument;
+        if (!d) return;
+        const s = d.createElement("style");
+        s.textContent =
+          "#top_bar,#sendCtrlAltDelButton{display:none!important}" +
+          "html,body{background:#000!important;margin:0!important}#screen{height:100vh!important}";
+        d.head.appendChild(s);
+      } catch (e) {}
+    });
+  }
+
+  function setBrowser(status, liveUrl) {
+    if (TERMINAL.includes(status)) {
+      browserPanel.innerHTML = '<div class="no-live">Stream ended</div>';
+      return;
+    }
+    const url = liveViewUrl(liveUrl);
+    if (url) {
+      if (browserPanel.querySelector("iframe")) return;
+      const iframe = document.createElement("iframe");
+      iframe.src = url;
+      iframe.setAttribute("allow", "clipboard-read; clipboard-write");
+      stripVncChrome(iframe);
+      browserPanel.innerHTML = "";
+      browserPanel.appendChild(iframe);
+    } else if (!browserPanel.querySelector("iframe")) {
+      browserPanel.innerHTML = '<div class="no-live">Waiting for browser to start…</div>';
+    }
+  }
 
   function routeRows(html) {
     const tpl = document.createElement("template");
@@ -226,44 +243,40 @@ Browser Use Pi{% endblock %} {% block head %}
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
       const typeEl = row.querySelector(".msg-type");
       const isOutput =
-        typeEl &&
-        OUTPUT_TYPES.some(function (t) {
-          return typeEl.classList.contains(t);
-        });
+        typeEl && OUTPUT_TYPES.some((t) => typeEl.classList.contains(t));
       (isOutput ? outputMessages : stepsMessages).appendChild(row);
     });
     stepsPanel.scrollTop = stepsPanel.scrollHeight;
     outputPanel.scrollTop = outputPanel.scrollHeight;
   }
 
-  document.body.addEventListener("sse:messages", function (e) {
-    try {
-      routeRows(e.detail.data);
-    } catch (err) {}
-  });
+  setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
 
-  document.body.addEventListener("sse:status", function (e) {
+  const es = new EventSource("/sse/session/{{ session.id }}/messages");
+  es.addEventListener("messages", function (e) {
+    try { routeRows(e.data); } catch (err) {}
+  });
+  es.addEventListener("status", function (e) {
     try {
-      const data = JSON.parse(e.detail.data);
+      const data = JSON.parse(e.data);
       document.getElementById("stat-steps").textContent = data.stepCount || 0;
-      const tokens =
-        (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
-      document.getElementById("stat-tokens").textContent =
-        tokens.toLocaleString();
+      const tokens = (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
+      document.getElementById("stat-tokens").textContent = tokens.toLocaleString();
       document.getElementById("cost-total").textContent =
         "$" + parseFloat(data.totalCostUsd || data.llmCostUsd || 0).toFixed(4);
       document.getElementById("cost-llm").textContent =
         "$" + parseFloat(data.llmCostUsd || 0).toFixed(4);
       document.getElementById("cost-capsolver").textContent =
         "$" + parseFloat(data.capsolverCostUsd || 0).toFixed(4);
-      if (data.provider) {
-        document.getElementById("cost-provider").textContent = data.provider;
-      }
+      if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       document.getElementById("session-status").textContent = data.status;
+      const wrap = document.querySelector(".session-header .status");
+      if (wrap) wrap.className = "status status-" + data.status;
       if (data.output) {
         resultBox.textContent = data.output;
         resultBox.style.display = "block";
       }
+      setBrowser(data.status, data.liveUrl);
     } catch (e) {}
   });
 </script>

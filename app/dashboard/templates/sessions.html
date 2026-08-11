@@ -54,12 +54,8 @@
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
 
 <div class="section-label">Live</div>
-<div id="live-grid" class="live-grid">{% include "_live_grid.html" %}</div>
-<div
-  id="live-grid-empty"
-  class="live-grid-empty"
-  style="display: {% if live_sessions %}none{% endif %}"
->
+<div id="live-grid" class="live-grid"></div>
+<div id="live-grid-empty" class="live-grid-empty" style="display: none">
   No live sessions
 </div>
 
@@ -104,22 +100,50 @@
         }[c];
       });
     }
+    function liveViewUrl(u) {
+      const m = String(u || "").match(/\/vnc\/([^/]+)\//);
+      if (!m) return "";
+      const id = m[1];
+      return `/vnc/${id}/vnc_lite.html?path=vnc/${id}/websockify&scale=true&view_only=1`;
+    }
+    function stripVncChrome(iframe) {
+      iframe.addEventListener("load", function () {
+        try {
+          const d = iframe.contentDocument;
+          if (!d) return;
+          const s = d.createElement("style");
+          s.textContent =
+            "#top_bar,#sendCtrlAltDelButton{display:none!important}" +
+            "html,body{background:#000!important;margin:0!important}#screen{height:100vh!important}";
+          d.head.appendChild(s);
+        } catch (e) {}
+      });
+    }
     function buildTile(item) {
       const a = document.createElement("a");
       a.className = "grid-tile";
       a.href = "/session/" + item.id;
       a.setAttribute("data-session-id", item.id);
-      a.innerHTML =
-        '<div class="grid-tile-feed"><iframe src="' +
-        esc(item.liveUrl) +
-        '" tabindex="-1" scrolling="no"></iframe></div>' +
-        '<div class="grid-tile-label"><span class="status status-' +
+      const feed = document.createElement("div");
+      feed.className = "grid-tile-feed";
+      const iframe = document.createElement("iframe");
+      iframe.src = liveViewUrl(item.liveUrl);
+      iframe.setAttribute("tabindex", "-1");
+      iframe.setAttribute("scrolling", "no");
+      stripVncChrome(iframe);
+      feed.appendChild(iframe);
+      const label = document.createElement("div");
+      label.className = "grid-tile-label";
+      label.innerHTML =
+        '<span class="status status-' +
         esc(item.status) +
         '"><span class="status-dot"></span> ' +
         esc(item.status) +
         '</span><span class="badge">' +
         esc(item.model || "sonnet") +
-        "</span></div>";
+        "</span>";
+      a.appendChild(feed);
+      a.appendChild(label);
       return a;
     }
     function reconcile(items) {
