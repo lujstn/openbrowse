@@ -94,6 +94,10 @@
 {% endblock %} {% block content %}
 <h1>Profiles <span class="badge">{{ total }}</span></h1>
 
+<p style="margin-bottom: 16px;">
+  <a class="btn btn-primary" href="/profiles/import">Import from BU Cloud →</a>
+</p>
+
 <form class="create-card" method="post" action="/profiles/create">
   <div class="field">
     <label for="new-name">Name</label>

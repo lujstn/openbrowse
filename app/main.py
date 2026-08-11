@@ -14,6 +14,7 @@ from app.api.profiles import router as profiles_router
 from app.api.sessions import router as sessions_router
 from app.browser.factory import display_manager
 from app.config import settings
+from app.dashboard.import_routes import router as import_router
 from app.dashboard.routes import router as dashboard_router, vnc_router as dashboard_vnc_router
 from app.db import crud
 from app.db.models import init_db
@@ -80,6 +81,7 @@ app.add_middleware(
 
 app.include_router(sessions_router)
 app.include_router(profiles_router)
+app.include_router(import_router)
 app.include_router(dashboard_router)
 app.include_router(dashboard_vnc_router)
 

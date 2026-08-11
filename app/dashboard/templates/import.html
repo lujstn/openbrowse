@@ -1,0 +1,303 @@
+{% extends "base.html" %} {% block title %}Import from BU Cloud — Browser Use Pi{% endblock %} {% block head %}
+<style>
+  .card {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .lead {
+    color: #999;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    max-width: 640px;
+  }
+  label.fld {
+    display: block;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  input.token {
+    width: 100%;
+    max-width: 520px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 13px;
+    padding: 9px 11px;
+  }
+  input.token:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .btn {
+    border: 1px solid #333;
+    background: #1a1a1a;
+    color: #e5e5e5;
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn:hover { border-color: #444; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary {
+    background: #60a5fa;
+    color: #0a0a0a;
+    border-color: #60a5fa;
+    font-weight: 600;
+  }
+  .btn-primary:hover { background: #7db8fb; }
+  .btn-danger:hover { border-color: #ef4444; color: #ef4444; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+  .spinner {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid #333; border-top-color: #60a5fa;
+    animation: spin 0.7s linear infinite; display: inline-block; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .phase { color: #cbd5e1; font-size: 14px; margin-left: 10px; }
+  .plist { list-style: none; margin-top: 16px; }
+  .plist li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex: none; }
+  .dot.exporting { background: #eab308; box-shadow: 0 0 6px #eab308; animation: pulse 1s infinite; }
+  .dot.ready { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .dot.error { background: #ef4444; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .pname { color: #e5e5e5; min-width: 160px; }
+  .pmeta { color: #777; font-size: 12px; }
+  .hidden { display: none; }
+  .muted { color: #666; font-size: 12px; }
+  .err { color: #f87171; font-size: 13px; }
+  .ok { color: #34d399; font-size: 14px; }
+  .domains { color: #9ca3af; font-size: 12px; }
+  .bar {
+    display: inline-block; vertical-align: middle;
+    width: 160px; height: 6px; background: #222;
+    border-radius: 3px; margin: 0 8px; overflow: hidden;
+  }
+  .bar-fill { height: 100%; background: #60a5fa; border-radius: 3px; transition: width 0.3s ease; }
+  .eta { color: #777; font-size: 12px; }
+</style>
+{% endblock %} {% block content %}
+<h1>Import from BU Cloud</h1>
+
+<div id="stage-token" class="card">
+  <p class="lead">
+    Paste a BU Cloud API token. It is used only to boot cloud browsers and read your profiles'
+    cookies and localStorage, then discarded. It is never written to disk or stored anywhere.
+    Each profile briefly spins up a cloud browser (auto-refunded), so fetching can take a little
+    while. Get a token at
+    <a href="https://cloud.browser-use.com/dashboard/api" target="_blank" rel="noreferrer">cloud.browser-use.com</a>.
+  </p>
+  <label class="fld" for="token">BU Cloud API token</label>
+  <input id="token" class="token" type="password" autocomplete="off" spellcheck="false" placeholder="bu_..." />
+  <div class="row">
+    <button id="start" class="btn btn-primary">Start import</button>
+    <span class="muted">Reads cookies + localStorage from every profile on the token.</span>
+  </div>
+</div>
+
+<div id="stage-fetching" class="card hidden">
+  <div><span class="spinner"></span><span id="fetch-phase" class="phase">Starting…</span></div>
+  <ul id="fetch-list" class="plist"></ul>
+</div>
+
+<div id="stage-ready" class="card hidden">
+  <p class="lead" style="margin-bottom: 8px;">
+    Captured. Review what was fetched, then confirm to import into the Pi. Importing writes each
+    profile's cookies to <span class="mono">data/profiles/&lt;id&gt;.json</span>, creating the
+    profile if it does not exist yet.
+  </p>
+  <table>
+    <thead>
+      <tr><th></th><th>Profile</th><th>ID</th><th>Cookies</th><th>Origins</th><th>Domains</th></tr>
+    </thead>
+    <tbody id="ready-rows"></tbody>
+  </table>
+  <div class="row">
+    <button id="confirm" class="btn btn-primary">Confirm import</button>
+    <button id="cancel" class="btn btn-danger">Cancel</button>
+  </div>
+</div>
+
+<div id="stage-importing" class="card hidden">
+  <div><span class="spinner"></span><span class="phase">Importing…</span></div>
+</div>
+
+<div id="stage-done" class="card hidden">
+  <p class="ok">✓ Import complete.</p>
+  <ul id="done-rows" class="plist"></ul>
+  <div class="row"><a class="btn btn-primary" href="/profiles">View profiles</a></div>
+</div>
+
+<div id="stage-error" class="card hidden">
+  <p class="err" id="error-msg"></p>
+  <div class="row"><button id="restart" class="btn">Start over</button></div>
+</div>
+
+<script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    const stages = ["token", "fetching", "ready", "importing", "done", "error"];
+    let jobId = null;
+    let es = null;
+
+    function show(stage) {
+      stages.forEach((s) => $("stage-" + s).classList.toggle("hidden", s !== stage));
+    }
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s == null ? "" : String(s);
+      return d.innerHTML;
+    }
+    function closeEs() { if (es) { es.close(); es = null; } }
+
+    let startTimes = {};
+
+    function etaText(id, done, total) {
+      if (!startTimes[id]) startTimes[id] = Date.now();
+      const elapsed = (Date.now() - startTimes[id]) / 1000;
+      if (done < 1 || elapsed < 1) return "estimating…";
+      if (done >= total) return "finishing…";
+      const remaining = Math.max(0, Math.round((total - done) / (done / elapsed)));
+      return `~${remaining}s left`;
+    }
+
+    function renderFetchList(profiles) {
+      $("fetch-list").innerHTML = (profiles || [])
+        .map((p) => {
+          let meta;
+          if (p.status === "ready") {
+            meta = `${p.cookieCount} cookies · ${p.originCount} origins`;
+          } else if (p.status === "error") {
+            meta = `<span class="err">${esc(p.error || "failed")}</span>`;
+          } else if (p.status === "exporting" && p.progress && p.progress.total) {
+            const done = p.progress.done, total = p.progress.total;
+            const pct = Math.min(100, Math.round((done / total) * 100));
+            meta =
+              `checking sites ${done}/${total}` +
+              `<span class="bar"><span class="bar-fill" style="width:${pct}%"></span></span>` +
+              `<span class="eta">${etaText(p.id, done, total)}</span>`;
+          } else {
+            meta = p.status;
+          }
+          return `<li><span class="dot ${esc(p.status)}"></span><span class="pname">${esc(p.name || p.id)}</span><span class="pmeta">${meta}</span></li>`;
+        })
+        .join("");
+    }
+
+    function renderReady(profiles) {
+      $("ready-rows").innerHTML = (profiles || [])
+        .filter((p) => p.status === "ready")
+        .map(
+          (p) =>
+            `<tr><td><input type="checkbox" class="pick" value="${esc(p.id)}" checked /></td>` +
+            `<td>${esc(p.name || "—")}</td><td class="mono">${esc(p.id)}</td>` +
+            `<td>${p.cookieCount}</td><td>${p.originCount}</td>` +
+            `<td class="domains">${esc((p.domains || []).join(", "))}</td></tr>`
+        )
+        .join("");
+    }
+
+    function renderDone(results) {
+      $("done-rows").innerHTML = (results || [])
+        .map(
+          (r) =>
+            `<li><span class="dot ready"></span><span class="pname">${esc(r.name || r.id)}</span>` +
+            `<span class="pmeta">${r.created ? "created" : "updated"} · ${r.cookie_count} cookies · ${(r.domains || []).length} domains</span></li>`
+        )
+        .join("");
+    }
+
+    function onJob(job) {
+      if (job.status === "fetching") {
+        show("fetching");
+        $("fetch-phase").textContent = job.phase || "Working…";
+        renderFetchList(job.profiles);
+      } else if (job.status === "ready") {
+        renderReady(job.profiles);
+        show("ready");
+      } else if (job.status === "importing") {
+        show("importing");
+      } else if (job.status === "done") {
+        renderDone(job.results);
+        show("done");
+        closeEs();
+      } else if (job.status === "error") {
+        $("error-msg").textContent = job.error || "Something went wrong.";
+        show("error");
+        closeEs();
+      }
+    }
+
+    function openStream() {
+      closeEs();
+      es = new EventSource(`/profiles/import/${jobId}/events`);
+      es.addEventListener("job", (e) => {
+        try { onJob(JSON.parse(e.data)); } catch (_) {}
+      });
+      es.onerror = () => {};
+    }
+
+    $("start").addEventListener("click", async () => {
+      const input = $("token");
+      const token = input.value.trim();
+      if (!token) { input.focus(); return; }
+      $("start").disabled = true;
+      try {
+        const body = new URLSearchParams({ token });
+        const resp = await fetch("/profiles/import/start", { method: "POST", body });
+        const data = await resp.json();
+        input.value = "";
+        if (!resp.ok) throw new Error(data.error || "Failed to start.");
+        jobId = data.jobId;
+        startTimes = {};
+        show("fetching");
+        $("fetch-phase").textContent = "Starting…";
+        openStream();
+      } catch (err) {
+        $("error-msg").textContent = err.message;
+        show("error");
+      } finally {
+        $("start").disabled = false;
+      }
+    });
+
+    $("confirm").addEventListener("click", async () => {
+      const ids = Array.from(document.querySelectorAll(".pick:checked")).map((c) => c.value);
+      if (!ids.length) return;
+      $("confirm").disabled = true;
+      show("importing");
+      try {
+        await fetch(`/profiles/import/${jobId}/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+      } catch (_) {}
+      $("confirm").disabled = false;
+    });
+
+    $("cancel").addEventListener("click", async () => {
+      closeEs();
+      try { await fetch(`/profiles/import/${jobId}/cancel`, { method: "POST" }); } catch (_) {}
+      jobId = null;
+      show("token");
+    });
+
+    $("restart").addEventListener("click", () => { jobId = null; show("token"); });
+  })();
+</script>
+{% endblock %}
