@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 ONE_M_BETA = "context-1m-2025-08-07"
 
+_SCHEMA_COMPLETENESS_EXTENSION = (
+    "If a schema field is missing but likely lives on a linked page or in data "
+    "embedded in the current page, navigate there and extract it before finishing; "
+    "never guess, and leave a field null only when it genuinely cannot be found."
+)
+
 
 class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
@@ -265,27 +271,31 @@ async def _coerce_to_schema(output: Any, model: type, llm: Any) -> tuple[str, bo
         return (output if isinstance(output, str) else json.dumps(output)), False
 
 
-def _describe_actions(actions: list) -> str:
-    parts: list[str] = []
-    for action in actions:
-        try:
-            dumped = action.model_dump(exclude_none=True)
-        except Exception:
-            parts.append(action.__class__.__name__)
-            continue
-        if not dumped:
-            continue
-        name, params = next(iter(dumped.items()))
-        detail = ""
-        if isinstance(params, dict):
-            for pk in ("url", "index", "text", "query", "selector", "seconds"):
-                value = params.get(pk)
-                if value not in (None, ""):
-                    val = str(value)
-                    detail = " " + (val[:500] + "…" if len(val) > 500 else val)
-                    break
-        parts.append(f"{name}{detail}")
-    return ", ".join(parts) if parts else "step"
+_CODE_ACTIONS = ("evaluate", "find_", "search_page")
+
+
+def _action_detail(actions: list) -> tuple[str, bool]:
+    """The primary action's key parameter for the feed summary — without the action
+    name (the feed chip already shows that) — plus whether it should render as code
+    (a CSS selector or a JS snippet reads better in monospace than as prose).
+    """
+    name = _primary_action_name(actions)
+    if not actions or not name:
+        return "", False
+    try:
+        params = actions[0].model_dump(exclude_none=True).get(name)
+    except Exception:
+        params = None
+    detail = ""
+    if isinstance(params, dict):
+        for pk in ("url", "selector", "query", "text", "code", "expression", "keys", "index", "seconds"):
+            value = params.get(pk)
+            if value not in (None, ""):
+                val = str(value)
+                detail = val[:500] + "…" if len(val) > 500 else val
+                break
+    is_code = bool(detail) and any(k in name.lower() for k in _CODE_ACTIONS)
+    return detail, is_code
 
 
 def _friendly_error(error: str) -> str:
@@ -442,20 +452,22 @@ async def run_agent_session(session_id: str) -> None:
             step = steps[-1]
 
             summary = ""
+            is_code = False
             msg_type = "browser_action"
 
             if step.model_output:
                 brain = getattr(step.model_output, "current_state", None)
                 if brain and getattr(brain, "next_goal", None):
                     summary = brain.next_goal
-                if not summary and step.model_output.action:
-                    summary = _describe_actions(step.model_output.action)
+                elif step.model_output.action:
+                    summary, is_code = _action_detail(step.model_output.action)
 
             if step.result:
                 for result in step.result:
                     if result.error:
                         msg_type = "browser_action_error"
                         summary = f"Error: {_friendly_error(result.error)}"
+                        is_code = False
                     elif result.extracted_content:
                         msg_type = "result"
 
@@ -480,6 +492,7 @@ async def run_agent_session(session_id: str) -> None:
                         "duration_s": duration_s,
                         "category": category,
                         "action": action_name,
+                        "code": is_code,
                     }
                 ),
                 msg_type=msg_type,
@@ -514,8 +527,8 @@ async def run_agent_session(session_id: str) -> None:
         }
         if output_model is not None:
             agent_kwargs["output_model_schema"] = output_model
-        if system_prompt_extension:
-            agent_kwargs["extend_system_message"] = system_prompt_extension
+        extension_parts = [p for p in (system_prompt_extension, _SCHEMA_COMPLETENESS_EXTENSION) if p]
+        agent_kwargs["extend_system_message"] = "\n\n".join(extension_parts)
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data
 

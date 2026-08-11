@@ -411,6 +411,7 @@ async def sse_session_messages(request: Request, session_id: str):
                         "provider": model_provider(session.get("model")),
                         "output": session.get("output") or "",
                         "activity": get_activity(session_id),
+                        "isTaskSuccessful": session.get("is_task_successful"),
                     }),
                 }
             await asyncio.sleep(1)

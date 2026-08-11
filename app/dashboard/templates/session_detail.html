@@ -195,6 +195,13 @@ Browser Use Pi{% endblock %} {% block head %}
     display: flex;
     gap: 8px;
     align-items: center;
+    justify-content: space-between;
+  }
+  .cc-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
   }
   .cc-out {
     position: relative;
@@ -215,14 +222,12 @@ Browser Use Pi{% endblock %} {% block head %}
     overflow: auto;
   }
   .cc-copy {
-    position: absolute;
-    top: 8px;
-    right: 8px;
+    flex: 0 0 auto;
     background: #1a1a1a;
     border: 1px solid #333;
     color: #cbd5e1;
     border-radius: 5px;
-    padding: 2px 8px;
+    padding: 2px 10px;
     font-size: 11px;
     cursor: pointer;
   }
@@ -338,13 +343,32 @@ Browser Use Pi{% endblock %} {% block head %}
   .j-num { color: #f59e0b; }
   .j-bool { color: #f472b6; }
   .j-null { color: #94a3b8; }
+  .status-d-running .status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); }
+  .status-d-success .status-dot { background: #34d399; }
+  .status-d-warning .status-dot { background: #f59e0b; }
+  .status-d-failed .status-dot { background: #f87171; }
+  .status-d-stopped .status-dot { background: #6b7280; }
+  .msg-code {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    color: #93c5fd;
+    background: rgba(148, 163, 184, 0.09);
+    padding: 0 5px;
+    border-radius: 4px;
+  }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
   <a href="/sessions">&larr; Sessions</a>
-  <span class="status status-{{ session.status }}">
+  {% set ok = session.is_task_successful %}
+  {% if session.status in ('running', 'created') %}{% set dstat = 'running' %}
+  {% elif session.status == 'error' %}{% set dstat = 'failed' %}
+  {% elif ok == 1 %}{% set dstat = 'success' %}
+  {% elif ok == 0 %}{% set dstat = 'warning' %}
+  {% else %}{% set dstat = 'stopped' %}{% endif %}
+  <span class="status status-d-{{ dstat }}">
     <span class="status-dot"></span>
-    <span id="session-status">{{ session.status }}</span>
+    <span id="session-status">{{ dstat }}</span>
   </span>
   <span class="mono">{{ session.id }}</span>
   <span class="badge">{{ session.model or 'sonnet' }}</span>
@@ -437,6 +461,14 @@ Browser Use Pi{% endblock %} {% block head %}
     return d.innerHTML;
   }
 
+  function displayStatus(status, success) {
+    if (status === "running" || status === "created") return "running";
+    if (status === "error") return "failed";
+    if (success === true || success === 1) return "success";
+    if (success === false || success === 0) return "warning";
+    return "stopped";
+  }
+
   async function copyText(text) {
     try {
       await navigator.clipboard.writeText(text || "");
@@ -522,8 +554,10 @@ Browser Use Pi{% endblock %} {% block head %}
     }
     completionCard.classList.remove("hidden");
     let html =
-      '<div class="cc-head"><span>✓</span><span>' +
-      esc(completionSummary || "Task completed") + "</span></div>";
+      '<div class="cc-head"><span class="cc-title">✓ ' +
+      esc(completionSummary || "Task completed") + "</span>" +
+      (currentOutput ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
+      "</div>";
     if (currentOutput) {
       let parsed = null;
       try { parsed = JSON.parse(currentOutput); } catch (e) {}
@@ -531,10 +565,7 @@ Browser Use Pi{% endblock %} {% block head %}
         parsed !== null && typeof parsed === "object"
           ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
           : "<pre>" + esc(currentOutput) + "</pre>";
-      html +=
-        '<div class="cc-outhead"><span>Output</span>' +
-        '<button class="cc-copy" title="Copy output">Copy</button></div>' +
-        '<div class="cc-out">' + body + "</div>";
+      html += '<div class="cc-out">' + body + "</div>";
     }
     completionCard.innerHTML = html;
     const btn = completionCard.querySelector(".cc-copy");
@@ -598,9 +629,10 @@ Browser Use Pi{% endblock %} {% block head %}
       document.getElementById("cost-capsolver").textContent =
         "$" + parseFloat(data.capsolverCostUsd || 0).toFixed(4);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
-      document.getElementById("session-status").textContent = data.status;
+      const dstat = displayStatus(data.status, data.isTaskSuccessful);
+      document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
-      if (wrap) wrap.className = "status status-" + data.status;
+      if (wrap) wrap.className = "status status-d-" + dstat;
       lastStatus = data.status;
       activityState = data.activity || null;
       renderActivity();
