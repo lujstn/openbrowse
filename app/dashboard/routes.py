@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.activity import get_activity
 from app.agent.pool import pool
+from app.api.sessions import _to_session_response
 from app.auth import dashboard_auth_ok, require_dashboard_auth
 from app.config import settings
 from app.db import crud
@@ -230,24 +231,21 @@ async def session_detail(request: Request, session_id: str):
 @router.get("/session/{session_id}/log")
 async def session_log(session_id: str):
     session = await crud.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
     messages, _ = await crud.list_messages(session_id, limit=1000)
-    return JSONResponse(
+    export = _to_session_response(session).model_dump()
+    export["task"] = session.get("task")
+    export["messages"] = [
         {
-            "sessionId": session_id,
-            "status": session.get("status") if session else None,
-            "model": session.get("model") if session else None,
-            "task": session.get("task") if session else None,
-            "output": session.get("output") if session else None,
-            "messages": [
-                {
-                    "createdAt": m.get("created_at"),
-                    "type": m.get("type"),
-                    "summary": m.get("summary"),
-                }
-                for m in messages
-            ],
+            "createdAt": m.get("created_at"),
+            "type": m.get("type"),
+            "summary": m.get("summary"),
+            "data": m.get("data"),
         }
-    )
+        for m in messages
+    ]
+    return JSONResponse(export)
 
 
 @router.get("/profiles", response_class=HTMLResponse)
@@ -395,12 +393,12 @@ async def sse_session_messages(request: Request, session_id: str):
 
 _VNC_VIEW_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>live view</title>
-<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}div#screen{position:fixed;inset:0}div#screen canvas{display:block}.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#8a8a8a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}.overlay.hidden{display:none}.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:#60a5fa;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.ended-icon{opacity:.85}</style></head>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}div#screen{position:fixed;inset:0;cursor:default;pointer-events:none}div#screen canvas{display:block;cursor:default!important}.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#8a8a8a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}.overlay.hidden{display:none}.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:#60a5fa;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.ended-icon{opacity:.85}</style></head>
 <body>
   <div id="screen"></div>
   <div id="loading" class="overlay"><div class="spinner"></div><div>Connecting to live view…</div></div>
   <div id="ended" class="overlay hidden">
-    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="#666" stroke="none"/></svg>
+    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="5" width="18" height="12" rx="2"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/></svg>
     <div>Stream ended</div>
   </div>
   <script type="module">
@@ -414,6 +412,7 @@ _VNC_VIEW_HTML = """<!doctype html>
     try {
       const rfb = new RFB(document.getElementById('screen'), url);
       rfb.viewOnly = true;
+      rfb.showDotCursor = false;
       rfb.scaleViewport = true;
       rfb.addEventListener('connect', () => loading.classList.add('hidden'));
       rfb.addEventListener('disconnect', () => { loading.classList.add('hidden'); ended.classList.remove('hidden'); });

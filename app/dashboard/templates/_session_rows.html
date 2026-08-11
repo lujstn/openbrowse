@@ -1,16 +1,33 @@
 {% for s in sessions %}
-<tr onclick="window.location='/session/{{ s.id }}'">
+{% set d_status = 'running' if s.status in ('running', 'created') else
+'failed' if s.status == 'error' else 'success' if s.status in ('stopped',
+'idle') and s.is_task_successful == 1 else 'warning' if s.status in
+('stopped', 'idle') and s.is_task_successful == 0 else 'stopped' %}
+<tr onclick="handleSessionRowClick(event, '{{ s.id }}')">
   <td>
-    <span class="status status-{{ s.status }}"
-      ><span class="status-dot"></span> {{ s.status }}</span
+    <span class="status status-d-{{ d_status }}"
+      ><span class="status-dot"></span> {{ d_status }}</span
     >
   </td>
   <td>
     {{ s.title or s.task[:40] + '...' if s.task and s.task|length > 40 else
     s.task or '—' }}
   </td>
-  <td class="mono">{{ s.id[:8] }}...</td>
-  <td class="mono">{{ s.profile_id[:8] + '...' if s.profile_id else '—' }}</td>
+  <td class="mono">
+    <span class="copyable" data-copy="{{ s.id }}" title="Click to copy full ID"
+      >{{ s.id[:8] }}...</span
+    >
+  </td>
+  <td class="mono">
+    {% if s.profile_id %}
+    <span
+      class="copyable"
+      data-copy="{{ s.profile_id }}"
+      title="Click to copy full ID"
+      >{{ s.profile_id[:8] }}...</span
+    >
+    {% else %} — {% endif %}
+  </td>
   <td>{{ format_relative(s.created_at) }}</td>
   <td class="mono">
     {{ format_duration(s.created_at, s.updated_at, s.status) }}

@@ -49,6 +49,34 @@
     letter-spacing: 0.05em;
     margin: 4px 0 12px;
   }
+  .status-d-running .status-dot {
+    background: #60a5fa;
+    box-shadow: 0 0 6px #60a5fa;
+  }
+  .status-d-success .status-dot {
+    background: #34d399;
+  }
+  .status-d-warning .status-dot {
+    background: #f59e0b;
+  }
+  .status-d-failed .status-dot {
+    background: #f87171;
+  }
+  .status-d-stopped .status-dot {
+    background: #6b7280;
+  }
+  .copyable {
+    cursor: pointer;
+    border-bottom: 1px dotted #3a3a3a;
+  }
+  .copyable:hover {
+    color: #e5e5e5;
+    border-bottom-color: #888;
+  }
+  .copyable.copied {
+    color: #34d399;
+    border-bottom-color: #34d399;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
@@ -106,11 +134,22 @@
       const id = m[1];
       return `/vnc/${id}/view?path=vnc/${id}/websockify`;
     }
+    function labelHtml(item) {
+      return (
+        '<span class="status status-' +
+        esc(item.status) +
+        '"><span class="status-dot"></span> ' +
+        esc(item.status) +
+        '</span><span class="badge">' +
+        esc(item.model || "sonnet") +
+        "</span>"
+      );
+    }
     function buildTile(item) {
       const a = document.createElement("a");
       a.className = "grid-tile";
       a.href = "/session/" + item.id;
-      a.setAttribute("data-session-id", item.id);
+      a.setAttribute("data-session-id", String(item.id));
       const feed = document.createElement("div");
       feed.className = "grid-tile-feed";
       const iframe = document.createElement("iframe");
@@ -120,39 +159,86 @@
       feed.appendChild(iframe);
       const label = document.createElement("div");
       label.className = "grid-tile-label";
-      label.innerHTML =
-        '<span class="status status-' +
-        esc(item.status) +
-        '"><span class="status-dot"></span> ' +
-        esc(item.status) +
-        '</span><span class="badge">' +
-        esc(item.model || "sonnet") +
-        "</span>";
+      label.innerHTML = labelHtml(item);
       a.appendChild(feed);
       a.appendChild(label);
       return a;
     }
     function reconcile(items) {
-      const incoming = new Set(items.map((i) => i.id));
+      const incoming = new Map(items.map((i) => [String(i.id), i]));
       grid.querySelectorAll(".grid-tile").forEach((tile) => {
         if (!incoming.has(tile.getAttribute("data-session-id"))) tile.remove();
       });
-      items.forEach((item) => {
-        if (
-          !grid.querySelector(
-            '.grid-tile[data-session-id="' + CSS.escape(item.id) + '"]'
-          )
-        ) {
+      incoming.forEach((item, id) => {
+        const existing = grid.querySelector(
+          '.grid-tile[data-session-id="' + CSS.escape(id) + '"]'
+        );
+        if (existing) {
+          const label = existing.querySelector(".grid-tile-label");
+          if (label) label.innerHTML = labelHtml(item);
+        } else {
           grid.appendChild(buildTile(item));
         }
       });
       empty.style.display = grid.querySelector(".grid-tile") ? "none" : "";
     }
-    const src = new EventSource("/sse/live-grid");
-    src.addEventListener("live-grid", function (e) {
+    function connect() {
+      const src = new EventSource("/sse/live-grid");
+      src.addEventListener("live-grid", function (e) {
+        try {
+          reconcile(JSON.parse(e.data));
+        } catch (err) {}
+      });
+      src.addEventListener("error", function () {
+        if (src.readyState === EventSource.CLOSED) {
+          src.close();
+          setTimeout(connect, 2000);
+        }
+      });
+    }
+    connect();
+  })();
+
+  function handleSessionRowClick(event, id) {
+    if (event.target.closest("[data-copy]")) return;
+    window.location = "/session/" + id;
+  }
+
+  (function () {
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
       try {
-        reconcile(JSON.parse(e.data));
+        document.execCommand("copy");
       } catch (err) {}
+      document.body.removeChild(ta);
+    }
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(function () {
+          fallbackCopy(text);
+        });
+      } else {
+        fallbackCopy(text);
+      }
+    }
+    document.addEventListener("click", function (e) {
+      const el = e.target.closest("[data-copy]");
+      if (!el) return;
+      e.preventDefault();
+      copyText(el.getAttribute("data-copy"));
+      const original = el.textContent;
+      clearTimeout(el._copyTimeout);
+      el.classList.add("copied");
+      el.textContent = "copied";
+      el._copyTimeout = setTimeout(function () {
+        el.classList.remove("copied");
+        el.textContent = original;
+      }, 1000);
     });
   })();
 </script>

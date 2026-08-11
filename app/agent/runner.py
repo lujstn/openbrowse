@@ -281,7 +281,8 @@ def _describe_actions(actions: list) -> str:
             for pk in ("url", "index", "text", "query", "selector", "seconds"):
                 value = params.get(pk)
                 if value not in (None, ""):
-                    detail = f" {str(value)[:60]}"
+                    val = str(value)
+                    detail = " " + (val[:500] + "…" if len(val) > 500 else val)
                     break
         parts.append(f"{name}{detail}")
     return ", ".join(parts) if parts else "step"
@@ -289,6 +290,37 @@ def _describe_actions(actions: list) -> str:
 
 def _friendly_error(error: str) -> str:
     return " ".join((error or "").split())[:200]
+
+
+def _primary_action_name(actions: list) -> str | None:
+    if not actions:
+        return None
+    try:
+        dumped = actions[0].model_dump(exclude_none=True)
+    except Exception:
+        return None
+    return next(iter(dumped), None) if dumped else None
+
+
+def _category_for(action_name: str | None) -> str:
+    n = (action_name or "").lower()
+    if any(k in n for k in ("navigate", "go_to", "go_back", "search", "switch")):
+        return "navigation"
+    if any(k in n for k in ("click", "input", "scroll", "send_keys", "select", "dropdown", "upload", "type")):
+        return "interaction"
+    if any(k in n for k in ("evaluate", "python", "execute_js")):
+        return "code"
+    if "fetch" in n:
+        return "network"
+    if any(k in n for k in ("extract", "find_", "search_page", "get_html", "screenshot", "pdf")):
+        return "read"
+    if "wait" in n:
+        return "wait"
+    if "captcha" in n:
+        return "interaction"
+    if "done" in n:
+        return "done"
+    return "action"
 
 
 async def run_agent_session(session_id: str) -> None:
@@ -427,6 +459,12 @@ async def run_agent_session(session_id: str) -> None:
                     elif result.extracted_content:
                         msg_type = "result"
 
+            action_name = None
+            category = None
+            if step.model_output and step.model_output.action:
+                action_name = _primary_action_name(step.model_output.action)
+                category = _category_for(action_name)
+
             started = step_started_at.get("t")
             duration_s = (
                 round((datetime.now(timezone.utc) - started).total_seconds(), 1)
@@ -436,7 +474,14 @@ async def run_agent_session(session_id: str) -> None:
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
-                data=json.dumps({"step": step_count, "duration_s": duration_s}),
+                data=json.dumps(
+                    {
+                        "step": step_count,
+                        "duration_s": duration_s,
+                        "category": category,
+                        "action": action_name,
+                    }
+                ),
                 msg_type=msg_type,
                 summary=summary or f"Step {step_count}",
             )

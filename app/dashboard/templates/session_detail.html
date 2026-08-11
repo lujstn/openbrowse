@@ -3,7 +3,7 @@ Browser Use Pi{% endblock %} {% block head %}
 <style>
   .detail-layout {
     display: grid;
-    grid-template-columns: 1fr 1.6fr 1fr;
+    grid-template-columns: 1.7fr 1fr;
     gap: 16px;
     height: calc(100vh - 140px);
   }
@@ -234,42 +234,110 @@ Browser Use Pi{% endblock %} {% block head %}
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 6px 2px;
     margin-bottom: 8px;
-    background: #0d1b2a;
-    border: 1px solid #1e3a5f;
-    border-radius: 8px;
-    font-size: 13px;
-    color: #cbd5e1;
+    font-size: 12px;
+    color: #888;
   }
   .activity-bar.hidden {
     display: none;
   }
   .act-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: #60a5fa;
+    background: #6b7280;
     flex: none;
-    animation: actpulse 1s ease-in-out infinite;
   }
-  @keyframes actpulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+  .act-spin {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    border-top-color: #9ca3af;
+    flex: none;
+    animation: spin 0.7s linear infinite;
   }
   .act-label {
     flex: 1;
   }
   .act-timer {
     font-variant-numeric: tabular-nums;
-    color: #94a3b8;
+    color: #6b7280;
   }
   .msg-dur {
     margin-left: auto;
     color: #64748b;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
+    align-self: flex-start;
   }
+  .msg-cat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: monospace;
+    min-width: 96px;
+    max-width: 150px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 0 auto;
+    align-self: flex-start;
+  }
+  .cat-ico {
+    font-size: 10px;
+    flex: none;
+  }
+  .cat-navigation { color: #60a5fa; background: rgba(96, 165, 250, 0.1); }
+  .cat-interaction { color: #22d3ee; background: rgba(34, 211, 238, 0.1); }
+  .cat-code { color: #a78bfa; background: rgba(167, 139, 250, 0.12); }
+  .cat-network { color: #818cf8; background: rgba(129, 140, 248, 0.1); }
+  .cat-read { color: #c084fc; background: rgba(192, 132, 252, 0.1); }
+  .cat-wait { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+  .cat-done { color: #34d399; background: rgba(52, 211, 153, 0.12); }
+  .cat-error { color: #f87171; background: rgba(248, 113, 113, 0.12); }
+  .cat-planning { color: #94a3b8; background: rgba(148, 163, 184, 0.1); }
+  .cat-completion { color: #34d399; background: rgba(52, 211, 153, 0.12); }
+  .cat-action { color: #94a3b8; background: rgba(148, 163, 184, 0.08); }
+  .msg-summary {
+    flex: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .msg-row.expanded .msg-summary {
+    -webkit-line-clamp: unset;
+    overflow: visible;
+    word-break: break-word;
+  }
+  .cc-outhead {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 10px 0 4px;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .j-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+  }
+  .j-key { color: #60a5fa; }
+  .j-str { color: #a3e635; }
+  .j-num { color: #f59e0b; }
+  .j-bool { color: #f472b6; }
+  .j-null { color: #94a3b8; }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
@@ -305,13 +373,6 @@ Browser Use Pi{% endblock %} {% block head %}
 </dl>
 
 <div class="detail-layout">
-  <div class="panel">
-    <div class="panel-head">Steps</div>
-    <div class="panel-body" id="steps-panel">
-      <div id="steps-list"></div>
-    </div>
-  </div>
-
   <div
     class="browser-panel"
     id="browser-panel"
@@ -337,17 +398,13 @@ Browser Use Pi{% endblock %} {% block head %}
 </div>
 
 <script>
-  const STEP_TYPES = ["browser_action", "browser_action_error", "result"];
   const TERMINAL = ["stopped", "error", "idle", "expired"];
   const SESSION_ID = "{{ session.id }}";
-  const stepsList = document.getElementById("steps-list");
   const feedRows = document.getElementById("feed-rows");
-  const stepsPanel = document.getElementById("steps-panel");
   const outputPanel = document.getElementById("output-panel");
   const completionCard = document.getElementById("completion-card");
   const browserPanel = document.getElementById("browser-panel");
 
-  let stepCount = 0;
   let completionSummary = "";
   let currentOutput = "";
   let activityState = null;
@@ -362,9 +419,13 @@ Browser Use Pi{% endblock %} {% block head %}
     const started = Date.parse(activityState.startedAt);
     const secs = isNaN(started) ? 0 : Math.max(0, (Date.now() - started) / 1000);
     const stepLabel = activityState.step ? " · step " + activityState.step : "";
+    const waiting = /waiting/i.test(activityState.label || "");
+    const indicator = waiting
+      ? '<span class="act-spin"></span>'
+      : '<span class="act-dot"></span>';
     activityBar.classList.remove("hidden");
     activityBar.innerHTML =
-      '<span class="act-dot"></span><span class="act-label">' +
+      indicator + '<span class="act-label">' +
       esc(activityState.label) + stepLabel +
       '</span><span class="act-timer">' + secs.toFixed(1) + "s</span>";
   }
@@ -405,8 +466,9 @@ Browser Use Pi{% endblock %} {% block head %}
   }
 
   const ENDED_SVG =
-    '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5">' +
-    '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="#666" stroke="none"/></svg>';
+    '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round">' +
+    '<rect x="3" y="5" width="18" height="12" rx="2"/><line x1="9" y1="11" x2="15" y2="11"/>' +
+    '<line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/></svg>';
 
   function setBrowser(status, liveUrl) {
     if (TERMINAL.includes(status)) {
@@ -426,6 +488,33 @@ Browser Use Pi{% endblock %} {% block head %}
     }
   }
 
+  function highlightJson(obj) {
+    let json = JSON.stringify(obj, null, 2);
+    json = json.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return json.replace(
+      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      function (match) {
+        let cls = "j-num";
+        if (/^"/.test(match)) {
+          cls = /:$/.test(match) ? "j-key" : "j-str";
+        } else if (/^(true|false)$/.test(match)) {
+          cls = "j-bool";
+        } else if (/^null$/.test(match)) {
+          cls = "j-null";
+        }
+        return '<span class="' + cls + '">' + match + "</span>";
+      }
+    );
+  }
+
+  function prettyOutput(text) {
+    try {
+      const p = JSON.parse(text);
+      if (p && typeof p === "object") return JSON.stringify(p, null, 2);
+    } catch (e) {}
+    return text;
+  }
+
   function renderCompletion() {
     if (!completionSummary && !currentOutput) {
       completionCard.classList.add("hidden");
@@ -436,21 +525,30 @@ Browser Use Pi{% endblock %} {% block head %}
       '<div class="cc-head"><span>✓</span><span>' +
       esc(completionSummary || "Task completed") + "</span></div>";
     if (currentOutput) {
+      let parsed = null;
+      try { parsed = JSON.parse(currentOutput); } catch (e) {}
+      const body =
+        parsed !== null && typeof parsed === "object"
+          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
+          : "<pre>" + esc(currentOutput) + "</pre>";
       html +=
-        '<div class="cc-out"><button class="cc-copy" title="Copy output">Copy</button><pre>' +
-        esc(currentOutput) + "</pre></div>";
+        '<div class="cc-outhead"><span>Output</span>' +
+        '<button class="cc-copy" title="Copy output">Copy</button></div>' +
+        '<div class="cc-out">' + body + "</div>";
     }
     completionCard.innerHTML = html;
     const btn = completionCard.querySelector(".cc-copy");
-    if (btn) btn.onclick = function () { copyText(currentOutput).then(function () { flash(btn, "Copied"); }); };
+    if (btn)
+      btn.onclick = function () {
+        copyText(prettyOutput(currentOutput)).then(function () { flash(btn, "Copied"); });
+      };
   }
 
   function handleRows(html) {
     const tpl = document.createElement("template");
     tpl.innerHTML = (html || "").trim();
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
-      const typeEl = row.querySelector(".msg-type");
-      const type = (typeEl ? typeEl.className.replace("msg-type", "").trim() : "") || "info";
+      const type = row.dataset.type || "info";
       const sumEl = row.querySelector(".msg-summary");
       const summary = (sumEl ? sumEl.textContent : "").trim();
       if (type === "completion") {
@@ -459,19 +557,17 @@ Browser Use Pi{% endblock %} {% block head %}
         return;
       }
       feedRows.insertBefore(row.cloneNode(true), feedRows.firstChild);
-      if (STEP_TYPES.indexOf(type) !== -1) {
-        stepCount += 1;
-        const step = document.createElement("div");
-        step.className = "step-row " + type;
-        step.innerHTML =
-          '<span class="step-num">' + stepCount + '.</span><span class="step-text">' +
-          esc(summary) + "</span>";
-        stepsList.appendChild(step);
-      }
     });
-    stepsPanel.scrollTop = stepsPanel.scrollHeight;
     outputPanel.scrollTop = 0;
   }
+
+  feedRows.addEventListener("click", function (e) {
+    const sum = e.target.closest(".msg-summary");
+    if (sum) {
+      const row = sum.closest(".msg-row");
+      if (row) row.classList.toggle("expanded");
+    }
+  });
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
 
