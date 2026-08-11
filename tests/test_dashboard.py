@@ -28,6 +28,7 @@ async def setup(tmp_path, monkeypatch):
     monkeypatch.setattr("app.db.models.settings", test_settings)
     monkeypatch.setattr("app.auth.settings", test_settings)
     monkeypatch.setattr("app.dashboard.routes.settings", test_settings)
+    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
 
@@ -104,6 +105,25 @@ async def test_api_fails_closed_without_key(client, monkeypatch):
     monkeypatch.setattr("app.auth.settings", closed)
     resp = await client.post("/v3/sessions", json={"task": "x"})
     assert resp.status_code == 401
+
+
+async def test_profiles_page_shows_domains_not_user_id(client):
+    from app.profiles.importer import import_profile
+
+    await import_profile(
+        "pid-1",
+        {"cookies": [
+            {"name": "s", "value": "v", "domain": ".workatastartup.com"},
+            {"name": "t", "value": "v", "domain": ".ycombinator.com"},
+        ], "origins": []},
+        name="YC",
+    )
+    resp = await client.get("/profiles", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert "Cookie Domains" in resp.text
+    assert "<th>User ID</th>" not in resp.text
+    assert 'name="user_id"' not in resp.text
+    assert "2 domains" in resp.text
 
 
 async def test_profile_create_makes_row_and_file(client, tmp_path):

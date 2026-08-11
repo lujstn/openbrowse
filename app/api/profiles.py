@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import require_api_key
-from app.config import settings
 from app.db import crud
+from app.profiles import storage
+from app.profiles.importer import ProfileImportError, import_profile
 
 router = APIRouter(prefix="/v3/profiles", tags=["profiles"])
 
@@ -26,6 +26,11 @@ class ProfileCreateRequest(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     name: str | None = None
     userId: str | None = None
+
+
+class StorageStateBody(BaseModel):
+    cookies: list[dict[str, Any]] = []
+    origins: list[dict[str, Any]] = []
 
 
 class ProfileView(BaseModel):
@@ -47,16 +52,8 @@ class ProfileListResponse(BaseModel):
 
 def _to_view(row: dict[str, Any]) -> ProfileView:
     """Convert a DB row to the SDK-compatible ProfileView."""
-    cookie_domains: list[str] | None = None
-    if row.get("storage_state_path"):
-        state_file = settings.data_dir / row["storage_state_path"]
-        if state_file.exists():
-            try:
-                state = json.loads(state_file.read_text())
-                domains = {c.get("domain", "") for c in state.get("cookies", [])}
-                cookie_domains = sorted(d for d in domains if d)
-            except (json.JSONDecodeError, KeyError):
-                pass
+    state = storage.read_state_file(row.get("storage_state_path"))
+    cookie_domains = storage.cookie_domains(state) if state is not None else None
 
     return ProfileView(
         id=row["id"],
@@ -79,10 +76,7 @@ async def create_profile(
 ):
     body = body or ProfileCreateRequest()
     profile = await crud.create_profile(name=body.name, user_id=body.userId)
-    # Create empty storage state file
-    state_file = settings.data_dir / profile["storage_state_path"]
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"cookies": [], "origins": []}))
+    storage.write_profile_state(profile["id"], {"cookies": [], "origins": []}, backup=False)
     return _to_view(profile)
 
 
@@ -134,8 +128,20 @@ async def delete_profile(profile_id: str, _: str = Depends(require_api_key)):
     existing = await crud.get_profile(profile_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
-    # Delete storage state file
-    if existing.get("storage_state_path"):
-        state_file = settings.data_dir / existing["storage_state_path"]
-        state_file.unlink(missing_ok=True)
+    storage.profile_state_path(profile_id).unlink(missing_ok=True)
     await crud.delete_profile(profile_id)
+
+
+@router.put("/{profile_id}/storage-state", response_model=ProfileView)
+async def put_storage_state(
+    profile_id: str,
+    body: StorageStateBody,
+    _: str = Depends(require_api_key),
+):
+    """Import a cookie jar into a profile, creating the profile if it does not exist yet."""
+    try:
+        await import_profile(profile_id, body.model_dump(), backup=True)
+    except (ProfileImportError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    profile = await crud.get_profile(profile_id)
+    return _to_view(profile)

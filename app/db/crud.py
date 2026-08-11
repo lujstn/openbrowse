@@ -295,6 +295,43 @@ async def create_profile(
         await db.close()
 
 
+async def upsert_profile(
+    profile_id: str, *, name: str | None = None
+) -> dict[str, Any] | None:
+    """Create a profile with an explicit id, or update its name if it already exists.
+
+    Unlike create_profile (which mints a uuid), this keys on a caller-supplied id — used by
+    cookie import so a local profile matches its BU Cloud id. A None name never clears an
+    existing name.
+    """
+    profile_id = (profile_id or "").strip()
+    if not profile_id or ".." in profile_id or not _SAFE_PROFILE_ID.match(profile_id):
+        raise ValueError("profile id may only contain letters, digits, dot, dash and underscore")
+    now = _now()
+    storage_path = f"profiles/{profile_id}.json"
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT 1 FROM profiles WHERE id = ?", (profile_id,))
+        exists = await cursor.fetchone() is not None
+        if exists:
+            if name is not None:
+                await db.execute(
+                    "UPDATE profiles SET name = ?, updated_at = ? WHERE id = ?",
+                    (name, now, profile_id),
+                )
+                await db.commit()
+        else:
+            await db.execute(
+                """INSERT INTO profiles (id, name, user_id, storage_state_path, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (profile_id, name, None, storage_path, now, now),
+            )
+            await db.commit()
+        return await get_profile(profile_id, db=db)
+    finally:
+        await db.close()
+
+
 async def get_profile(
     profile_id: str, *, db: aiosqlite.Connection | None = None
 ) -> dict[str, Any] | None:

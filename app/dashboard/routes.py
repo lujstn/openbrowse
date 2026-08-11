@@ -19,6 +19,7 @@ from app.agent.pool import pool
 from app.auth import dashboard_auth_ok, require_dashboard_auth
 from app.config import settings
 from app.db import crud
+from app.profiles.storage import cookie_domains, read_state_file
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,8 @@ async def session_detail(request: Request, session_id: str):
 @router.get("/profiles", response_class=HTMLResponse)
 async def profiles_page(request: Request):
     profiles, total = await crud.list_profiles(page=1, page_size=50)
+    for p in profiles:
+        p["cookie_domains"] = cookie_domains(read_state_file(p.get("storage_state_path")))
     return templates.TemplateResponse(
         request,
         "profiles.html",
@@ -218,8 +221,8 @@ def _profile_state_file(storage_state_path: str):
 
 
 @router.post("/profiles/create")
-async def profiles_create(name: str = Form(""), user_id: str = Form("")):
-    profile = await crud.create_profile(name=(name or None), user_id=(user_id or None))
+async def profiles_create(name: str = Form("")):
+    profile = await crud.create_profile(name=(name or None))
     state_file = _profile_state_file(profile["storage_state_path"])
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({"cookies": [], "origins": []}))
@@ -230,10 +233,9 @@ async def profiles_create(name: str = Form(""), user_id: str = Form("")):
 async def profiles_edit(
     profile_id: str,
     name: str = Form(""),
-    user_id: str = Form(""),
     new_id: str = Form(""),
 ):
-    await crud.update_profile(profile_id, name=(name or None), user_id=(user_id or None))
+    await crud.update_profile(profile_id, name=(name or None))
     new_id = (new_id or "").strip()
     if new_id and new_id != profile_id:
         existing = await crud.get_profile(profile_id)

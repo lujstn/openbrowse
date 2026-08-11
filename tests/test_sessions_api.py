@@ -24,7 +24,7 @@ async def setup(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)
     monkeypatch.setattr("app.auth.settings", test_settings)
-    monkeypatch.setattr("app.api.profiles.settings", test_settings)
+    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
 

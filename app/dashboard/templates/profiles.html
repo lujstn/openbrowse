@@ -81,6 +81,15 @@
     font-size: 11px;
     margin-bottom: 16px;
   }
+  .domains {
+    color: #9ca3af;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .domains .muted {
+    color: #555;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Profiles <span class="badge">{{ total }}</span></h1>
@@ -90,16 +99,12 @@
     <label for="new-name">Name</label>
     <input id="new-name" name="name" placeholder="My profile" />
   </div>
-  <div class="field">
-    <label for="new-user">User ID</label>
-    <input id="new-user" name="user_id" placeholder="optional" />
-  </div>
   <button class="btn btn-primary" type="submit">Create profile</button>
 </form>
 
 <p class="hint">
-  Editing a UUID rewrites the profile's stored cookie file and repoints every
-  session that used it. Blank Name or User ID clears the value.
+  Editing an ID rewrites the profile's stored cookie file and repoints every
+  session that used it. A blank Name clears it.
 </p>
 
 {% for p in profiles %}
@@ -110,9 +115,9 @@
 <table>
   <thead>
     <tr>
-      <th>UUID</th>
+      <th>ID</th>
       <th>Name</th>
-      <th>User ID</th>
+      <th>Cookie Domains</th>
       <th>Last Used</th>
       <th>Created</th>
       <th></th>
@@ -137,13 +142,8 @@
           value="{{ p.name or '' }}"
         />
       </td>
-      <td>
-        <input
-          class="cell-input"
-          form="edit-{{ p.id }}"
-          name="user_id"
-          value="{{ p.user_id or '' }}"
-        />
+      <td class="domains" title="{{ p.cookie_domains | join(', ') }}">
+        {% if p.cookie_domains %}{{ p.cookie_domains | length }} domain{{ 's' if p.cookie_domains | length != 1 else '' }}{% else %}<span class="muted">empty</span>{% endif %}
       </td>
       <td>{{ format_relative(p.last_used_at) if p.last_used_at else '—' }}</td>
       <td>{{ format_relative(p.created_at) }}</td>

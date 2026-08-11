@@ -376,22 +376,17 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         if browser_session:
-            if storage_state_path:
-                try:
-                    async with _storage_lock(storage_state_path):
-                        await asyncio.shield(
-                            browser_session.export_storage_state(storage_state_path)
-                        )
-                except Exception:
-                    logger.warning(
-                        "Failed to persist storage state for session %s",
-                        session_id,
-                        exc_info=True,
-                    )
+            # @nonobvious(forced-by) stop() dispatches SaveStorageStateEvent (full cookies+localStorage, merged with the file on disk) while CDP is still live; export_storage_state here instead rewrites the file with origins:[] and wipes imported localStorage. Shielded + per-profile locked so a shutdown cancel can't truncate the save.
             try:
-                await browser_session.stop()
+                if storage_state_path:
+                    async with _storage_lock(storage_state_path):
+                        await asyncio.shield(browser_session.stop())
+                else:
+                    await asyncio.shield(browser_session.stop())
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to stop browser session %s", session_id, exc_info=True
+                )
         if slot:
             await stop_chrome(slot)
             await display_manager.release(slot.display_num)

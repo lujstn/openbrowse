@@ -281,11 +281,31 @@ curl https://llmpi.tail12345.ts.net/v3/profiles \
 
 ### Import cookies from cloud Browser Use
 
-If you have existing cookies in a cloud Browser Use profile, export the storage state as a JSON file in [Playwright storage state format](https://playwright.dev/docs/api/class-browsercontext#browser-context-storage-state) and copy it to the Pi:
+Cloud Browser Use profiles are cookie/localStorage jars. Export a profile's storage state as a JSON file in [Playwright storage state format](https://playwright.dev/docs/api/class-browsercontext#browser-context-storage-state), then import it so the local profile id matches the cloud id.
+
+**Recommended — the import CLI.** It creates the profile if it does not exist, normalises the cookies, and backs up any existing jar to `.import-bak`:
 
 ```bash
-scp cookies.json lucas@<pi-ip>:~/browser-use-raspberrypi/data/profiles/<profile-id>.json
+# on the Pi, from the repo root, under the venv
+.venv/bin/python -m scripts.import_profiles personal_profile.storage_state.json \
+  --profile-id 0bee43b4-d8c4-4741-8f1e-6576749a81b0 --name "Personal Profile"
 ```
+
+A bundle (a JSON list, or `{"profiles": [...]}`) carries an id per entry, so a single command imports many:
+
+```bash
+.venv/bin/python -m scripts.import_profiles bundle.json
+```
+
+**Or the API** (this is what the in-app importer calls):
+
+```bash
+curl -X PUT https://llmpi.tail12345.ts.net/v3/profiles/<profile-id>/storage-state \
+  -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
+  --data @personal_profile.storage_state.json
+```
+
+Verify: `GET /v3/profiles/<id>` (or the dashboard **Profiles** page) lists the imported `cookieDomains`. Then run a session with that `profileId`.
 
 The storage state file uses the format:
 
@@ -306,6 +326,8 @@ The storage state file uses the format:
   "origins": []
 }
 ```
+
+`origins` carries each origin's `localStorage` (and `sessionStorage`), which browser-use restores on load. Cookies acquired or refreshed during a session are persisted back to the same file when the session ends, with localStorage preserved. These files are live session credentials — treat them as secrets and never commit them (`data/` is git-ignored).
 
 ---
 
