@@ -64,6 +64,14 @@ def message_display(m: dict) -> dict:
     categorisation) as well as new ones."""
     t = m.get("type") or "info"
     summary = m.get("summary") or ""
+    if t == "event":
+        data = _safe_fromjson(m.get("data") or "")
+        return {
+            "category": data.get("category", "memory"),
+            "label": data.get("action", "note"),
+            "summary": summary,
+            "code": False,
+        }
     if t == "browser_action_error":
         return {"category": "error", "label": "error", "summary": summary, "code": False}
     if t == "planning":

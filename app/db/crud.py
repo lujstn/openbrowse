@@ -210,6 +210,7 @@ async def create_message(
     summary: str = "",
     screenshot_path: str | None = None,
     hidden: bool = False,
+    count_step: bool = True,
 ) -> dict[str, Any]:
     msg_id = _new_id()
     now = _now()
@@ -221,13 +222,13 @@ async def create_message(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (msg_id, session_id, role, data, msg_type, summary, screenshot_path, int(hidden), now),
         )
-        # Bump session step_count and last_step_summary atomically with the insert
-        await db.execute(
-            """UPDATE sessions
-               SET step_count = step_count + 1, last_step_summary = ?, updated_at = ?
-               WHERE id = ?""",
-            (summary, now, session_id),
-        )
+        if count_step:
+            await db.execute(
+                """UPDATE sessions
+                   SET step_count = step_count + 1, last_step_summary = ?, updated_at = ?
+                   WHERE id = ?""",
+                (summary, now, session_id),
+            )
         await db.commit()
         return {
             "id": msg_id,

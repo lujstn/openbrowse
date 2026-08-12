@@ -5,10 +5,11 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from browser_use import ActionResult, BrowserSession, Tools
-from browser_use.browser.events import NavigateToUrlEvent, SwitchTabEvent
+from browser_use.browser.events import CloseTabEvent, NavigateToUrlEvent, SwitchTabEvent
 from browser_use.filesystem.file_system import FileSystem
 
 from app.config import settings
@@ -20,6 +21,8 @@ CAPSOLVER_API = "https://api.capsolver.com"
 _MAX_INLINE_FETCH_CHARS = 3000
 _FETCH_PREVIEW_CHARS = 2000
 _SANDBOX_STDOUT_PREVIEW_CHARS = 2500
+_LIST_LINKS_MAX_INLINE_CHARS = 2500
+_LIST_LINKS_PREVIEW_CHARS = 2000
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -606,6 +609,31 @@ class TabManager:
         except Exception:
             return False
 
+    async def _track_loaded(self, n: int) -> list[int]:
+        """Mark queue index ``n`` as loaded and revert older loaded tabs beyond
+        ``MAX_LOADED`` to about:blank, keeping live tabs bounded to base +
+        MAX_LOADED. Returns the indices that were reverted.
+        """
+        if n in self._loaded:
+            self._loaded.remove(n)
+        self._loaded.append(n)
+
+        reverted: list[int] = []
+        while len(self._loaded) > self.MAX_LOADED:
+            old = self._loaded.pop(0)
+            if old == n:
+                self._loaded.append(old)
+                break
+            old_target = self._target_ids[old]
+            if await self._is_valid(old_target):
+                try:
+                    await self._switch(old_target)
+                    await self._navigate_current("about:blank")
+                    reverted.append(old)
+                except Exception:
+                    logger.debug("_track_loaded: failed to revert tab %s", old, exc_info=True)
+        return reverted
+
     async def open_tabs(self, urls: list[str]) -> str:
         if self._base_target_id is None:
             self._base_target_id = self._session.agent_focus_target_id
@@ -646,24 +674,7 @@ class TabManager:
         await self._navigate_current(url)
         await asyncio.sleep(1.0)
 
-        if n in self._loaded:
-            self._loaded.remove(n)
-        self._loaded.append(n)
-
-        reverted: list[int] = []
-        while len(self._loaded) > self.MAX_LOADED:
-            old = self._loaded.pop(0)
-            if old == n:
-                self._loaded.append(old)
-                break
-            old_target = self._target_ids[old]
-            if await self._is_valid(old_target):
-                try:
-                    await self._switch(old_target)
-                    await self._navigate_current("about:blank")
-                    reverted.append(old)
-                except Exception:
-                    logger.debug("goto_tab: failed to revert tab %s", old, exc_info=True)
+        reverted = await self._track_loaded(n)
 
         await self._switch(target_id)
         note = f"Loaded index {n} ({url}) and switched to it."
@@ -673,6 +684,65 @@ class TabManager:
                 "memory; goto_tab reopens them."
             )
         return note
+
+    async def open_in_new_tab(self, index: int) -> str:
+        node = await self._session.get_element_by_index(index)
+        if node is None:
+            return f"No element at index {index}."
+
+        href = (node.attributes or {}).get("href")
+        if not href:
+            return f"Element {index} has no href attribute."
+
+        current = await _eval_js(self._session, "window.location.href")
+        abs_url = urljoin(current or "", href)
+
+        if self._base_target_id is None:
+            self._base_target_id = self._session.agent_focus_target_id
+
+        before = {t.target_id for t in await self._session.get_tabs()}
+        event = self._session.event_bus.dispatch(
+            NavigateToUrlEvent(url=abs_url, new_tab=True)
+        )
+        await event
+        await event.event_result(raise_if_any=False, raise_if_none=False)
+        after = await self._session.get_tabs()
+        new = [t for t in after if t.target_id not in before]
+        target_id = new[0].target_id if new else None
+        if not target_id:
+            return f"Could not open a new tab for {abs_url}."
+
+        n = len(self._urls)
+        self._urls.append(abs_url)
+        self._target_ids.append(target_id)
+        reverted = await self._track_loaded(n)
+
+        await self._switch(target_id)
+        note = f"Opened {abs_url} in a new tab (index {n}) and switched to it."
+        if reverted:
+            note += (
+                f" Reverted older loaded tab(s) {reverted} to about:blank to free "
+                "memory; goto_tab reopens them."
+            )
+        return note
+
+    async def close_tab(self) -> str:
+        current = self._session.agent_focus_target_id
+        if self._base_target_id is None or current is None or current == self._base_target_id:
+            return "Already on the base tab; nothing to close."
+
+        await self._switch(self._base_target_id)
+        event = self._session.event_bus.dispatch(CloseTabEvent(target_id=current))
+        await event
+        await event.event_result(raise_if_any=False, raise_if_none=False)
+
+        if current in self._target_ids:
+            n = self._target_ids.index(current)
+            self._target_ids[n] = None
+            if n in self._loaded:
+                self._loaded.remove(n)
+
+        return "Closed the tab and returned to the base tab."
 
 
 def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
@@ -704,3 +774,158 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
             return ActionResult(extracted_content=note, long_term_memory=note)
         except Exception as e:
             return ActionResult(error=f"goto_tab failed: {type(e).__name__}: {e}")
+
+    @tools.action(
+        "Open the link at element index N in a new tab and switch to it — works "
+        "even for links inside embedded/cross-origin sections that find_elements "
+        "can't read. Use this to visit a listing's detail page."
+    )
+    async def open_in_new_tab(index: int) -> ActionResult:
+        try:
+            note = await tab_manager.open_in_new_tab(index)
+            return ActionResult(extracted_content=note, long_term_memory=note)
+        except Exception as e:
+            return ActionResult(error=f"open_in_new_tab failed: {type(e).__name__}: {e}")
+
+    @tools.action(
+        "Close the current tab and return to your base/start tab — use after "
+        "you've extracted what you need, before moving to the next."
+    )
+    async def close_tab() -> ActionResult:
+        try:
+            note = await tab_manager.close_tab()
+            return ActionResult(extracted_content=note, long_term_memory=note)
+        except Exception as e:
+            return ActionResult(error=f"close_tab failed: {type(e).__name__}: {e}")
+
+    @tools.action(
+        "List all links (index, text, href) on the current page, INCLUDING inside "
+        "embedded/cross-origin sections that find_elements cannot reach. Use this "
+        "to collect detail-page URLs."
+    )
+    async def list_links(
+        browser_session: BrowserSession, file_system: FileSystem
+    ) -> ActionResult:
+        try:
+            selector_map = await browser_session.get_selector_map()
+            current = await _eval_js(browser_session, "window.location.href") or ""
+
+            links: list[dict[str, Any]] = []
+            for index in sorted(selector_map):
+                node = selector_map[index]
+                if node.tag_name != "a":
+                    continue
+                href = (node.attributes or {}).get("href")
+                if not href:
+                    continue
+                links.append(
+                    {
+                        "index": index,
+                        "text": node.get_meaningful_text_for_llm()[:150],
+                        "href": urljoin(current, href),
+                    }
+                )
+        except Exception as e:
+            return ActionResult(error=f"list_links failed: {type(e).__name__}: {e}")
+
+        full_json = json.dumps(links, indent=2)
+        total = len(full_json)
+        if total <= _LIST_LINKS_MAX_INLINE_CHARS:
+            memory = f"Listed {len(links)} link(s) on the page."
+            return ActionResult(extracted_content=full_json, long_term_memory=memory)
+
+        saved: str | None = _normalise_fs_name("links.json", "json")
+        try:
+            await file_system.write_file(saved, full_json)
+        except Exception:
+            logger.warning(
+                "list_links: failed to save large link list to FileSystem", exc_info=True
+            )
+            saved = None
+
+        note = (
+            f"{len(links)} links found ({total} chars of JSON); only the first "
+            f"{_LIST_LINKS_PREVIEW_CHARS} chars are shown below. "
+            + (
+                f"Full list saved to '{saved}' — read the file for the rest."
+                if saved
+                else "Saving the full list failed; narrow your query instead of re-listing."
+            )
+        )
+        preview = full_json[:_LIST_LINKS_PREVIEW_CHARS]
+        return ActionResult(
+            extracted_content=f"{note}\n\n{preview}",
+            long_term_memory=f"Listed {len(links)} link(s) on the page -> {saved or 'preview only'}",
+        )
+
+
+def register_capped_read_overrides(tools: Tools) -> None:
+    """Overwrite the built-in ``find_elements``/``evaluate`` actions with wrappers
+    that cap their output so a full-page dump can't blow the agent's context.
+
+    Re-registers under the same name rather than using ``tools.exclude_action``
+    (which blocks re-registration outright) — the registry keys actions by
+    ``func.__name__`` (tools/registry/service.py), so registering a function of
+    the same name simply replaces the dict entry, last-wins.
+    """
+    registry_actions = tools.registry.registry.actions
+
+    async def _cap_readout(
+        result: ActionResult, file_system: FileSystem, readout_name: str
+    ) -> ActionResult:
+        content = result.extracted_content
+        if content and len(content) > _SANDBOX_STDOUT_PREVIEW_CHARS:
+            total = len(content)
+            try:
+                await file_system.write_file(readout_name, content)
+                tail = f"saved to '{readout_name}' — read specific parts instead of dumping"
+            except Exception:
+                logger.warning(
+                    "register_capped_read_overrides: failed to save readout to '%s'",
+                    readout_name,
+                    exc_info=True,
+                )
+                tail = "could not be saved; narrow your query instead of dumping"
+            result.extracted_content = (
+                content[:_SANDBOX_STDOUT_PREVIEW_CHARS]
+                + f"\n[truncated: {total} chars total, {tail}]"
+            )
+        return result
+
+    find_elements_entry = registry_actions.get("find_elements")
+    if find_elements_entry is not None:
+        original_find_elements = find_elements_entry.function
+
+        @tools.action(
+            find_elements_entry.description,
+            param_model=find_elements_entry.param_model,
+            domains=find_elements_entry.domains,
+            terminates_sequence=find_elements_entry.terminates_sequence,
+        )
+        async def find_elements(
+            params: Any,
+            browser_session: BrowserSession,
+            file_system: FileSystem,
+            _original: Any = original_find_elements,
+        ) -> ActionResult:
+            result = await _original(params=params, browser_session=browser_session)
+            return await _cap_readout(result, file_system, "readout_find_elements.txt")
+
+    evaluate_entry = registry_actions.get("evaluate")
+    if evaluate_entry is not None:
+        original_evaluate = evaluate_entry.function
+
+        @tools.action(
+            evaluate_entry.description,
+            param_model=evaluate_entry.param_model,
+            domains=evaluate_entry.domains,
+            terminates_sequence=evaluate_entry.terminates_sequence,
+        )
+        async def evaluate(
+            params: Any,
+            browser_session: BrowserSession,
+            file_system: FileSystem,
+            _original: Any = original_evaluate,
+        ) -> ActionResult:
+            result = await _original(params=params, browser_session=browser_session)
+            return await _cap_readout(result, file_system, "readout_evaluate.txt")

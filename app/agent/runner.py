@@ -21,6 +21,7 @@ from app.agent.schema import json_schema_to_pydantic
 from app.agent.tools import (
     TabManager,
     _eval_js,
+    register_capped_read_overrides,
     register_capsolver_tool,
     register_clipboard_tools,
     register_fetch_tool,
@@ -46,6 +47,18 @@ _PRIMARY_URL_EXTENSION = (
     "startUrl is saved for you to recall automatically. If you are primarily "
     "working from a different URL, you must save it: remember('primaryUrl', <url>). "
     "Ensure you keep the primaryUrl up-to-date."
+)
+
+_TABS_EXTENSION = (
+    "When several pages each look worth acting on, open them together as "
+    "background tabs and then work through them one at a time; close any that "
+    "turn out not to be useful. This is cheaper than fetching them one-by-one."
+)
+
+_DATA_STORAGE_EXTENSION = (
+    "Keep data blobs out of your reasoning: write large results like API "
+    "responses to a scratch file, read back only the parts you need; never "
+    "hold it in context."
 )
 
 
@@ -303,6 +316,18 @@ def _action_detail(actions: list) -> tuple[str, bool]:
         params = actions[0].model_dump(exclude_none=True).get(name)
     except Exception:
         params = None
+
+    if name == "remember" and isinstance(params, dict):
+        return (f"{params.get('key', '')} = {params.get('value', '')}"[:200], False)
+    if name == "open_tabs" and isinstance(params, dict):
+        return (f"{len(params.get('urls', []))} tabs", False)
+    if name == "goto_tab" and isinstance(params, dict):
+        return (str(params.get("n")), False)
+    if name == "open_in_new_tab" and isinstance(params, dict):
+        return (f"index {params.get('index')}", False)
+    if name == "close_tab":
+        return ("current tab", False)
+
     detail = ""
     if isinstance(params, dict):
         for pk in ("url", "selector", "query", "text", "code", "expression", "keys", "index", "seconds"):
@@ -437,6 +462,7 @@ async def run_agent_session(session_id: str) -> None:
         register_tab_tools(tools, tab_manager)
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
+        register_capped_read_overrides(tools)
 
         output_model: type | None = None
         if output_schema:
@@ -459,6 +485,7 @@ async def run_agent_session(session_id: str) -> None:
 
         # Step callback for real-time dashboard streaming
         step_count = 0
+        last_primary_url: str | None = None
         step_started_at: dict[str, Any] = {"t": None}
         reminder = PrimaryUrlReminder()
 
@@ -467,7 +494,7 @@ async def run_agent_session(session_id: str) -> None:
             set_activity(session_id, "Preparing next step")
 
         async def on_step_end(agent_instance: Agent) -> None:
-            nonlocal step_count
+            nonlocal step_count, last_primary_url
             step_count += 1
 
             current_url = None
@@ -481,6 +508,14 @@ async def run_agent_session(session_id: str) -> None:
                 and not str(current_url).startswith("about:")
             ):
                 clipboard["startUrl"] = current_url
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "memory", "action": "startUrl"}),
+                    summary=f"startUrl saved → {current_url}",
+                    count_step=False,
+                )
 
             steps = agent_instance.history.history
             if not steps:
@@ -499,6 +534,27 @@ async def run_agent_session(session_id: str) -> None:
                     agent_instance._message_manager.add_new_task(nudge)
                 except Exception:
                     logger.debug("primaryUrl reminder injection failed", exc_info=True)
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "memory", "action": "reminder"}),
+                    summary="Reminder: nudged to set/update primaryUrl",
+                    count_step=False,
+                )
+
+            cur_primary = clipboard.get("primaryUrl")
+            if cur_primary and cur_primary != last_primary_url:
+                verb = "updated" if last_primary_url else "saved"
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "memory", "action": "primaryUrl"}),
+                    summary=f"primaryUrl {verb} → {cur_primary}",
+                    count_step=False,
+                )
+                last_primary_url = cur_primary
 
             summary = ""
             is_code = False
@@ -545,7 +601,7 @@ async def run_agent_session(session_id: str) -> None:
                     }
                 ),
                 msg_type=msg_type,
-                summary=summary or f"Step {step_count}",
+                summary=summary or action_name or f"Step {step_count}",
             )
             llm._last_action = action_name
             set_activity(session_id, "Running actions")
@@ -584,6 +640,8 @@ async def run_agent_session(session_id: str) -> None:
                 system_prompt_extension,
                 _SCHEMA_COMPLETENESS_EXTENSION,
                 _PRIMARY_URL_EXTENSION,
+                _TABS_EXTENSION,
+                _DATA_STORAGE_EXTENSION,
             )
             if p
         ]
@@ -595,11 +653,25 @@ async def run_agent_session(session_id: str) -> None:
         history = await agent.run(on_step_start=on_step_start, on_step_end=on_step_end)
 
         # Extract results
-        output = history.final_result() or ""
+        file_output = ""
+        try:
+            result_file = agent.file_system.get_file("result.json") if agent.file_system else None
+            if result_file:
+                file_content = result_file.read()
+                if file_content and file_content.strip():
+                    file_output = file_content
+        except Exception:
+            logger.debug("result.json read from agent.file_system failed", exc_info=True)
+        done_output = history.final_result() or ""
+        output = done_output or file_output
 
         schema_valid = True
         if output_model is not None:
             output, schema_valid = await _coerce_to_schema(output, output_model, llm)
+            if not schema_valid and done_output and file_output and file_output != done_output:
+                alt, alt_valid = await _coerce_to_schema(file_output, output_model, llm)
+                if alt_valid:
+                    output, schema_valid = alt, alt_valid
         elif output_schema and output:
             try:
                 parsed = json.loads(output) if isinstance(output, str) else output
