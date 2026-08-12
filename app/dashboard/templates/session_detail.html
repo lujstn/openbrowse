@@ -410,6 +410,25 @@ Browser Use Pi{% endblock %} {% block head %}
     padding: 0 5px;
     border-radius: 4px;
   }
+  .msg-row { flex-wrap: wrap; }
+  .msg-row.has-cards .msg-caret { display: inline-block; }
+  .msg-cards {
+    flex-basis: 100%;
+    display: none;
+    margin: 6px 0 2px 0;
+    padding-left: 8px;
+    border-left: 2px solid #222;
+  }
+  .msg-row.expanded .msg-cards { display: block; }
+  .msg-cards .card { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; align-items: baseline; }
+  .msg-cards .card-ico { flex: 0 0 auto; font-size: 12px; }
+  .msg-cards .card-text { white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
+  .msg-cards .card-see .card-text { color: #c084fc; }
+  .msg-cards .card-plan .card-text { color: #fbbf24; }
+  .msg-cards .card-next .card-text { color: #93c5fd; }
+  .msg-cards .card-think .card-text { color: #71717a; font-style: italic; }
+  .feed-btn.stop { color: #f87171; border-color: #402020; }
+  .feed-btn.stop:hover { border-color: #f87171; }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
@@ -463,9 +482,13 @@ Browser Use Pi{% endblock %} {% block head %}
   <div class="panel">
     <div class="panel-head feed-head">
       <span>Live Feed</span>
-      <button id="copy-json" class="feed-btn" title="Copy the full step-by-step log as JSON">
-        {} Copy JSON
-      </button>
+      <span class="feed-btns" style="display: flex; gap: 6px">
+        <button id="pause-btn" class="feed-btn" title="Pause / resume the agent" style="display: none">⏸ Pause</button>
+        <button id="stop-btn" class="feed-btn stop" title="Stop the agent (saves partial output)" style="display: none">⏹ Stop</button>
+        <button id="copy-json" class="feed-btn" title="Copy the full step-by-step log as JSON">
+          {} Copy JSON
+        </button>
+      </span>
     </div>
     <div class="panel-body" id="output-panel">
       <div id="completion-card" class="completion-card hidden"></div>
@@ -704,6 +727,42 @@ Browser Use Pi{% endblock %} {% block head %}
     } catch (e) {}
   };
 
+  const stopBtn = document.getElementById("stop-btn");
+  const pauseBtn = document.getElementById("pause-btn");
+  let paused = false;
+
+  function syncControls() {
+    const live = !TERMINAL.includes(lastStatus);
+    stopBtn.style.display = live ? "inline-block" : "none";
+    pauseBtn.style.display = live ? "inline-block" : "none";
+    paused = !!(activityState && /paus/i.test(activityState.label || ""));
+    pauseBtn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  }
+
+  stopBtn.onclick = async function () {
+    const btn = this;
+    btn.disabled = true;
+    try {
+      await fetch("/session/" + SESSION_ID + "/stop", { method: "POST" });
+      flash(btn, "Stopping…");
+    } catch (e) {} finally {
+      btn.disabled = false;
+    }
+  };
+
+  pauseBtn.onclick = async function () {
+    const btn = this;
+    const action = paused ? "resume" : "pause";
+    btn.disabled = true;
+    try {
+      await fetch("/session/" + SESSION_ID + "/" + action, { method: "POST" });
+    } catch (e) {} finally {
+      btn.disabled = false;
+    }
+  };
+
+  syncControls();
+
   const es = new EventSource("/sse/session/" + SESSION_ID + "/messages");
   es.addEventListener("messages", function (e) {
     try { handleRows(e.data); } catch (err) {}
@@ -728,6 +787,7 @@ Browser Use Pi{% endblock %} {% block head %}
       lastStatus = data.status;
       activityState = data.activity || null;
       renderActivity();
+      syncControls();
       if (data.output && data.output !== currentOutput) {
         currentOutput = data.output;
         renderCompletion();

@@ -1,9 +1,11 @@
 """Custom browser-use tools — Capsolver CAPTCHA solving, Python sandbox, HTTP fetch."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
@@ -23,6 +25,7 @@ _MAX_INLINE_FETCH_CHARS = 3000
 _FETCH_PREVIEW_CHARS = 2000
 _SANDBOX_STDOUT_PREVIEW_CHARS = 2500
 _CAPPED_READ_PREVIEW_CHARS = 8000
+_GUARD_MIN_CHARS = 500
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -34,6 +37,18 @@ def _normalise_fs_name(name: str, default_ext: str = "json") -> str:
     if "." in base and base.rsplit(".", 1)[1].lower() in _FS_EXTENSIONS:
         return base
     return f"{base}.{default_ext}"
+
+
+def _normalise_py_name(name: str) -> str:
+    """Coerce a caller-supplied script name into a safe ``.py`` filename for the
+    scripts scratch dir (which is outside FileSystem's own extension whitelist).
+    """
+    base = ((name or "").strip() or "script").rsplit("/", 1)[-1]
+    base = re.sub(r"[^A-Za-z0-9_.-]", "_", base)
+    if base.lower().endswith(".py"):
+        return base
+    base = base[:-1] if base.endswith(".") else base
+    return f"{base or 'script'}.py"
 
 
 def _fs_name_from_url(url: str, content_type: str = "", body: str = "") -> str:
@@ -125,7 +140,7 @@ def register_fetch_tool(tools: Tools) -> None:
         "Make a single server-side HTTP request to an external JSON API or REST "
         "endpoint (no CORS). Large responses (>3000 chars) are saved to a file and "
         "only previewed here — read specific keys/slices via read_file or the "
-        "run_python sandbox (read_json) instead of re-fetching. For fetching page "
+        "code sandbox (read_json) instead of re-fetching. For fetching page "
         "HTML, embedded page data, or bulk/parallel fetches, prefer the code "
         "sandbox's fetch() helper instead."
     )
@@ -188,7 +203,7 @@ def register_fetch_tool(tools: Tools) -> None:
                     f"Body is {total} chars; only the first {_FETCH_PREVIEW_CHARS} are shown. "
                     + (
                         f"Full body saved to '{saved}' — read specific parts via read_file "
-                        "or the run_python sandbox (read_json) rather than re-fetching."
+                        "or the code sandbox (read_json) rather than re-fetching."
                         if saved
                         else "Saving the full body failed; narrow the request instead of re-fetching."
                     )
@@ -400,15 +415,57 @@ async def _inject_token(
         )
 
 
-def register_python_sandbox_tool(
-    tools: Tools, clipboard: dict[str, Any] | None = None
-) -> None:
-    """Register a stateful, browser-connected Python sandbox — the v3 cloud sandbox
-    capability. Code runs in-process against the live page with a namespace that
-    persists across calls, so the agent can read embedded page data
-    (``window.__NEXT_DATA__``, ``__appData``, JSON-LD) and bulk-fetch detail pages
-    the way the cloud does. Large data is kept out of the model context: it lives in
-    sandbox variables (which persist) or in FileSystem files via ``save_json``.
+async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult:
+    """Compile and run one script against the persistent sandbox namespace, capturing
+    stdout to a small preview. Shared by ``run_code_file`` — the only executor.
+    """
+    import ast
+    import contextlib
+    import io
+
+    try:
+        compiled = compile(code, "<script>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    except SyntaxError as e:
+        return ActionResult(error=f"Syntax error: {e}")
+
+    stdout = io.StringIO()
+
+    async def _run() -> None:
+        with contextlib.redirect_stdout(stdout):
+            coro = eval(compiled, namespace)
+            if coro is not None:
+                await coro
+
+    try:
+        await asyncio.wait_for(_run(), timeout=45.0)
+    except asyncio.TimeoutError:
+        return ActionResult(
+            error="Script timed out after 45 seconds. Keep it small; fetch with "
+            "bounded concurrency and save progress."
+        )
+    except Exception as e:
+        out = stdout.getvalue()
+        tail = f"\n--- stdout ---\n{out}" if out else ""
+        return ActionResult(error=f"{type(e).__name__}: {e}{tail}"[:10000])
+
+    out = stdout.getvalue()
+    total = len(out)
+    preview = out[:_SANDBOX_STDOUT_PREVIEW_CHARS]
+    if total > _SANDBOX_STDOUT_PREVIEW_CHARS:
+        preview += (
+            f"\n\n[stdout truncated: {total} chars total. Assign large results to a "
+            "variable (it persists across runs) or save_json(obj,'name.json') then "
+            "print only specific keys/slices; never print whole blobs.]"
+        )
+    return ActionResult(extracted_content=preview or "(no output)")
+
+
+def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -> None:
+    """Register the browser-connected code sandbox as a write-then-run pair — the v3
+    cloud sandbox capability, but code can never execute directly. ``write_code_file``
+    only persists a reusable script; ``run_code_file`` loads a saved script and runs
+    it in-process against the live page, with a namespace that persists across runs so
+    variables and imports carry over.
 
     @nonobvious(forced-by): in-process ``exec`` (not a subprocess) is required so the
     code can reach the live BrowserSession/CDP; acceptable on this single-tenant,
@@ -418,33 +475,73 @@ def register_python_sandbox_tool(
     if clipboard is None:
         clipboard = {}
 
+    def _scripts_dir(file_system: FileSystem) -> Path:
+        d = file_system.get_dir().parent / "scripts"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     @tools.action(
-        "Execute Python in a persistent, browser-connected sandbox. Variables persist "
-        "across calls (assign large results to a variable instead of re-fetching); use "
-        "top-level await. Helpers: browser.evaluate(js), browser.get_html(selector=None), "
-        "browser.navigate(url); fetch(url, method='GET', headers=None, body=None) returning "
-        "an object with .status_code/.text/.json() for server-side HTTP (no CORS); "
-        "await save_json(obj, name) / await read_json(name) to persist/read JSON as "
-        "FileSystem files the native read_file also sees; remember(key, value)/recall(key) "
-        "for the shared clipboard. Plus asyncio, json, re and the standard library. STDOUT "
-        "is truncated to a small preview — never print whole blobs; save them and print "
-        "only specific keys/slices."
+        "Write a reusable Python script to a file (code is NEVER run here — save it, "
+        "then execute with run_code_file). Write it to work on EVERY similar/templated "
+        "page: read the current page or its embedded data (window.__NEXT_DATA__, inline "
+        "JSON, JSON-LD) and extract into a structure; parameterise anything page-"
+        "specific. Inside a script you have: browser.evaluate(js) / browser.get_html("
+        "selector=None) / browser.navigate(url); fetch(url, method='GET', headers=None, "
+        "body=None) -> .status_code/.text/.json() (server-side, no CORS); await "
+        "save_json(obj, name) / await read_json(name); remember(key, value) / "
+        "recall(key); plus asyncio, json, re. Variables persist across run_code_file "
+        "calls, so assign large results to a variable instead of re-fetching."
     )
-    async def run_python(
-        code: str, browser_session: BrowserSession, file_system: FileSystem
+    async def write_code_file(
+        name: str, code: str, file_system: FileSystem
     ) -> ActionResult:
-        import ast
-        import contextlib
-        import io
+        fname = _normalise_py_name(name)
+        try:
+            (_scripts_dir(file_system) / fname).write_text(code)
+        except Exception as e:
+            return ActionResult(error=f"write_code_file failed: {type(e).__name__}: {e}")
+        note = (
+            f"Saved script '{fname}'. Run it with run_code_file('{fname}', url=<page>). "
+            "Reuse this same script on every similar page rather than writing new code."
+        )
+        return ActionResult(extracted_content=note, long_term_memory=f"wrote script {fname}")
+
+    @tools.action(
+        "Run a script previously saved with write_code_file, optionally navigating to "
+        "url first, then executing it against the current page. Reuse the SAME script "
+        "across every similar/templated page. STDOUT is truncated to a small preview — "
+        "save large results with save_json and print only specific keys/slices."
+    )
+    async def run_code_file(
+        name: str,
+        browser_session: BrowserSession,
+        file_system: FileSystem,
+        url: str | None = None,
+    ) -> ActionResult:
+        fname = _normalise_py_name(name)
+        path = _scripts_dir(file_system) / fname
+        if not path.exists():
+            return ActionResult(
+                error=f"No script named '{fname}'. Write it first with write_code_file."
+            )
+        code = path.read_text()
+
+        if url:
+            try:
+                await _SandboxBrowser(browser_session).navigate(url)
+            except Exception as e:
+                return ActionResult(
+                    error=f"navigate to {url} failed: {type(e).__name__}: {e}"
+                )
 
         async def _save_json(obj: Any, name: str = "output.json") -> str:
-            fname = _normalise_fs_name(name, "json")
-            await file_system.write_file(fname, json.dumps(obj, indent=2, default=str))
-            return fname
+            fn = _normalise_fs_name(name, "json")
+            await file_system.write_file(fn, json.dumps(obj, indent=2, default=str))
+            return fn
 
         async def _read_json(name: str) -> Any:
-            fname = _normalise_fs_name(name, "json")
-            file_obj = file_system.get_file(fname) or file_system.get_file(name)
+            fn = _normalise_fs_name(name, "json")
+            file_obj = file_system.get_file(fn) or file_system.get_file(name)
             if file_obj is None:
                 raise FileNotFoundError(f"No saved file named {name!r}")
             return json.loads(file_obj.read())
@@ -484,44 +581,7 @@ def register_python_sandbox_tool(
                 "re": re,
             }
         )
-
-        try:
-            compiled = compile(
-                code, "<sandbox>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
-            )
-        except SyntaxError as e:
-            return ActionResult(error=f"Syntax error: {e}")
-
-        stdout = io.StringIO()
-
-        async def _run() -> None:
-            with contextlib.redirect_stdout(stdout):
-                coro = eval(compiled, namespace)
-                if coro is not None:
-                    await coro
-
-        try:
-            await asyncio.wait_for(_run(), timeout=45.0)
-        except asyncio.TimeoutError:
-            return ActionResult(
-                error="Python execution timed out after 45 seconds. Keep cells small; "
-                "fetch with bounded concurrency and save progress."
-            )
-        except Exception as e:
-            out = stdout.getvalue()
-            tail = f"\n--- stdout ---\n{out}" if out else ""
-            return ActionResult(error=f"{type(e).__name__}: {e}{tail}"[:10000])
-
-        out = stdout.getvalue()
-        total = len(out)
-        preview = out[:_SANDBOX_STDOUT_PREVIEW_CHARS]
-        if total > _SANDBOX_STDOUT_PREVIEW_CHARS:
-            preview += (
-                f"\n\n[stdout truncated: {total} chars total. Assign large results to a "
-                "variable (it persists across cells) or save_json(obj,'name.json') then "
-                "print only specific keys/slices; never print whole blobs.]"
-            )
-        return ActionResult(extracted_content=preview or "(no output)")
+        return await _exec_in_sandbox(code, namespace)
 
 
 def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
@@ -533,7 +593,7 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
     @tools.action(
         "Save a value to the session clipboard under a key so you can return to it "
         "later (e.g. a listings URL, an id, a running count). Persists across steps "
-        "and is shared with the run_python sandbox (remember/recall)."
+        "and is shared with the code sandbox (remember/recall)."
     )
     async def remember(key: str, value: str) -> ActionResult:
         clipboard[str(key)] = value
@@ -799,110 +859,189 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
             return ActionResult(error=f"close_tab failed: {type(e).__name__}: {e}")
 
     @tools.action(
-        "List every link (index, text, href) on the current page, INCLUDING those "
-        "inside embedded/cross-origin panels that find_elements cannot reach. Returns "
-        "the full list inline — the hrefs are the payload, so trust them and follow "
-        "one with open_in_new_tab(index) rather than hunting for another route."
+        "Collect links (index, text, href) from the current page using a selector "
+        "(one or more REQUIRED): href_contains / href_regex match the URL; "
+        "frame_url_contains returns only links inside an embedded panel/iframe whose "
+        "URL matches (e.g. 'ashby'); container_index returns only links inside that "
+        "element (usually an embed's own index); attr returns links carrying a shared "
+        "attribute, e.g. {\"class\": \"posting\"}. Multiple selectors narrow together. "
+        "This is the ONLY tool that can read links inside embedded/cross-origin panels "
+        "— feed the hrefs straight to open_tabs([...]) or open_in_new_tab(index)."
     )
-    async def list_links(browser_session: BrowserSession) -> ActionResult:
+    async def find_links(
+        browser_session: BrowserSession,
+        href_contains: str | None = None,
+        href_regex: str | None = None,
+        frame_url_contains: str | None = None,
+        container_index: int | None = None,
+        attr: dict[str, str] | None = None,
+        visible_only: bool = True,
+    ) -> ActionResult:
+        if not (
+            href_contains
+            or href_regex
+            or frame_url_contains
+            or container_index is not None
+            or attr
+        ):
+            return ActionResult(
+                error="find_links needs at least one selector: href_contains, "
+                "href_regex, frame_url_contains, container_index, or attr."
+            )
         try:
             selector_map = await browser_session.get_selector_map()
             current = await _eval_js(browser_session, "window.location.href") or ""
 
+            frame_target_ids: set[Any] | None = None
+            if frame_url_contains:
+                needle = frame_url_contains.lower()
+                frame_target_ids = set()
+                for node in selector_map.values():
+                    if node.tag_name != "iframe":
+                        continue
+                    cd = getattr(node, "content_document", None)
+                    src = (node.attributes or {}).get("src", "") or ""
+                    if cd is not None and needle in src.lower():
+                        frame_target_ids.add(cd.target_id)
+
+            container_target_id = None
+            container_ident: tuple | None = None
+            if container_index is not None:
+                container = await browser_session.get_element_by_index(container_index)
+                if container is None:
+                    return ActionResult(error=f"No element at index {container_index}.")
+                cd = getattr(container, "content_document", None)
+                if container.tag_name == "iframe" and cd is not None:
+                    container_target_id = cd.target_id
+                else:
+                    container_ident = (container.session_id, container.backend_node_id)
+
+            pattern = re.compile(href_regex) if href_regex else None
+
+            def _in_container(node: Any) -> bool:
+                if container_target_id is not None:
+                    return node.target_id == container_target_id
+                cur, seen = node, 0
+                while cur is not None and seen < 300:
+                    if (cur.session_id, cur.backend_node_id) == container_ident:
+                        return True
+                    cur = cur.parent_node
+                    seen += 1
+                return False
+
             links: list[dict[str, Any]] = []
+            seen_href: set[str] = set()
             for index in sorted(selector_map):
                 node = selector_map[index]
                 if node.tag_name != "a":
                     continue
+                if visible_only and not node.is_visible:
+                    continue
                 href = (node.attributes or {}).get("href")
                 if not href:
                     continue
+                abs_href = urljoin(current, href)
+                if href_contains and href_contains.lower() not in abs_href.lower():
+                    continue
+                if pattern and not pattern.search(abs_href):
+                    continue
+                if frame_target_ids is not None and node.target_id not in frame_target_ids:
+                    continue
+                if container_index is not None and not _in_container(node):
+                    continue
+                if attr and not all(
+                    k in (node.attributes or {})
+                    and str(v).lower() in str((node.attributes or {}).get(k, "")).lower()
+                    for k, v in attr.items()
+                ):
+                    continue
+                if abs_href in seen_href:
+                    continue
+                seen_href.add(abs_href)
                 links.append(
                     {
                         "index": index,
                         "text": node.get_meaningful_text_for_llm()[:150],
-                        "href": urljoin(current, href),
+                        "href": abs_href,
                     }
                 )
         except Exception as e:
-            return ActionResult(error=f"list_links failed: {type(e).__name__}: {e}")
+            return ActionResult(error=f"find_links failed: {type(e).__name__}: {e}")
 
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
-            long_term_memory=f"Listed {len(links)} link(s) on the page.",
+            long_term_memory=f"find_links -> {len(links)} link(s).",
         )
 
 
-def register_capped_read_overrides(tools: Tools) -> None:
-    """Overwrite the built-in ``find_elements``/``evaluate`` actions with wrappers
-    that cap their output so a full-page dump can't blow the agent's context.
+_GUARDED_ACTIONS = (
+    "find_elements",
+    "evaluate",
+    "find_links",
+    "http_fetch",
+    "run_code_file",
+)
 
-    Re-registers under the same name rather than using ``tools.exclude_action``
-    (which blocks re-registration outright) — the registry keys actions by
-    ``func.__name__`` (tools/registry/service.py), so registering a function of
-    the same name simply replaces the dict entry, last-wins.
+
+def register_output_guard_overrides(tools: Tools) -> None:
+    """Stop a run's context ballooning: cap genuinely huge single outputs, and replace
+    any large chunk already seen this session with a short back-reference. Rewrites
+    BOTH ``extracted_content`` and ``long_term_memory`` (browser-use folds
+    ``long_term_memory`` into permanent context first, so capping only the former
+    silently misses a whole size band).
+
+    Swaps each action's normalised function in place — the registry executes
+    ``entry.function`` at call time, and every function is normalised to accept
+    ``(params, **special_context)``, so one uniform wrapper covers all of them with no
+    re-registration or per-action signature. Must run AFTER every other ``register_*``
+    so it wraps the final version of each action.
     """
     registry_actions = tools.registry.registry.actions
+    seen: dict[str, int] = {}
+    counter = {"n": 0}
 
-    async def _cap_readout(
-        result: ActionResult, file_system: FileSystem, readout_name: str
-    ) -> ActionResult:
-        content = result.extracted_content
-        if content and len(content) > _CAPPED_READ_PREVIEW_CHARS:
-            total = len(content)
-            try:
-                await file_system.write_file(readout_name, content)
-                tail = f"saved to '{readout_name}' — read specific parts instead of dumping"
-            except Exception:
-                logger.warning(
-                    "register_capped_read_overrides: failed to save readout to '%s'",
-                    readout_name,
-                    exc_info=True,
+    async def _guard(result: ActionResult, file_system: Any, readout_name: str) -> ActionResult:
+        for attr in ("extracted_content", "long_term_memory"):
+            text = getattr(result, attr, None)
+            if not text or len(text) <= _GUARD_MIN_CHARS:
+                continue
+            key = hashlib.sha1(" ".join(text.split()).encode()).hexdigest()
+            if key in seen:
+                setattr(result, attr, f"[identical to earlier output #{seen[key]} — not repeated]")
+                continue
+            counter["n"] += 1
+            seen[key] = counter["n"]
+            if len(text) > _CAPPED_READ_PREVIEW_CHARS:
+                total = len(text)
+                tail = "narrow your query instead of dumping"
+                if file_system is not None and readout_name:
+                    try:
+                        await file_system.write_file(readout_name, text)
+                        tail = f"saved to '{readout_name}' — read specific parts instead"
+                    except Exception:
+                        logger.warning("output guard: failed to save readout", exc_info=True)
+                setattr(
+                    result,
+                    attr,
+                    text[:_CAPPED_READ_PREVIEW_CHARS]
+                    + f"\n[truncated: {total} chars total, {tail}] (output #{seen[key]})",
                 )
-                tail = "could not be saved; narrow your query instead of dumping"
-            result.extracted_content = (
-                content[:_CAPPED_READ_PREVIEW_CHARS]
-                + f"\n[truncated: {total} chars total, {tail}]"
-            )
         return result
 
-    find_elements_entry = registry_actions.get("find_elements")
-    if find_elements_entry is not None:
-        original_find_elements = find_elements_entry.function
+    for name in _GUARDED_ACTIONS:
+        entry = registry_actions.get(name)
+        if entry is None:
+            continue
+        original = entry.function
+        readout = f"readout_{name}.txt"
 
-        @tools.action(
-            find_elements_entry.description,
-            param_model=find_elements_entry.param_model,
-            domains=find_elements_entry.domains,
-            terminates_sequence=find_elements_entry.terminates_sequence,
-        )
-        async def find_elements(
-            params: Any,
-            browser_session: BrowserSession,
-            file_system: FileSystem,
-            _original: Any = original_find_elements,
-        ) -> ActionResult:
-            result = await _original(params=params, browser_session=browser_session)
-            return await _cap_readout(result, file_system, "readout_find_elements.txt")
+        async def wrapped(params: Any = None, _original: Any = original, _readout: str = readout, **kwargs: Any) -> Any:
+            result = await _original(params=params, **kwargs)
+            if isinstance(result, ActionResult):
+                return await _guard(result, kwargs.get("file_system"), _readout)
+            return result
 
-    evaluate_entry = registry_actions.get("evaluate")
-    if evaluate_entry is not None:
-        original_evaluate = evaluate_entry.function
-
-        @tools.action(
-            evaluate_entry.description,
-            param_model=evaluate_entry.param_model,
-            domains=evaluate_entry.domains,
-            terminates_sequence=evaluate_entry.terminates_sequence,
-        )
-        async def evaluate(
-            params: Any,
-            browser_session: BrowserSession,
-            file_system: FileSystem,
-            _original: Any = original_evaluate,
-        ) -> ActionResult:
-            result = await _original(params=params, browser_session=browser_session)
-            return await _cap_readout(result, file_system, "readout_evaluate.txt")
+        entry.function = wrapped
 
 
 def _describe_item_fields(store: OutputStore) -> str:

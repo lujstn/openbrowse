@@ -33,12 +33,25 @@ def test_register_capsolver_without_key() -> None:
         assert "solve_captcha" not in tools.registry.registry.actions
 
 
-def test_register_python_sandbox() -> None:
+def test_register_code_tools() -> None:
     tools = Tools()
-    from app.agent.tools import register_python_sandbox_tool
+    from app.agent.tools import register_code_tools
 
-    register_python_sandbox_tool(tools)
-    assert "run_python" in tools.registry.registry.actions
+    register_code_tools(tools)
+    actions = tools.registry.registry.actions
+    assert "write_code_file" in actions
+    assert "run_code_file" in actions
+    assert "run_python" not in actions
+
+
+def test_normalise_py_name() -> None:
+    from app.agent.tools import _normalise_py_name
+
+    assert _normalise_py_name("extract") == "extract.py"
+    assert _normalise_py_name("extract.py") == "extract.py"
+    assert _normalise_py_name("a/b/scrape") == "scrape.py"
+    assert _normalise_py_name("weird name!.txt") == "weird_name_.txt.py"
+    assert _normalise_py_name("") == "script.py"
 
 
 def test_parse_capsolver_cost() -> None:

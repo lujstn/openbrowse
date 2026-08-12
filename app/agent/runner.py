@@ -22,13 +22,13 @@ from app.agent.schema import json_schema_to_pydantic
 from app.agent.tools import (
     TabManager,
     _eval_js,
-    register_capped_read_overrides,
     register_capsolver_tool,
     register_clipboard_tools,
+    register_code_tools,
     register_completeness_gate,
     register_fetch_tool,
+    register_output_guard_overrides,
     register_output_store_tools,
-    register_python_sandbox_tool,
     register_tab_tools,
 )
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
@@ -40,16 +40,42 @@ logger = logging.getLogger(__name__)
 
 ONE_M_BETA = "context-1m-2025-08-07"
 
+_live_agents: dict[str, Any] = {}
+
+
+def get_live_agent(session_id: str) -> Any | None:
+    """The running browser-use ``Agent`` for a session, or None. Lets the dashboard
+    call the agent's native cooperative ``stop()``/``pause()``/``resume()``.
+    """
+    return _live_agents.get(session_id)
+
+_CARDS_EXTENSION = (
+    "Every step, before you act, fill three one-sentence fields: what_i_see (what is "
+    "actually on the page now), plan_to_goal (how you get from here to the goal), and "
+    "next_move (your next single move). Then emit the action."
+)
+
 _DRILL_IN_EXTENSION = (
     "Listing and results pages are a table of contents, not the content. Never "
     "record an item from its snippet; open its own page and read it first."
 )
 
 _TOOLS_EASIEST_EXTENSION = (
-    "Browsing here is easiest with your own tools: list_links() sees every link on "
-    "the page, including those inside embedded panels that ordinary element search "
-    "cannot reach, open_in_new_tab(index) follows one, and close_tab brings you "
-    "back. Reach for these before you wrestle the DOM."
+    "Browsing here is easiest with your own tools: find_links(...) collects links "
+    "using a selector (href_contains, href_regex, frame_url_contains, container_index, "
+    "or attr) and is the ONLY way to read links inside an embedded/cross-origin panel "
+    "— find_elements and evaluate see only the main page and cannot read anything "
+    "inside an embed. open_tabs([...]) opens many links at once, open_in_new_tab(index) "
+    "follows one, and close_tab brings you back. Reach for these before you wrestle "
+    "the DOM."
+)
+
+_CODE_REUSE_EXTENSION = (
+    "Any code you write is a reusable script: parameterise it so it works on every "
+    "similar/templated page, save it once with write_code_file, then run_code_file("
+    "name, url=…) against each page. Never write one-off code per page, and never "
+    "call a site's backend/JSON API from a script — read the rendered page or its "
+    "embedded data instead."
 )
 
 _CLIPBOARD_EXTENSION = (
@@ -346,6 +372,18 @@ def _action_detail(actions: list) -> tuple[str, bool]:
         return (f"index {params.get('index')}", False)
     if name == "close_tab":
         return ("current tab", False)
+    if name == "find_links" and isinstance(params, dict):
+        for pk in ("href_contains", "href_regex", "frame_url_contains", "container_index", "attr"):
+            v = params.get(pk)
+            if v not in (None, ""):
+                return (f"{pk}={v}"[:200], False)
+        return ("", False)
+    if name == "write_code_file" and isinstance(params, dict):
+        return (str(params.get("name", ""))[:200], False)
+    if name == "run_code_file" and isinstance(params, dict):
+        url = params.get("url")
+        base = str(params.get("name", ""))
+        return ((f"{base} @ {url}" if url else base)[:200], False)
 
     detail = ""
     if isinstance(params, dict):
@@ -375,11 +413,13 @@ def _primary_action_name(actions: list) -> str | None:
 
 def _category_for(action_name: str | None) -> str:
     n = (action_name or "").lower()
+    if any(k in n for k in ("add_item", "update_item", "set_field", "read_output", "search_output")):
+        return "schema"
     if any(k in n for k in ("navigate", "go_to", "go_back", "search", "switch")):
         return "navigation"
     if any(k in n for k in ("click", "input", "scroll", "send_keys", "select", "dropdown", "upload", "type")):
         return "interaction"
-    if any(k in n for k in ("evaluate", "python", "execute_js")):
+    if any(k in n for k in ("evaluate", "python", "execute_js", "code_file")):
         return "code"
     if "fetch" in n:
         return "network"
@@ -410,6 +450,78 @@ async def _derive_north_star(llm: Any, task: str) -> str:
         logger.debug("North Star pre-flight failed", exc_info=True)
     first = re.split(r"(?<=[.!?])\s", (task or "").strip(), maxsplit=1)[0]
     return first.strip()[:400] or (task or "").strip()[:400]
+
+
+_CARD_FIELDS = ("what_i_see", "plan_to_goal", "next_move")
+_CARD_ORDER = (
+    "thinking", "what_i_see", "plan_to_goal", "next_move",
+    "evaluation_previous_goal", "memory", "next_goal",
+    "current_plan_item", "plan_update", "action",
+)
+_cards_patched = False
+
+
+def _patch_agent_output_cards() -> None:
+    """Add three purpose-built one-sentence fields (what_i_see / plan_to_goal /
+    next_move) to browser-use's per-step AgentOutput by wrapping the factory
+    staticmethods it rebuilds the model from every step (``_update_action_models_for_page``).
+    Fields are required in the emitted schema (so the model fills them) but optional on
+    the model (so an omission never fails validation). Guarded + best-effort: on any
+    incompatibility we log and fall back to browser-use's built-in fields.
+    """
+    global _cards_patched
+    if _cards_patched:
+        return
+    try:
+        from browser_use.agent.views import AgentOutput
+        from pydantic import Field
+
+        def _wrap(orig):
+            def factory(custom_actions):
+                base = orig(custom_actions)
+
+                class CardedAgentOutput(base):  # type: ignore[misc, valid-type]
+                    what_i_see: str | None = Field(
+                        None, description="One sentence: what you can see on the page right now."
+                    )
+                    plan_to_goal: str | None = Field(
+                        None, description="One sentence: how you get from here to the goal."
+                    )
+                    next_move: str | None = Field(
+                        None, description="One sentence: your next single move."
+                    )
+
+                    @classmethod
+                    def model_json_schema(cls, **kwargs):
+                        schema = super().model_json_schema(**kwargs)
+                        props = schema.get("properties", {})
+                        ordered = {k: props[k] for k in _CARD_ORDER if k in props}
+                        for k, v in props.items():
+                            ordered.setdefault(k, v)
+                        schema["properties"] = ordered
+                        req = set(schema.get("required", [])) | set(_CARD_FIELDS)
+                        schema["required"] = [k for k in _CARD_ORDER if k in req]
+                        return schema
+
+                CardedAgentOutput.__name__ = "AgentOutput"
+                return CardedAgentOutput
+
+            return factory
+
+        AgentOutput.type_with_custom_actions = staticmethod(
+            _wrap(AgentOutput.type_with_custom_actions)
+        )
+        AgentOutput.type_with_custom_actions_no_thinking = staticmethod(
+            _wrap(AgentOutput.type_with_custom_actions_no_thinking)
+        )
+        _cards_patched = True
+    except Exception:
+        logger.warning(
+            "AgentOutput card patch failed; falling back to built-in fields", exc_info=True
+        )
+
+
+_patch_agent_output_cards()
 
 
 async def run_agent_session(session_id: str) -> None:
@@ -506,12 +618,11 @@ async def run_agent_session(session_id: str) -> None:
         tab_manager = TabManager(browser_session)
         tools = Tools()
         register_fetch_tool(tools)
-        register_python_sandbox_tool(tools, clipboard)
+        register_code_tools(tools, clipboard)
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager)
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
-        register_capped_read_overrides(tools)
 
         output_model: type | None = None
         if output_schema:
@@ -539,6 +650,8 @@ async def run_agent_session(session_id: str) -> None:
                 )
 
             register_completeness_gate(tools, store, _on_incomplete_done)
+
+        register_output_guard_overrides(tools)
 
         north_star = ""
         if north_star_task is not None:
@@ -640,11 +753,15 @@ async def run_agent_session(session_id: str) -> None:
             msg_type = "browser_action"
 
             if step.model_output:
-                brain = getattr(step.model_output, "current_state", None)
-                if brain and getattr(brain, "next_goal", None):
-                    summary = brain.next_goal
-                elif step.model_output.action:
-                    summary, is_code = _action_detail(step.model_output.action)
+                mo = step.model_output
+                if getattr(mo, "next_move", None):
+                    summary = mo.next_move
+                else:
+                    brain = getattr(mo, "current_state", None)
+                    if brain and getattr(brain, "next_goal", None):
+                        summary = brain.next_goal
+                    elif mo.action:
+                        summary, is_code = _action_detail(mo.action)
 
             if step.result:
                 for result in step.result:
@@ -667,18 +784,27 @@ async def run_agent_session(session_id: str) -> None:
                 if started
                 else None
             )
+            row_data: dict[str, Any] = {
+                "step": step_count,
+                "duration_s": duration_s,
+                "category": category,
+                "action": action_name,
+                "code": is_code,
+            }
+            if step.model_output is not None:
+                for key, src in (
+                    ("see", "what_i_see"),
+                    ("plan", "plan_to_goal"),
+                    ("next", "next_move"),
+                    ("thinking", "thinking"),
+                ):
+                    val = getattr(step.model_output, src, None)
+                    if val:
+                        row_data[key] = str(val)[:1500]
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
-                data=json.dumps(
-                    {
-                        "step": step_count,
-                        "duration_s": duration_s,
-                        "category": category,
-                        "action": action_name,
-                        "code": is_code,
-                    }
-                ),
+                data=json.dumps(row_data),
                 msg_type=msg_type,
                 summary=summary or action_name or f"Step {step_count}",
             )
@@ -713,9 +839,11 @@ async def run_agent_session(session_id: str) -> None:
         }
         extension_parts = [
             system_prompt_extension,
+            _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
             _CLIPBOARD_EXTENSION,
+            _CODE_REUSE_EXTENSION,
         ]
         if store is not None:
             extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
@@ -725,6 +853,7 @@ async def run_agent_session(session_id: str) -> None:
             agent_kwargs["sensitive_data"] = sensitive_data
 
         agent = Agent(**agent_kwargs)
+        _live_agents[session_id] = agent
         if store is not None and agent.file_system is not None:
             try:
                 await agent.file_system.write_file("output.json", store.read_output())
@@ -826,6 +955,7 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         clear_activity(session_id)
+        _live_agents.pop(session_id, None)
         if north_star_task is not None and not north_star_task.done():
             north_star_task.cancel()
         if browser_session:
