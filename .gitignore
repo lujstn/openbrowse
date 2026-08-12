@@ -30,3 +30,4 @@ data/*
 Thumbs.db
 .worktrees/
 .claude
+.playwright-mcp/
