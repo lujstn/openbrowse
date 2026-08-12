@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import traceback
 from datetime import datetime, timezone
 from typing import Any
@@ -16,7 +17,7 @@ from browser_use.llm.exceptions import ModelOutputTruncatedError
 from app.agent import cost
 from app.agent.activity import clear_activity, set_activity
 from app.agent.leak_repair import is_missing_action_error, repair_anthropic_message
-from app.agent.reminder import PrimaryUrlReminder, links_opened
+from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
 from app.agent.tools import (
     TabManager,
@@ -24,7 +25,9 @@ from app.agent.tools import (
     register_capped_read_overrides,
     register_capsolver_tool,
     register_clipboard_tools,
+    register_completeness_gate,
     register_fetch_tool,
+    register_output_store_tools,
     register_python_sandbox_tool,
     register_tab_tools,
 )
@@ -37,28 +40,44 @@ logger = logging.getLogger(__name__)
 
 ONE_M_BETA = "context-1m-2025-08-07"
 
-_SCHEMA_COMPLETENESS_EXTENSION = (
-    "If a schema field is missing but likely lives on a linked page or in data "
-    "embedded in the current page, navigate there and extract it before finishing; "
-    "never guess, and leave a field null only when it genuinely cannot be found."
+_DRILL_IN_EXTENSION = (
+    "Listing and results pages are a table of contents, not the content. Never "
+    "record an item from its snippet; open its own page and read it first."
 )
 
-_PRIMARY_URL_EXTENSION = (
-    "startUrl is saved for you to recall automatically. If you are primarily "
-    "working from a different URL, you must save it: remember('primaryUrl', <url>). "
-    "Ensure you keep the primaryUrl up-to-date."
+_TOOLS_EASIEST_EXTENSION = (
+    "Browsing here is easiest with your own tools: list_links() sees every link on "
+    "the page, including those inside embedded panels that ordinary element search "
+    "cannot reach, open_in_new_tab(index) follows one, and close_tab brings you "
+    "back. Reach for these before you wrestle the DOM."
 )
 
-_TABS_EXTENSION = (
-    "When several pages each look worth acting on, open them together as "
-    "background tabs and then work through them one at a time; close any that "
-    "turn out not to be useful. This is cheaper than fetching them one-by-one."
+_CLIPBOARD_EXTENSION = (
+    "You carry a clipboard: remember(key, value) keeps anything you need to remember "
+    "between pages, recall(key) brings it back, and startUrl is already stored there."
 )
 
-_DATA_STORAGE_EXTENSION = (
-    "Keep data blobs out of your reasoning: write large results like API "
-    "responses to a scratch file, read back only the parts you need; never "
-    "hold it in context."
+_OUTPUT_STORE_EXTENSION = (
+    "YOUR PURPOSE IS TO DISCOVER, SCRAPE, AND OUTPUT – NOT TO MEMORIZE THINGS. The "
+    "user's schema already sits in the output, empty and waiting; the moment you find "
+    "something that belongs in it, put it there with add_item or update_item, and let "
+    "read_output and search_output do the remembering."
+)
+
+_VERIFY_EXTENSION = (
+    "Before you finish, read_output() and treat every empty field as unfinished work: "
+    "go back to the page that could fill it. A blank is only acceptable once you have "
+    "looked where the information should be and found it genuinely absent."
+)
+
+_BEGIN_EXTENSION = (
+    "Begin your browsing by recalling startUrl and opening that page in a new tab."
+)
+
+_NORTH_STAR_PROMPT = (
+    "Reply with one sentence stating this task's North Star: what a complete and "
+    "correct result looks like, in the task's own words. Name the purpose, not the "
+    "output's shape; do not list fields or restate the schema."
 )
 
 
@@ -375,6 +394,24 @@ def _category_for(action_name: str | None) -> str:
     return "action"
 
 
+async def _derive_north_star(llm: Any, task: str) -> str:
+    """One short thinking-off LLM call naming the task's North Star, so the goal can
+    be pinned under the task and re-injected periodically. Falls back to the task's
+    first sentence if the call fails.
+    """
+    try:
+        resp = await llm.ainvoke(
+            [UserMessage(content=f"{_NORTH_STAR_PROMPT}\n\nTASK:\n{task}")]
+        )
+        text = " ".join((getattr(resp, "completion", None) or str(resp)).split())
+        if text:
+            return text[:400]
+    except Exception:
+        logger.debug("North Star pre-flight failed", exc_info=True)
+    first = re.split(r"(?<=[.!?])\s", (task or "").strip(), maxsplit=1)[0]
+    return first.strip()[:400] or (task or "").strip()[:400]
+
+
 async def run_agent_session(session_id: str) -> None:
     """Execute a browser-use agent for the given session. Runs as a background task."""
     session = await crud.get_session(session_id)
@@ -408,6 +445,18 @@ async def run_agent_session(session_id: str) -> None:
         return
 
     llm._activity_session = session_id
+
+    north_star_task: asyncio.Task | None = None
+    try:
+        _, _, preflight_llm = _build_llm(requested_model, "off")
+        try:
+            preflight_llm.max_tokens = 300
+        except Exception:
+            pass
+        north_star_task = asyncio.create_task(_derive_north_star(preflight_llm, task))
+    except Exception:
+        logger.debug("North Star pre-flight setup failed", exc_info=True)
+        north_star_task = None
 
     # Load profile storage state path
     storage_state_path: str | None = None
@@ -474,27 +523,75 @@ async def run_agent_session(session_id: str) -> None:
                 )
                 output_model = None
 
+        store: OutputStore | None = None
+        if output_model is not None:
+            store = OutputStore(output_model)
+            register_output_store_tools(tools, store)
+
+            async def _on_incomplete_done(empties: list[str]) -> None:
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "schema", "action": "completeness"}),
+                    summary="Completeness gate: " + "; ".join(empties)[:180],
+                    count_step=False,
+                )
+
+            register_completeness_gate(tools, store, _on_incomplete_done)
+
+        north_star = ""
+        if north_star_task is not None:
+            try:
+                north_star = await north_star_task
+            except Exception:
+                logger.debug("North Star pre-flight await failed", exc_info=True)
+        if not north_star:
+            north_star = re.split(r"(?<=[.!?])\s", (task or "").strip(), maxsplit=1)[0][:400]
+        clipboard["northStar"] = north_star
+
         full_task = task
+        if north_star:
+            full_task = f"{task}\n\nNORTH STAR: {north_star}"
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "memory", "action": "northStar"}),
+                summary=f"North Star: {north_star}",
+                count_step=False,
+            )
         if output_schema and output_model is None:
             schema_str = json.dumps(output_schema, indent=2)
             full_task = (
-                f"{task}\n\n"
+                f"{full_task}\n\n"
                 f"OUTPUT FORMAT: Return your result as JSON conforming to this schema:\n"
                 f"```json\n{schema_str}\n```"
             )
 
+        start_match = re.search(r"https?://[^\s\"'<>)\]]+", task or "")
+        if start_match:
+            start_url = start_match.group(0).rstrip(".,;)")
+            clipboard["startUrl"] = start_url
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "memory", "action": "startUrl"}),
+                summary=f"startUrl saved → {start_url}",
+                count_step=False,
+            )
+
         # Step callback for real-time dashboard streaming
         step_count = 0
-        last_primary_url: str | None = None
         step_started_at: dict[str, Any] = {"t": None}
-        reminder = PrimaryUrlReminder()
 
         async def on_step_start(agent_instance: Agent) -> None:
             step_started_at["t"] = datetime.now(timezone.utc)
             set_activity(session_id, "Preparing next step")
 
         async def on_step_end(agent_instance: Agent) -> None:
-            nonlocal step_count, last_primary_url
+            nonlocal step_count
             step_count += 1
 
             current_url = None
@@ -522,39 +619,21 @@ async def run_agent_session(session_id: str) -> None:
                 return
             step = steps[-1]
 
-            nudge = reminder.observe(
-                step_count,
-                current_url,
-                links_opened(step.model_output.action if step.model_output else None),
-                clipboard.get("primaryUrl"),
-                clipboard.get("startUrl"),
-            )
-            if nudge:
+            if north_star and step_count % 10 == 0:
                 try:
-                    agent_instance._message_manager.add_new_task(nudge)
+                    agent_instance._message_manager.add_new_task(
+                        f"North Star: {north_star} Not done until this is met."
+                    )
                 except Exception:
-                    logger.debug("primaryUrl reminder injection failed", exc_info=True)
+                    logger.debug("north star reminder injection failed", exc_info=True)
                 await crud.create_message(
                     session_id=session_id,
                     role="ai",
                     msg_type="event",
-                    data=json.dumps({"category": "memory", "action": "reminder"}),
-                    summary="Reminder: nudged to set/update primaryUrl",
+                    data=json.dumps({"category": "memory", "action": "northStar"}),
+                    summary=f"North Star reminder (step {step_count})",
                     count_step=False,
                 )
-
-            cur_primary = clipboard.get("primaryUrl")
-            if cur_primary and cur_primary != last_primary_url:
-                verb = "updated" if last_primary_url else "saved"
-                await crud.create_message(
-                    session_id=session_id,
-                    role="ai",
-                    msg_type="event",
-                    data=json.dumps({"category": "memory", "action": "primaryUrl"}),
-                    summary=f"primaryUrl {verb} → {cur_primary}",
-                    count_step=False,
-                )
-                last_primary_url = cur_primary
 
             summary = ""
             is_code = False
@@ -632,24 +711,25 @@ async def run_agent_session(session_id: str) -> None:
             "calculate_cost": True,
             "llm_timeout": 180,
         }
-        if output_model is not None:
-            agent_kwargs["output_model_schema"] = output_model
         extension_parts = [
-            p
-            for p in (
-                system_prompt_extension,
-                _SCHEMA_COMPLETENESS_EXTENSION,
-                _PRIMARY_URL_EXTENSION,
-                _TABS_EXTENSION,
-                _DATA_STORAGE_EXTENSION,
-            )
-            if p
+            system_prompt_extension,
+            _DRILL_IN_EXTENSION,
+            _TOOLS_EASIEST_EXTENSION,
+            _CLIPBOARD_EXTENSION,
         ]
-        agent_kwargs["extend_system_message"] = "\n\n".join(extension_parts)
+        if store is not None:
+            extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
+        extension_parts.append(_BEGIN_EXTENSION)
+        agent_kwargs["extend_system_message"] = "\n\n".join(p for p in extension_parts if p)
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data
 
         agent = Agent(**agent_kwargs)
+        if store is not None and agent.file_system is not None:
+            try:
+                await agent.file_system.write_file("output.json", store.read_output())
+            except Exception:
+                logger.debug("initial output.json mirror failed", exc_info=True)
         history = await agent.run(on_step_start=on_step_start, on_step_end=on_step_end)
 
         # Extract results
@@ -663,7 +743,10 @@ async def run_agent_session(session_id: str) -> None:
         except Exception:
             logger.debug("result.json read from agent.file_system failed", exc_info=True)
         done_output = history.final_result() or ""
-        output = done_output or file_output
+        if store is not None and not store.is_empty():
+            output = store.read_output()
+        else:
+            output = done_output or file_output
 
         schema_valid = True
         if output_model is not None:
@@ -743,6 +826,8 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         clear_activity(session_id)
+        if north_star_task is not None and not north_star_task.done():
+            north_star_task.cancel()
         if browser_session:
             # @nonobvious(forced-by) stop() dispatches SaveStorageStateEvent (full cookies+localStorage, merged with the file on disk) while CDP is still live; export_storage_state here instead rewrites the file with origins:[] and wipes imported localStorage. Shielded + per-profile locked so a shutdown cancel can't truncate the save.
             try:

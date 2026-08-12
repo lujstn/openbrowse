@@ -12,6 +12,7 @@ from browser_use import ActionResult, BrowserSession, Tools
 from browser_use.browser.events import CloseTabEvent, NavigateToUrlEvent, SwitchTabEvent
 from browser_use.filesystem.file_system import FileSystem
 
+from app.agent.output_store import OutputStore
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,7 @@ CAPSOLVER_API = "https://api.capsolver.com"
 _MAX_INLINE_FETCH_CHARS = 3000
 _FETCH_PREVIEW_CHARS = 2000
 _SANDBOX_STDOUT_PREVIEW_CHARS = 2500
-_LIST_LINKS_MAX_INLINE_CHARS = 2500
-_LIST_LINKS_PREVIEW_CHARS = 2000
+_CAPPED_READ_PREVIEW_CHARS = 8000
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -543,7 +543,7 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
 
     @tools.action(
         "Fetch a value previously saved with remember (or an auto-populated key such "
-        "as startUrl / primaryUrl) from the session clipboard."
+        "as startUrl) from the session clipboard."
     )
     async def recall(key: str) -> ActionResult:
         if str(key) not in clipboard:
@@ -799,13 +799,12 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
             return ActionResult(error=f"close_tab failed: {type(e).__name__}: {e}")
 
     @tools.action(
-        "List all links (index, text, href) on the current page, INCLUDING inside "
-        "embedded/cross-origin sections that find_elements cannot reach. Use this "
-        "to collect detail-page URLs."
+        "List every link (index, text, href) on the current page, INCLUDING those "
+        "inside embedded/cross-origin panels that find_elements cannot reach. Returns "
+        "the full list inline — the hrefs are the payload, so trust them and follow "
+        "one with open_in_new_tab(index) rather than hunting for another route."
     )
-    async def list_links(
-        browser_session: BrowserSession, file_system: FileSystem
-    ) -> ActionResult:
+    async def list_links(browser_session: BrowserSession) -> ActionResult:
         try:
             selector_map = await browser_session.get_selector_map()
             current = await _eval_js(browser_session, "window.location.href") or ""
@@ -828,34 +827,9 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
         except Exception as e:
             return ActionResult(error=f"list_links failed: {type(e).__name__}: {e}")
 
-        full_json = json.dumps(links, indent=2)
-        total = len(full_json)
-        if total <= _LIST_LINKS_MAX_INLINE_CHARS:
-            memory = f"Listed {len(links)} link(s) on the page."
-            return ActionResult(extracted_content=full_json, long_term_memory=memory)
-
-        saved: str | None = _normalise_fs_name("links.json", "json")
-        try:
-            await file_system.write_file(saved, full_json)
-        except Exception:
-            logger.warning(
-                "list_links: failed to save large link list to FileSystem", exc_info=True
-            )
-            saved = None
-
-        note = (
-            f"{len(links)} links found ({total} chars of JSON); only the first "
-            f"{_LIST_LINKS_PREVIEW_CHARS} chars are shown below. "
-            + (
-                f"Full list saved to '{saved}' — read the file for the rest."
-                if saved
-                else "Saving the full list failed; narrow your query instead of re-listing."
-            )
-        )
-        preview = full_json[:_LIST_LINKS_PREVIEW_CHARS]
         return ActionResult(
-            extracted_content=f"{note}\n\n{preview}",
-            long_term_memory=f"Listed {len(links)} link(s) on the page -> {saved or 'preview only'}",
+            extracted_content=json.dumps(links, indent=2),
+            long_term_memory=f"Listed {len(links)} link(s) on the page.",
         )
 
 
@@ -874,7 +848,7 @@ def register_capped_read_overrides(tools: Tools) -> None:
         result: ActionResult, file_system: FileSystem, readout_name: str
     ) -> ActionResult:
         content = result.extracted_content
-        if content and len(content) > _SANDBOX_STDOUT_PREVIEW_CHARS:
+        if content and len(content) > _CAPPED_READ_PREVIEW_CHARS:
             total = len(content)
             try:
                 await file_system.write_file(readout_name, content)
@@ -887,7 +861,7 @@ def register_capped_read_overrides(tools: Tools) -> None:
                 )
                 tail = "could not be saved; narrow your query instead of dumping"
             result.extracted_content = (
-                content[:_SANDBOX_STDOUT_PREVIEW_CHARS]
+                content[:_CAPPED_READ_PREVIEW_CHARS]
                 + f"\n[truncated: {total} chars total, {tail}]"
             )
         return result
@@ -929,3 +903,135 @@ def register_capped_read_overrides(tools: Tools) -> None:
         ) -> ActionResult:
             result = await _original(params=params, browser_session=browser_session)
             return await _cap_readout(result, file_system, "readout_evaluate.txt")
+
+
+def _describe_item_fields(store: OutputStore) -> str:
+    model = store.item_model
+    if model is None:
+        return "Each item is a free-form object."
+    parts = [
+        name if field.is_required() else f"{name}?"
+        for name, field in model.model_fields.items()
+    ]
+    return "Each item has fields: " + ", ".join(parts) + " (? = optional)."
+
+
+def _describe_top_fields(store: OutputStore) -> str:
+    names = [n for n in store.output_model.model_fields if n != store.array_field]
+    if not names:
+        return "This output has no top-level scalar fields."
+    return "Settable fields: " + ", ".join(names) + "."
+
+
+async def _mirror_output(store: OutputStore, file_system: FileSystem) -> None:
+    try:
+        await file_system.write_file("output.json", store.read_output())
+    except Exception:
+        logger.warning("output store: failed to mirror output.json", exc_info=True)
+
+
+def register_output_store_tools(tools: Tools, store: OutputStore) -> None:
+    """Expose the schema-validated output store as agent actions. The store is the
+    single answer surface: the agent fills it as it discovers data, every write is
+    validated live and mirrored to ``output.json``, and the final result is read
+    back from it after the run.
+    """
+    array = store.array_field or "output"
+
+    @tools.action(
+        f"Append one item to the '{array}' list — the primary answer array. "
+        f"{_describe_item_fields(store)} Provide every field you already know now; "
+        "enrich the rest with update_item once you have opened the item's own page. "
+        "Validated against the schema and rejected if it does not fit."
+    )
+    async def add_item(item: dict[str, Any], file_system: FileSystem) -> ActionResult:
+        ok, msg = store.add_item(item)
+        if not ok:
+            return ActionResult(error=msg)
+        await _mirror_output(store, file_system)
+        return ActionResult(extracted_content=msg, long_term_memory=msg)
+
+    @tools.action(
+        f"Enrich the item at integer index (0-based, as reported by add_item) in the "
+        f"'{array}' list by merging in the given fields — this is how a detail-page "
+        "visit fills a stub's missing values such as description or postedAt. "
+        "Re-validated against the schema."
+    )
+    async def update_item(
+        index: int, fields: dict[str, Any], file_system: FileSystem
+    ) -> ActionResult:
+        ok, msg = store.update_item(index, fields)
+        if not ok:
+            return ActionResult(error=msg)
+        await _mirror_output(store, file_system)
+        return ActionResult(extracted_content=msg, long_term_memory=msg)
+
+    @tools.action(
+        "Set a top-level, non-list output field, validated against its type. "
+        + _describe_top_fields(store)
+    )
+    async def set_field(key: str, value: Any, file_system: FileSystem) -> ActionResult:
+        ok, msg = store.set_field(key, value)
+        if not ok:
+            return ActionResult(error=msg)
+        await _mirror_output(store, file_system)
+        return ActionResult(extracted_content=msg, long_term_memory=msg)
+
+    @tools.action(
+        "Read the output you are building so far — the schema with everything you "
+        "have filled in. Any empty or null field is unfinished work."
+    )
+    async def read_output() -> ActionResult:
+        return ActionResult(extracted_content=store.read_output())
+
+    @tools.action(
+        "Search the output you have built so far for a case-insensitive substring "
+        "across items and fields — use it to check whether you already recorded "
+        "something before adding it again."
+    )
+    async def search_output(query: str) -> ActionResult:
+        return ActionResult(extracted_content=store.search_output(query))
+
+
+def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) -> None:
+    """One-shot soft gate on ``done``: the first time the agent tries to finish with
+    schema fields still empty, bounce it back to fill them; accept the next done
+    unconditionally so it can never loop. Re-registers ``done`` under the same name
+    (last-wins in the registry) — the same override pattern as the capped-read
+    wrappers. ``on_incomplete(empty_fields)`` is awaited once when the bounce fires.
+    """
+    registry_actions = tools.registry.registry.actions
+    done_entry = registry_actions.get("done")
+    if done_entry is None:
+        return
+    original_done = done_entry.function
+    state = {"bounced": False}
+
+    @tools.action(
+        done_entry.description,
+        param_model=done_entry.param_model,
+        domains=done_entry.domains,
+        terminates_sequence=done_entry.terminates_sequence,
+    )
+    async def done(params: Any, file_system: FileSystem) -> ActionResult:
+        if not state["bounced"]:
+            empties = store.empty_fields()
+            if empties:
+                state["bounced"] = True
+                if on_incomplete is not None:
+                    try:
+                        await on_incomplete(empties)
+                    except Exception:
+                        logger.debug("completeness gate event emit failed", exc_info=True)
+                listing = "\n- ".join(empties)
+                return ActionResult(
+                    is_done=False,
+                    extracted_content=(
+                        "Not finished — these fields in the output are still empty:\n- "
+                        f"{listing}\n\nGo back to the page that could fill each one and "
+                        "record it with add_item / update_item / set_field. A blank is "
+                        "only acceptable once you have looked where the information "
+                        "should be and found it genuinely absent. Then call done again."
+                    ),
+                )
+        return await original_done(params=params, file_system=file_system)
