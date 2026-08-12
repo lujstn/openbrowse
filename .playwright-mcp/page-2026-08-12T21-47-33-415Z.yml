@@ -1,0 +1,197 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e5]:
+        - link [ref=e7] [cursor=pointer]:
+          - /url: /
+        - generic [ref=e16]:
+          - button "Car insurance" [ref=e18] [cursor=pointer]
+          - button "Home insurance" [ref=e22] [cursor=pointer]
+          - button "Car finance" [ref=e26] [cursor=pointer]
+          - button "About us" [ref=e30] [cursor=pointer]
+          - button "Help & Guides" [ref=e34] [cursor=pointer]
+        - generic [ref=e37]:
+          - link "Claims" [ref=e38] [cursor=pointer]:
+            - /url: /claims-landing
+          - link "Get a quote" [ref=e41] [cursor=pointer]:
+            - /url: /quote-landing
+    - generic [ref=e43]:
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - heading "Move to Marshmallow" [level=1] [ref=e47]
+          - paragraph [ref=e49]: We’re building a huge technology company that makes it easier to move between countries. To drive exponential growth, we need a team of extremely ambitious people.
+        - link "See open roles" [ref=e51] [cursor=pointer]:
+          - /url: /jobs/#ashby_embed
+      - img "Default banner image" [ref=e53]
+    - generic [ref=e55]:
+      - generic [ref=e56]: A word from our CO-CEOs
+      - generic [ref=e57]:
+        - img "A message from our founders" [ref=e59]
+        - generic [ref=e60]:
+          - heading "We’re on a mission to make migration easy" [level=2] [ref=e61]
+          - paragraph [ref=e62]: We started building Marshmallow in 2017. Since then, we’ve grown from 3 to 700+ people, gained unicorn status, raised ~£140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.
+          - paragraph [ref=e63]: But we’re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we’ll grow exponentially, not only by scaling our existing products, but also by building new ones.
+          - paragraph [ref=e64]: To achieve our goals we need incredibly ambitious, commercially driven people who never settle for ‘good enough’. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.
+          - paragraph [ref=e65]: We’ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - text: Alexander Kent-Braham
+          - generic [ref=e68]: CO-CEO
+        - generic [ref=e69]:
+          - text: Oliver Kent-Braham
+          - generic [ref=e70]: CO-CEO
+    - generic [ref=e72]:
+      - generic [ref=e73]:
+        - heading "Our values" [level=2] [ref=e74]
+        - generic [ref=e75]:
+          - paragraph [ref=e76]: Our values aren’t words on a wall. They define how we show up - how we think, challenge ideas, and continue to raise the bar.
+          - paragraph [ref=e77]:
+            - text: Explore our
+            - link "open roles" [ref=e78] [cursor=pointer]:
+              - /url: /jobs/#ashby_embed
+            - text: to see where you could make an impact.
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - img "We maximise impact, fast" [ref=e81]
+          - generic [ref=e82]:
+            - heading "We maximise impact, fast" [level=2] [ref=e83]
+            - paragraph [ref=e86]: This is a place for do-ers. We take ownership of meaningful problems and move them forward, even when the context is ambiguous or the path isn’t fully defined.
+        - generic [ref=e87]:
+          - img "We relentlessly improve" [ref=e88]
+          - generic [ref=e89]:
+            - heading "We relentlessly improve" [level=2] [ref=e90]
+            - paragraph [ref=e93]: Progress here is deliberate. We don’t settle. We question assumptions, seek honest feedback, and refine how we work to achieve better outcomes.
+        - generic [ref=e94]:
+          - img "We have low ego" [ref=e95]
+          - generic [ref=e96]:
+            - heading "We have low ego" [level=2] [ref=e97]
+            - paragraph [ref=e100]: Hierarchy doesn’t matter here - ideas do. We welcome challenge, prioritise what’s right over who’s right, and hold ourselves accountable for the decisions we make.
+    - generic [ref=e102]:
+      - generic [ref=e103]:
+        - img "Arrow icon" [ref=e105]
+        - generic [ref=e106]:
+          - generic [ref=e107]: Why Marshmallow?
+          - generic [ref=e109]: Accelerate your career with us
+      - generic [ref=e111]:
+        - generic [ref=e112]:
+          - generic [ref=e113]: "1"
+          - generic [ref=e115]:
+            - generic [ref=e116]: Supercharged growth
+            - generic [ref=e117]:
+              - paragraph [ref=e118]: Our world is changing at a faster pace than ever before, and we are excited to be part of it. Our teams are agile and embrace change, moving quickly to solve complex problems and drive tangible outcomes.
+              - paragraph [ref=e119]: In a fast-paced environment like ours, there are endless opportunities to stretch yourself and accelerate your growth. The more impact you drive, the more you’ll be rewarded.
+        - generic [ref=e120]:
+          - generic [ref=e121]: "2"
+          - generic [ref=e123]:
+            - generic [ref=e124]: High-performing people
+            - generic [ref=e125]:
+              - paragraph [ref=e126]: You’ll join a group of smart, highly driven people who leave egos at the door. We’re collaborative and curious, and hold ourselves, and each other, to incredibly high standards.
+              - paragraph [ref=e127]: Our teams spend a lot of time together in person to drive collective ideation, quality feedback conversations, and faster decision-making. Our offices have been designed with collaboration at the core, along with spaces to come together as a community.
+        - generic [ref=e128]:
+          - generic [ref=e129]: "3"
+          - generic [ref=e131]:
+            - generic [ref=e132]: Autonomy and ownership
+            - paragraph [ref=e134]: Every team has a clear north star goal and the autonomy to influence roadmaps, steering the best approach to solve problems. That autonomy extends to individuals too - we expect everyone to take ownership, experiment and share ideas to drive better outcomes.
+      - link "Explore our open roles" [ref=e136] [cursor=pointer]:
+        - /url: /jobs/#ashby_embed
+    - generic [ref=e138]:
+      - generic [ref=e140]:
+        - generic [ref=e141]: testimonials
+        - generic [ref=e142]: What's it like to work here?
+        - paragraph [ref=e143]: Hear from the people raising the bar every day
+      - region "carousel" [ref=e144]:
+        - generic [ref=e146]:
+          - group "1 of 3" [ref=e147]:
+            - generic [ref=e148]:
+              - generic [ref=e149]:
+                - img "Gergo gives his testimonial"
+              - generic [ref=e152]:
+                - heading "Gergo" [level=3] [ref=e153]
+                - paragraph [ref=e154]: Senior Engineering Manager
+                - paragraph [ref=e155]: "\"The gap between having an idea and acting on it is genuinely small here. You're expected to move fast, bring your own urgency, and not wait for permission. The people around you operate the same way: high-energy, high-integrity, and never settling for good enough. Being surrounded by that every day raises your own standards and keeps raising them.\""
+          - group [ref=e156]:
+            - generic [ref=e161]:
+              - heading [level=3] [ref=e162]: Bia
+              - paragraph [ref=e163]: Data Analytics Lead
+              - paragraph [ref=e164]: “Innovation is at the core of everything we do. We ringfence time every week to experiment and explore, protected from day-to-day delivery. If we discover an opportunity to drive better outcomes, we have the autonomy to act on it. Increasingly, the most valuable discoveries are happening through AI. AI is a strategic priority and our commitment to it is only accelerating. The people who thrive here don't just lean into new initiatives. They actively drive them.”
+          - group [ref=e165]:
+            - generic [ref=e170]:
+              - heading [level=3] [ref=e171]: Vik
+              - paragraph [ref=e172]: Group Product Manager
+              - paragraph [ref=e173]: "\"Most companies wait to have all of the information in place before acting. We don't. When AI started changing the landscape, we rolled up our sleeves and started building straight away - because growth here is practical, not theoretical. You're expected to take real ownership and move fast. When something isn't working, we challenge our thinking and pivot. Responding to the data and staying agile matters far more than being right the first time.\""
+        - generic [ref=e174] [cursor=pointer]:
+          - img "icon-left-arrow"
+        - generic [ref=e175] [cursor=pointer]:
+          - img "icon-right-arrow"
+        - generic [ref=e176]:
+          - button [ref=e177] [cursor=pointer]
+          - button [ref=e178] [cursor=pointer]
+          - button [ref=e179] [cursor=pointer]
+      - link "Join us" [ref=e181] [cursor=pointer]:
+        - /url: /jobs/#ashby_embed
+    - generic [ref=e186]:
+      - heading "Check out our benefits" [level=3] [ref=e188]
+      - generic [ref=e189]:
+        - button "For our London office" [ref=e191] [cursor=pointer]
+        - button "For our Budapest office?" [ref=e195] [cursor=pointer]
+    - generic [ref=e201]:
+      - generic [ref=e202]:
+        - generic [ref=e203]: Our offices
+        - generic [ref=e204]: Learn how we work in London and Budapest
+      - generic [ref=e205]:
+        - generic [ref=e206]:
+          - generic [ref=e207]:
+            - img "car image" [ref=e208]
+            - generic [ref=e209]: London
+          - link "Find out more" [ref=e211] [cursor=pointer]:
+            - /url: /blog/our-london-office
+        - generic [ref=e215]:
+          - img "van image" [ref=e216]
+          - generic [ref=e217]: Budapest
+          - link "Find out more" [ref=e219] [cursor=pointer]:
+            - /url: /blog/our-budapest-office
+    - generic [ref=e223]:
+      - heading "Open roles" [level=2] [ref=e224]
+      - paragraph [ref=e225]: If you don’t see anything that fits you today, check back soon. We’re scaling quickly, putting up new roles every week.
+    - contentinfo [ref=e227]:
+      - generic [ref=e229]:
+        - generic [ref=e230]:
+          - generic:
+            - link:
+              - /url: https://www.instagram.com/getmarshmallow/?hl=en
+            - link:
+              - /url: https://www.facebook.com/marshmallowinsurance/
+            - link:
+              - /url: https://twitter.com/getmarshmallow?ref_src=twsrc%5Egoogle%7Ctwcamp%5Eserp%7Ctwgr%5Eauthor
+            - link:
+              - /url: https://www.linkedin.com/company/marshmallowltd/mycompany/
+          - generic [ref=e231]:
+            - link "SFCR" [ref=e232] [cursor=pointer]:
+              - /url: /solvency-and-financial-condition-report
+            - link "Anti-Slavery Policy" [ref=e233] [cursor=pointer]:
+              - /url: /anti-slavery-policy
+            - link "Complaints Policy" [ref=e234] [cursor=pointer]:
+              - /url: /complaints-policy
+            - link "Privacy policy" [ref=e235] [cursor=pointer]:
+              - /url: /privacy-policy
+            - link "Jobs" [ref=e236] [cursor=pointer]:
+              - /url: /jobs
+            - link "Money Worries" [ref=e237] [cursor=pointer]:
+              - /url: /money-worries
+            - link "Refer a friend" [ref=e238] [cursor=pointer]:
+              - /url: /refer-a-friend
+            - link "Perks" [ref=e239] [cursor=pointer]:
+              - /url: /rewards-and-perks
+            - link "Discounts" [ref=e240] [cursor=pointer]:
+              - /url: /health-service-discounts
+            - link "Discount Codes" [ref=e241] [cursor=pointer]:
+              - /url: /discount-code-terms-conditions
+            - link "Help" [ref=e242] [cursor=pointer]:
+              - /url: /help
+            - link "Log in" [ref=e243] [cursor=pointer]:
+              - /url: https://account.marshmallow.com/login
+        - heading "Certificates & awards" [level=3] [ref=e245]
+        - paragraph [ref=e247]: Marshmallow is a trading name used by the following companies:Marshmallow Financial Services Limited is authorised and regulated by the Financial Conduct Authority(FCA) under firm reference number 797672. Registered in England and Wales with company number 11005345.Marshmallow Credit Services Limited is is authorised and regulated by the Financial Conduct Authority (FCA) under firm reference number 1024606. Registered in England and Wales with company number 15834468.The registered address for both companies is 66 City Road, London, EC1Y 1BD
+        - link [ref=e249] [cursor=pointer]:
+          - /url: "#"
+  - alert [ref=e269]

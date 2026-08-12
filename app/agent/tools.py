@@ -1,7 +1,6 @@
 """Custom browser-use tools — Capsolver CAPTCHA solving, Python sandbox, HTTP fetch."""
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -15,6 +14,7 @@ from browser_use.browser.events import CloseTabEvent, NavigateToUrlEvent, Switch
 from browser_use.filesystem.file_system import FileSystem
 
 from app.agent.output_store import OutputStore
+from app.agent.textguard import guard_key
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -805,17 +805,26 @@ class TabManager:
         return "Closed the tab and returned to the base tab."
 
 
-def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
+def register_tab_tools(
+    tools: Tools, tab_manager: TabManager, clipboard: dict[str, Any]
+) -> None:
     """Register the lazy multi-tab fan-out actions on a Tools instance."""
 
     @tools.action(
-        "Queue many URLs as lightweight, UNLOADED background tabs for efficient "
-        "fan-out (hard cap 48 total). Each becomes a blank about:blank tab at a stable "
-        "0-based index; the real URL is only fetched when you call goto_tab(n). Your "
-        "current/start tab is left untouched."
+        "Queue URLs as lightweight, UNLOADED background tabs for efficient fan-out "
+        "(hard cap 48 total). Each becomes a blank about:blank tab at a stable 0-based "
+        "index; the real URL is only fetched when you call goto_tab(n). Call with NO "
+        "urls to open every link from your last find_links (saved as found_links) — the "
+        "one-shot way to open a whole listing. Your current/start tab is left untouched."
     )
-    async def open_tabs(urls: list[str]) -> ActionResult:
+    async def open_tabs(urls: list[str] | None = None) -> ActionResult:
         try:
+            if not urls:
+                urls = list(clipboard.get("found_links") or [])
+                if not urls:
+                    return ActionResult(
+                        error="No urls given and no saved found_links — run find_links first."
+                    )
             note = await tab_manager.open_tabs(urls)
             return ActionResult(extracted_content=note, long_term_memory=note)
         except Exception as e:
@@ -865,17 +874,19 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
         "URL matches (e.g. 'ashby'); container_index returns only links inside that "
         "element (usually an embed's own index); attr returns links carrying a shared "
         "attribute, e.g. {\"class\": \"posting\"}. Multiple selectors narrow together. "
-        "This is the ONLY tool that can read links inside embedded/cross-origin panels "
-        "— feed the hrefs straight to open_tabs([...]) or open_in_new_tab(index)."
+        "This is the ONLY tool that can read links inside embedded/cross-origin panels. "
+        "The result is saved as found_links, so open them ALL with open_tabs() (no args) "
+        "or one with open_in_new_tab(index) — no need to copy hrefs back."
     )
     async def find_links(
         browser_session: BrowserSession,
+        file_system: FileSystem,
         href_contains: str | None = None,
         href_regex: str | None = None,
         frame_url_contains: str | None = None,
         container_index: int | None = None,
         attr: dict[str, str] | None = None,
-        visible_only: bool = True,
+        visible_only: bool = False,
     ) -> ActionResult:
         if not (
             href_contains
@@ -968,25 +979,42 @@ def register_tab_tools(tools: Tools, tab_manager: TabManager) -> None:
         except Exception as e:
             return ActionResult(error=f"find_links failed: {type(e).__name__}: {e}")
 
+        clipboard["found_links"] = [link["href"] for link in links]
+        saved: str | None = "found_links.json"
+        try:
+            await file_system.write_file(saved, json.dumps(links, indent=2))
+        except Exception:
+            logger.warning("find_links: failed to save found_links.json", exc_info=True)
+            saved = None
+        pointer = (
+            f"find_links found {len(links)} link(s), saved as found_links"
+            + (f" and {saved}" if saved else "")
+            + ". Open them ALL with open_tabs() (no args), or one with "
+            "open_in_new_tab(index)."
+        )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
-            long_term_memory=f"find_links -> {len(links)} link(s).",
+            long_term_memory=pointer,
+            include_extracted_content_only_once=True,
         )
 
 
-_GUARDED_ACTIONS = (
+_GUARDED_DUMP_ACTIONS = (
     "find_elements",
     "evaluate",
     "find_links",
     "http_fetch",
     "run_code_file",
 )
+_GUARDED_DEDUP_ACTIONS = ("read_output", "search_output")
 
 
 def register_output_guard_overrides(tools: Tools) -> None:
-    """Stop a run's context ballooning: cap genuinely huge single outputs, and replace
-    any large chunk already seen this session with a short back-reference. Rewrites
-    BOTH ``extracted_content`` and ``long_term_memory`` (browser-use folds
+    """Stop a run's context ballooning: replace any large chunk already seen this
+    session with a short back-reference, and (for dump actions only) cap genuinely huge
+    single outputs to a file. The answer-surface reads (read_output/search_output) are
+    deduped but never capped, so the store always shows whole. Rewrites BOTH
+    ``extracted_content`` and ``long_term_memory`` (browser-use folds
     ``long_term_memory`` into permanent context first, so capping only the former
     silently misses a whole size band).
 
@@ -1000,18 +1028,20 @@ def register_output_guard_overrides(tools: Tools) -> None:
     seen: dict[str, int] = {}
     counter = {"n": 0}
 
-    async def _guard(result: ActionResult, file_system: Any, readout_name: str) -> ActionResult:
+    async def _guard(
+        result: ActionResult, file_system: Any, readout_name: str, cap: bool
+    ) -> ActionResult:
         for attr in ("extracted_content", "long_term_memory"):
             text = getattr(result, attr, None)
             if not text or len(text) <= _GUARD_MIN_CHARS:
                 continue
-            key = hashlib.sha1(" ".join(text.split()).encode()).hexdigest()
+            key = guard_key(text)
             if key in seen:
                 setattr(result, attr, f"[identical to earlier output #{seen[key]} — not repeated]")
                 continue
             counter["n"] += 1
             seen[key] = counter["n"]
-            if len(text) > _CAPPED_READ_PREVIEW_CHARS:
+            if cap and len(text) > _CAPPED_READ_PREVIEW_CHARS:
                 total = len(text)
                 tail = "narrow your query instead of dumping"
                 if file_system is not None and readout_name:
@@ -1028,20 +1058,31 @@ def register_output_guard_overrides(tools: Tools) -> None:
                 )
         return result
 
-    for name in _GUARDED_ACTIONS:
+    def _install(name: str, cap: bool) -> None:
         entry = registry_actions.get(name)
         if entry is None:
-            continue
+            return
         original = entry.function
         readout = f"readout_{name}.txt"
 
-        async def wrapped(params: Any = None, _original: Any = original, _readout: str = readout, **kwargs: Any) -> Any:
+        async def wrapped(
+            params: Any = None,
+            _original: Any = original,
+            _readout: str = readout,
+            _cap: bool = cap,
+            **kwargs: Any,
+        ) -> Any:
             result = await _original(params=params, **kwargs)
             if isinstance(result, ActionResult):
-                return await _guard(result, kwargs.get("file_system"), _readout)
+                return await _guard(result, kwargs.get("file_system"), _readout, _cap)
             return result
 
         entry.function = wrapped
+
+    for name in _GUARDED_DUMP_ACTIONS:
+        _install(name, True)
+    for name in _GUARDED_DEDUP_ACTIONS:
+        _install(name, False)
 
 
 def _describe_item_fields(store: OutputStore) -> str:

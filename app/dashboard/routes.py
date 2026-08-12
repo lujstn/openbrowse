@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
-from app.agent.activity import get_activity, set_activity
+from app.agent.activity import get_activity
 from app.agent.pool import pool
 from app.agent.runner import _category_for, get_live_agent
 from app.api.sessions import _to_session_response
@@ -337,34 +337,6 @@ async def dashboard_stop_session(session_id: str):
     await pool.cancel(session_id)
     await crud.update_session(session_id, status="stopped")
     return JSONResponse({"ok": True, "action": "stop"})
-
-
-@router.post("/session/{session_id}/pause")
-async def dashboard_pause_session(session_id: str):
-    agent = get_live_agent(session_id)
-    if agent is None:
-        return JSONResponse({"ok": False, "error": "Session is not running."}, status_code=409)
-    try:
-        agent.pause()
-        set_activity(session_id, "Paused", spin=False)
-    except Exception:
-        logger.warning("agent.pause() failed for %s", session_id, exc_info=True)
-        return JSONResponse({"ok": False, "error": "Pause failed."}, status_code=500)
-    return JSONResponse({"ok": True, "action": "pause"})
-
-
-@router.post("/session/{session_id}/resume")
-async def dashboard_resume_session(session_id: str):
-    agent = get_live_agent(session_id)
-    if agent is None:
-        return JSONResponse({"ok": False, "error": "Session is not running."}, status_code=409)
-    try:
-        agent.resume()
-        set_activity(session_id, "Running actions")
-    except Exception:
-        logger.warning("agent.resume() failed for %s", session_id, exc_info=True)
-        return JSONResponse({"ok": False, "error": "Resume failed."}, status_code=500)
-    return JSONResponse({"ok": True, "action": "resume"})
 
 
 @router.get("/profiles", response_class=HTMLResponse)

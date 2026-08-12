@@ -483,7 +483,6 @@ Browser Use Pi{% endblock %} {% block head %}
     <div class="panel-head feed-head">
       <span>Live Feed</span>
       <span class="feed-btns" style="display: flex; gap: 6px">
-        <button id="pause-btn" class="feed-btn" title="Pause / resume the agent" style="display: none">⏸ Pause</button>
         <button id="stop-btn" class="feed-btn stop" title="Stop the agent (saves partial output)" style="display: none">⏹ Stop</button>
         <button id="copy-json" class="feed-btn" title="Copy the full step-by-step log as JSON">
           {} Copy JSON
@@ -728,15 +727,9 @@ Browser Use Pi{% endblock %} {% block head %}
   };
 
   const stopBtn = document.getElementById("stop-btn");
-  const pauseBtn = document.getElementById("pause-btn");
-  let paused = false;
 
   function syncControls() {
-    const live = !TERMINAL.includes(lastStatus);
-    stopBtn.style.display = live ? "inline-block" : "none";
-    pauseBtn.style.display = live ? "inline-block" : "none";
-    paused = !!(activityState && /paus/i.test(activityState.label || ""));
-    pauseBtn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+    stopBtn.style.display = TERMINAL.includes(lastStatus) ? "none" : "inline-block";
   }
 
   stopBtn.onclick = async function () {
@@ -745,17 +738,6 @@ Browser Use Pi{% endblock %} {% block head %}
     try {
       await fetch("/session/" + SESSION_ID + "/stop", { method: "POST" });
       flash(btn, "Stopping…");
-    } catch (e) {} finally {
-      btn.disabled = false;
-    }
-  };
-
-  pauseBtn.onclick = async function () {
-    const btn = this;
-    const action = paused ? "resume" : "pause";
-    btn.disabled = true;
-    try {
-      await fetch("/session/" + SESSION_ID + "/" + action, { method: "POST" });
     } catch (e) {} finally {
       btn.disabled = false;
     }

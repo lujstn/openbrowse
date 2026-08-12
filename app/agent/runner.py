@@ -346,6 +346,20 @@ async def _coerce_to_schema(output: Any, model: type, llm: Any) -> tuple[str, bo
         return (output if isinstance(output, str) else json.dumps(output)), False
 
 
+def _validate_only(output: Any, model: type) -> bool:
+    """Validate against the model with NO LLM reformat — the store is already per-item
+    validated, so a top-level miss must never trigger a rewrite that could fabricate.
+    """
+    try:
+        if isinstance(output, str):
+            model.model_validate_json(output)
+        else:
+            model.model_validate(output)
+        return True
+    except Exception:
+        return False
+
+
 _CODE_ACTIONS = ("evaluate", "find_", "search_page")
 
 
@@ -620,7 +634,7 @@ async def run_agent_session(session_id: str) -> None:
         register_fetch_tool(tools)
         register_code_tools(tools, clipboard)
         register_clipboard_tools(tools, clipboard)
-        register_tab_tools(tools, tab_manager)
+        register_tab_tools(tools, tab_manager, clipboard)
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
 
@@ -836,6 +850,7 @@ async def run_agent_session(session_id: str) -> None:
             "tools": tools,
             "calculate_cost": True,
             "llm_timeout": 180,
+            "max_actions_per_step": 1,
         }
         extension_parts = [
             system_prompt_extension,
@@ -872,13 +887,16 @@ async def run_agent_session(session_id: str) -> None:
         except Exception:
             logger.debug("result.json read from agent.file_system failed", exc_info=True)
         done_output = history.final_result() or ""
-        if store is not None and not store.is_empty():
+        from_store = store is not None and not store.is_empty()
+        if from_store:
             output = store.read_output()
         else:
             output = done_output or file_output
 
         schema_valid = True
-        if output_model is not None:
+        if output_model is not None and from_store:
+            schema_valid = _validate_only(output, output_model)
+        elif output_model is not None:
             output, schema_valid = await _coerce_to_schema(output, output_model, llm)
             if not schema_valid and done_output and file_output and file_output != done_output:
                 alt, alt_valid = await _coerce_to_schema(file_output, output_model, llm)
