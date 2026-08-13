@@ -1549,6 +1549,17 @@ def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) 
                     except Exception:
                         logger.debug("completeness gate event emit failed", exc_info=True)
                 listing = "\n- ".join(empties)
+                date_hint = ""
+                if any(
+                    any(k in e.lower() for k in ("posted", "published", "date"))
+                    for e in empties
+                ):
+                    date_hint = (
+                        "\n\nA posted/published date is usually NOT in the visible text — "
+                        "it is in the page's JSON-LD. In a script read it with: ld = await "
+                        "browser.frame_jsonld('<embed url part>'); "
+                        "row['postedAt'] = ld.get('datePosted') if ld else None."
+                    )
                 return ActionResult(
                     is_done=False,
                     extracted_content=(
@@ -1557,6 +1568,7 @@ def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) 
                         "record it with add_item / update_item / set_field. A blank is "
                         "only acceptable once you have looked where the information "
                         "should be and found it genuinely absent. Then call done again."
+                        + date_hint
                     ),
                 )
         return await original_done(params=params, file_system=file_system)
