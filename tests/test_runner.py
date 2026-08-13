@@ -233,6 +233,16 @@ async def test_lean_state_ineligible_passes_through(monkeypatch):
     assert calls["full"] == 1
 
 
+def test_lean_state_installs_on_real_browser_session():
+    from browser_use import BrowserSession
+
+    import app.agent.runner as runner_mod
+
+    session = BrowserSession(cdp_url="http://127.0.0.1:1")
+    runner_mod._install_lean_state(session, {"eligible": False})
+    assert session.get_browser_state_summary is not BrowserSession.get_browser_state_summary
+
+
 def test_store_only_actions_exclude_page_changers():
     from app.agent.runner import _STORE_ONLY_ACTIONS
 

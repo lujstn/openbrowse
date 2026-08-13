@@ -279,8 +279,9 @@ async def _read_one_page(
     """
     page: dict[str, Any] = {"url": url}
     frame_tid: str | None = None
-    deadline = asyncio.get_event_loop().time() + _PAGE_READY_TIMEOUT_S
-    while asyncio.get_event_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _PAGE_READY_TIMEOUT_S
+    while loop.time() < deadline:
         try:
             if url_contains:
                 frame_tid = await _match_frame_target(
@@ -1269,6 +1270,7 @@ def register_tab_tools(
                     return ActionResult(
                         error="No urls given and no saved found_links — run find_links first."
                     )
+            dropped = max(0, len(urls) - _READ_PAGES_MAX)
             urls = urls[:_READ_PAGES_MAX]
             pages = await _read_pages_impl(
                 browser_session, urls, frame_url_contains, clipboard
@@ -1293,6 +1295,12 @@ def register_tab_tools(
             note = (
                 f"Read {ok_count} of {len(pages)} pages"
                 + (f"; full content saved to '{saved}'" if saved else "")
+                + (
+                    f". NOTE: {dropped} URL(s) beyond the {_READ_PAGES_MAX}-page cap "
+                    "were NOT read — call read_pages again with the remainder"
+                    if dropped
+                    else ""
+                )
                 + ".\n"
                 + "\n".join(lines)
                 + "\nNext: ONE run_code_file script that maps read_json('pages.json') "

@@ -208,7 +208,10 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
             include_recent_events=include_recent_events,
         )
 
-    browser_session.get_browser_state_summary = lean_get
+    # @nonobvious(forced-by): BrowserSession is a pydantic model with extra='forbid'
+    # and validate_assignment=True, so plain attribute assignment raises; only
+    # object.__setattr__ can shadow the method on the instance.
+    object.__setattr__(browser_session, "get_browser_state_summary", lean_get)
 
 
 class _CacheAwareChatOpenAI(ChatOpenAI):
