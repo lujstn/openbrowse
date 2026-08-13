@@ -205,6 +205,17 @@ async def _close_spawned_tab(browser_session: BrowserSession, target_id: str) ->
         logger.debug("_close_spawned_tab failed", exc_info=True)
 
 
+async def _focus_target(browser_session: BrowserSession, target_id: str | None) -> None:
+    if not target_id:
+        return
+    try:
+        evt = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=target_id))
+        await evt
+        await evt.event_result(raise_if_any=False, raise_if_none=False)
+    except Exception:
+        logger.debug("_focus_target failed", exc_info=True)
+
+
 async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str]]:
     cdp = await browser_session.get_or_create_cdp_session()
     targets = await cdp.cdp_client.send.Target.getTargets()
@@ -215,6 +226,23 @@ async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str
     ]
 
 
+def _url_discriminators(url: str) -> set[str]:
+    """Long, distinctive tokens from a page URL (query values and path segments)
+    that can re-identify the page's own embed among many — an embedded panel's URL
+    typically carries the record id from its host page's URL (e.g. a detail page
+    ``…?id=<uuid>`` framing ``…/vendor/<uuid>?embed=js``).
+    """
+    from urllib.parse import parse_qsl, urlparse
+
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return set()
+    tokens = {value for _, value in parse_qsl(parsed.query) if len(value) >= 8}
+    tokens |= {seg for seg in parsed.path.split("/") if len(seg) >= 8}
+    return {t.lower() for t in tokens}
+
+
 async def _match_frame_target(
     browser_session: BrowserSession,
     page_target_id: str,
@@ -222,6 +250,7 @@ async def _match_frame_target(
     claimed: set[str],
     baseline: set[str],
     allow_sole_candidate: bool = False,
+    page_url: str | None = None,
 ) -> str | None:
     """The OOPIF target belonging to ``page_target_id`` whose URL contains
     ``url_contains``. Ownership is resolved by matching the global iframe-target
@@ -257,6 +286,7 @@ async def _match_frame_target(
     except Exception:
         logger.debug("_match_frame_target: iframe src read failed", exc_info=True)
 
+    discriminators = _url_discriminators(page_url or "")
     candidates: list[dict[str, str]] = []
     for t in await _iframe_targets(browser_session):
         tid, turl = t["targetId"], t["url"]
@@ -264,6 +294,9 @@ async def _match_frame_target(
             continue
         if needle and needle not in turl.lower():
             continue
+        low = turl.lower()
+        if any(token in low for token in discriminators):
+            return tid
         if turl in tree_urls:
             return tid
         for src in srcs:
@@ -277,9 +310,90 @@ async def _match_frame_target(
     return None
 
 
+_COUNT_LINKS_JS = "document.querySelectorAll('a[href]').length"
+_SCROLL_BOTTOM_JS = "window.scrollTo(0, document.body ? document.body.scrollHeight : 0)"
+_LAZY_MAX_ROUNDS = 8
+_LAZY_POLL_S = 0.6
+
+
+async def _settle_lazy_links(
+    browser_session: BrowserSession, frame_url_contains: str | None
+) -> None:
+    """Coax a lazily-populating listing into showing everything before links are
+    collected: repeatedly scroll the main page and any matching embedded frame to
+    the bottom, and only proceed once the link count has stopped growing for two
+    consecutive polls. Listings (and their embeds) commonly append items on scroll
+    or a second after first paint, so collecting immediately under-counts. The main
+    page's scroll position is restored afterwards.
+    """
+    needle = (frame_url_contains or "").lower()
+
+    async def _matching_frames() -> list[str]:
+        if not needle:
+            return []
+        return [
+            t["targetId"]
+            for t in await _iframe_targets(browser_session)
+            if needle in t["url"].lower()
+        ]
+
+    async def _count() -> int:
+        total = 0
+        try:
+            total += int(await _eval_js(browser_session, _COUNT_LINKS_JS) or 0)
+        except Exception:
+            logger.debug("_settle_lazy_links: main count failed", exc_info=True)
+        for tid in await _matching_frames():
+            try:
+                total += int(
+                    await _eval_on_target(browser_session, tid, _COUNT_LINKS_JS) or 0
+                )
+            except Exception:
+                logger.debug("_settle_lazy_links: frame count failed", exc_info=True)
+        return total
+
+    async def _scroll_all() -> None:
+        try:
+            await _eval_js(browser_session, _SCROLL_BOTTOM_JS)
+        except Exception:
+            logger.debug("_settle_lazy_links: main scroll failed", exc_info=True)
+        for tid in await _matching_frames():
+            try:
+                await _eval_on_target(browser_session, tid, _SCROLL_BOTTOM_JS)
+            except Exception:
+                logger.debug("_settle_lazy_links: frame scroll failed", exc_info=True)
+
+    original_y = 0
+    try:
+        original_y = int(await _eval_js(browser_session, "window.scrollY") or 0)
+    except Exception:
+        logger.debug("_settle_lazy_links: scrollY read failed", exc_info=True)
+
+    stable = 0
+    last = await _count()
+    for _ in range(_LAZY_MAX_ROUNDS):
+        await _scroll_all()
+        await asyncio.sleep(_LAZY_POLL_S)
+        current = await _count()
+        if current == last:
+            stable += 1
+            if stable >= 2:
+                break
+        else:
+            stable = 0
+            last = current
+
+    try:
+        await _eval_js(browser_session, f"window.scrollTo(0, {original_y})")
+    except Exception:
+        logger.debug("_settle_lazy_links: scroll restore failed", exc_info=True)
+
+
 _READ_PAGES_MAX = 48
 _READ_PAGES_TEXT_CAP = 60_000
-_PAGE_READY_TIMEOUT_S = 18.0
+# @nonobvious(means): measured live — a heavy marketing page took ~12s to DOMContentLoaded
+# with its embed rendering ~2.5s later, so 18s left almost no margin.
+_PAGE_READY_TIMEOUT_S = 25.0
 _MIN_PAGE_TEXT_CHARS = 200
 _JSONLD_GRACE_S = 3.0
 
@@ -318,6 +432,7 @@ async def _read_one_page(
                     claimed,
                     baseline,
                     allow_sole_candidate,
+                    page_url=url,
                 )
                 if frame_tid:
                     txt = await _eval_on_target(browser_session, frame_tid, _BODY_TEXT_JS)
@@ -370,11 +485,13 @@ async def _read_one_page(
     except Exception as e:
         page["error"] = f"{type(e).__name__}: {e}"
         return page
-    if not (page.get("text") or "").strip():
+    if url_contains and not frame_tid:
         page["error"] = (
-            "no readable text rendered"
-            + (" (no matching embedded panel found)" if url_contains and not frame_tid else "")
+            "no embedded panel matching "
+            f"'{url_contains}' rendered — the main document was NOT read in its place"
         )
+    elif not (page.get("text") or "").strip():
+        page["error"] = "no readable text rendered"
     return page
 
 
@@ -385,12 +502,17 @@ async def _read_pages_impl(
     clipboard: dict[str, Any] | None,
     concurrency: int = 4,
 ) -> list[dict[str, Any]]:
-    """Read many pages concurrently: open a wave of background tabs so they load in
-    parallel, read each in turn, close the wave, repeat; then retry failures once
-    one at a time. Every successfully read URL is marked visited.
+    """Read many pages concurrently: open a wave of tabs so they load in parallel,
+    then focus and read each in turn (visible in the live view, like a human walking
+    their opened tabs), close the wave, repeat. Failures are retried once one at a
+    time, and a page whose JSON-LD is missing while sibling pages produced JSON-LD
+    gets one hard re-navigate too — a slow injection needs a fresh load, not a
+    longer stare. Focus returns to the starting tab at the end; read URLs are
+    marked visited and dead ones recorded as read-failures.
     """
     concurrency = max(1, min(int(concurrency or 4), 8))
     baseline = {t["targetId"] for t in await _iframe_targets(browser_session)}
+    home_target = getattr(browser_session, "agent_focus_target_id", None)
     results: dict[str, dict[str, Any]] = {}
 
     async def _run_wave(wave: list[str]) -> None:
@@ -403,6 +525,7 @@ async def _read_pages_impl(
                 pairs.append((u, tid))
         claimed: set[str] = set()
         for u, tid in pairs:
+            await _focus_target(browser_session, tid)
             results[u] = await _read_one_page(
                 browser_session,
                 u,
@@ -415,17 +538,39 @@ async def _read_pages_impl(
         for _, tid in pairs:
             await _close_spawned_tab(browser_session, tid)
 
-    for i in range(0, len(urls), concurrency):
-        await _run_wave(urls[i : i + concurrency])
+    try:
+        for i in range(0, len(urls), concurrency):
+            await _run_wave(urls[i : i + concurrency])
 
-    retry = [u for u in urls if results.get(u, {}).get("error")]
-    for u in retry:
-        await _run_wave([u])
+        retry = [u for u in urls if results.get(u, {}).get("error")]
+        for u in retry:
+            await _run_wave([u])
+
+        any_jsonld = any(
+            p.get("jsonld") for p in results.values() if not p.get("error")
+        )
+        if any_jsonld:
+            for u in urls:
+                page = results.get(u) or {}
+                if page.get("error") or page.get("jsonld"):
+                    continue
+                if not (page.get("text") or "").strip():
+                    continue
+                before = results[u]
+                await _run_wave([u])
+                after = results.get(u) or {}
+                if after.get("error") or not after.get("jsonld"):
+                    results[u] = before
+    finally:
+        await _focus_target(browser_session, home_target)
 
     if clipboard is not None:
         visited = clipboard.setdefault("_visited", set())
+        failed = clipboard.setdefault("_read_failed", set())
         for u, page in results.items():
-            if not page.get("error"):
+            if page.get("error"):
+                failed.add(_norm_url(u))
+            else:
                 visited.add(_norm_url(u))
     return [results[u] for u in urls if u in results]
 
@@ -555,6 +700,8 @@ class _SandboxBrowser:
             urls = list((self._clipboard or {}).get("found_links") or [])
             if not urls:
                 raise ValueError("read_pages: no urls given and no saved found_links")
+        if frame_url_contains is None:
+            frame_url_contains = (self._clipboard or {}).get("found_links_frame")
         return await _read_pages_impl(
             self._session, list(urls), frame_url_contains, self._clipboard, concurrency
         )
@@ -902,8 +1049,16 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
         )
     except Exception as e:
         out = stdout.getvalue()
+        hint = ""
+        if "coroutine" in str(e).lower():
+            hint = (
+                "\nHint: browser.*, fetch, save_json, add_item/update_item/"
+                "update_items/set_field/mark_absent are async — call them with "
+                "await. read_json, read_output, coverage, remember and recall are "
+                "synchronous — call them WITHOUT await."
+            )
         tail = f"\n--- stdout ---\n{out}" if out else ""
-        return ActionResult(error=f"{type(e).__name__}: {e}{tail}"[:10000])
+        return ActionResult(error=f"{type(e).__name__}: {e}{hint}{tail}"[:10000])
 
     out = stdout.getvalue()
     total = len(out)
@@ -956,8 +1111,9 @@ def register_code_tools(
         "/ browser.wait_for_frame(url_contains) to read INSIDE a cross-origin embed "
         "on the CURRENT tab; browser.navigate(url, wait_for=None); fetch(url, ...) -> "
         ".status_code/.text/.json() (server-side, no CORS, never a site's backend "
-        "API); save_json(obj, name) / read_json(name) / open('name.json') for saved "
-        "files; pick_jsonld(raw) normalises JSON-LD that may be a list; remember/"
+        "API); await save_json(obj, name) to save; read_json(name) and "
+        "open('name.json') are SYNCHRONOUS (no await) for reading saved files; "
+        "pick_jsonld(raw) normalises JSON-LD that may be a list; remember/"
         "recall; and, when a schema output exists, await add_item(item) / await "
         "update_item(index, fields) / await update_items([{index, fields}, ...]) / "
         "await set_field(key, value) / await mark_absent(field, reason) / "
@@ -998,7 +1154,7 @@ def register_code_tools(
             await file_system.write_file(fn, json.dumps(obj, indent=2, default=str))
             return fn
 
-        async def _read_json(name: str) -> Any:
+        def _read_json(name: str) -> Any:
             fn = _normalise_fs_name(name, "json")
             file_obj = file_system.get_file(fn) or file_system.get_file(name)
             if file_obj is None:
@@ -1304,16 +1460,17 @@ def register_tab_tools(
 
     @tools.action(
         "Read MANY pages in ONE step — the fast way to cover a whole listing. Opens "
-        "the URLs in parallel background tabs, waits for each to render, reads them, "
-        "closes the tabs, and saves the results to pages.json: for each page {url, "
-        "title, text, jsonld, links} (pass frame_url_contains, e.g. 'embed', to read "
-        "each page's embedded/cross-origin panel — same value you matched in "
-        "find_links). Call with NO urls to read every link from your last find_links. "
-        "A posted/published date and other structured details usually live in the page's jsonld, not "
-        "its visible text. Next step after this: one run_code_file script that maps "
-        "read_json('pages.json') to rows, save_json(rows, 'items.json'), then "
-        "add_items_from_file('items.json'). Failed pages are retried once and "
-        "reported — every listed URL is covered, so no re-crawling is needed."
+        "the URLs in parallel tabs, waits for each to render, reads them, closes "
+        "them, and saves the results to pages.json: for each page {url, title, "
+        "text, jsonld, links}. Call with NO arguments after find_links: it reads "
+        "every found link and automatically reads inside the same embedded panel "
+        "your find_links matched (frame_url_contains carries over; pass it only to "
+        "override). A posted/published date and other structured details usually "
+        "live in the page's jsonld, not its visible text. Next step after this: one "
+        "run_code_file script that maps read_json('pages.json') to rows, "
+        "save_json(rows, 'items.json'), then add_items_from_file('items.json'). "
+        "Failed pages are retried once and reported — every listed URL is covered, "
+        "so no re-crawling is needed."
     )
     async def read_pages(
         browser_session: BrowserSession,
@@ -1328,6 +1485,8 @@ def register_tab_tools(
                     return ActionResult(
                         error="No urls given and no saved found_links — run find_links first."
                     )
+            if frame_url_contains is None:
+                frame_url_contains = clipboard.get("found_links_frame")
             dropped = max(0, len(urls) - _READ_PAGES_MAX)
             urls = urls[:_READ_PAGES_MAX]
             pages = await _read_pages_impl(
@@ -1348,6 +1507,7 @@ def register_tab_tools(
                     lines.append(
                         f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
                         f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
+                        f"frame {'yes' if p.get('frame_matched') else 'no'}, "
                         f"{len(p.get('links') or [])} links"
                     )
             note = (
@@ -1476,6 +1636,11 @@ def register_tab_tools(
                 "href_regex, frame_url_contains, container_index, or attr."
             )
         try:
+            await _settle_lazy_links(browser_session, frame_url_contains)
+            try:
+                await browser_session.get_browser_state_summary(include_screenshot=False)
+            except Exception:
+                logger.debug("find_links: post-settle state refresh failed", exc_info=True)
             selector_map = await browser_session.get_selector_map()
             current = await _eval_js(browser_session, "window.location.href") or ""
 
@@ -1556,6 +1721,7 @@ def register_tab_tools(
             return ActionResult(error=f"find_links failed: {type(e).__name__}: {e}")
 
         clipboard["found_links"] = [link["href"] for link in links]
+        clipboard["found_links_frame"] = frame_url_contains
         saved: str | None = "found_links.json"
         try:
             await file_system.write_file(saved, json.dumps(links, indent=2))
@@ -1826,13 +1992,17 @@ def _absence_unearned(
     visited: set = (
         clipboard.setdefault("_visited", set()) if clipboard is not None else set()
     )
-    unread = [u for u in urls if _norm_url(u) not in visited]
-    if len(unread) * 5 > len(urls):
+    failed: set = (
+        clipboard.setdefault("_read_failed", set()) if clipboard is not None else set()
+    )
+    looked = visited | failed
+    unread = [u for u in urls if _norm_url(u) not in looked]
+    if unread:
         return (
             f"Cannot mark '{field}' absent yet — {len(unread)} of {len(urls)} item "
             f"pages have not been read (e.g. {unread[0]}). Absence has to be "
-            "observed: read_pages() covers them all in one step, then mark it "
-            "absent if the value is genuinely not there."
+            "observed on every item's page: read_pages() covers them all in one "
+            "step, then mark it absent if the value is genuinely not there."
         )
     return None
 

@@ -332,6 +332,8 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     closed: list[str] = []
     fail_once = {"https://x.com/2"}
 
+    focused: list[str] = []
+
     async def fake_iframe_targets(session):
         return []
 
@@ -341,6 +343,9 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
 
     async def fake_close(session, tid):
         closed.append(tid)
+
+    async def fake_focus(session, tid):
+        focused.append(tid)
 
     sole_flags: list[bool] = []
 
@@ -356,6 +361,7 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
     monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
     monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
     monkeypatch.setattr(tools_mod, "_read_one_page", fake_read_one)
 
     urls = [f"https://x.com/{i}" for i in range(5)]
@@ -367,7 +373,84 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     assert len(spawned) == 6
     assert len(closed) == 6
     assert len(clipboard["_visited"]) == 5
+    assert clipboard["_read_failed"] == set()
+    assert len(focused) >= 6
     assert sole_flags == [False, False, False, False, True, True]
+
+
+async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+
+    reads: list[str] = []
+    dead = "https://x.com/dead"
+    slow_ld = "https://x.com/slow"
+
+    async def fake_iframe_targets(session):
+        return []
+
+    async def fake_spawn(session, url):
+        return "tid"
+
+    async def fake_close(session, tid):
+        pass
+
+    async def fake_focus(session, tid):
+        pass
+
+    async def fake_read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        reads.append(url)
+        if url == dead:
+            return {"url": url, "error": "no embedded panel matching 'embed' rendered"}
+        jsonld = {"datePosted": "2026-08-04"}
+        if url == slow_ld and reads.count(url) < 2:
+            jsonld = None
+        return {"url": url, "text": "body " * 60, "jsonld": jsonld, "links": []}
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(tools_mod, "_read_one_page", fake_read_one)
+
+    urls = ["https://x.com/ok", slow_ld, dead]
+    clipboard: dict = {}
+    pages = await tools_mod._read_pages_impl(None, urls, "embed", clipboard, concurrency=4)
+
+    by_url = {p["url"]: p for p in pages}
+    assert by_url[dead].get("error")
+    assert by_url[slow_ld]["jsonld"] == {"datePosted": "2026-08-04"}
+    assert tools_mod._norm_url(dead) in clipboard["_read_failed"]
+    assert tools_mod._norm_url(slow_ld) in clipboard["_visited"]
+
+
+def test_url_discriminators_extracts_long_tokens() -> None:
+    from app.agent.tools import _url_discriminators
+
+    tokens = _url_discriminators(
+        "https://www.example.com/listings/category-x?item_id=3dee50f9-717b-4311&ref=ab"
+    )
+    assert "3dee50f9-717b-4311" in tokens
+    assert "category-x" in tokens
+    assert "ab" not in tokens
+    assert _url_discriminators("") == set()
+
+
+async def test_mark_absent_accepts_read_failures_as_looked() -> None:
+    from app.agent.tools import _absence_unearned
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200})
+
+    clipboard: dict = {"_visited": {"https://x.com/a"}}
+    assert _absence_unearned(store, clipboard, "description") is not None
+
+    clipboard["_read_failed"] = {"https://x.com/b"}
+    assert _absence_unearned(store, clipboard, "description") is None
 
 
 async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> None:
@@ -391,7 +474,9 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
             return "complete"
         return "Job title"
 
-    async def fake_match(session, tid, needle, claimed, baseline, allow_sole=False):
+    async def fake_match(
+        session, tid, needle, claimed, baseline, allow_sole=False, page_url=None
+    ):
         return "frame-1"
 
     monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)

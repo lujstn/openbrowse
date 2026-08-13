@@ -37,7 +37,9 @@ _CARD_TAG_NAMES = (
 # form Claude emits mid-degeneration; without it those tags survive as literal text.
 _TAG_BLEED_RE = re.compile(r'<(/?)\s*(' + "|".join(_CARD_TAG_NAMES) + r')"?\s*>')
 _INVOKE_RESTART_RE = re.compile(r"<invoke\b", re.IGNORECASE)
-_TAG_JUNK_RE = re.compile(r"</?(?:invoke|parameter)\b[^>]*>", re.IGNORECASE)
+# @nonobvious(deliberately-missing): 'action' is NOT in the junk pattern — hoist_leaked_action
+# needs the <action> tags intact to locate a leaked payload before they are stripped.
+_TAG_JUNK_RE = re.compile(r"</?(?:invoke|parameter|AgentOutput)\b[^>]*>", re.IGNORECASE)
 
 
 def _first_json_array(text: str) -> str | None:
