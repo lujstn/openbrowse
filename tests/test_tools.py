@@ -174,7 +174,14 @@ def test_bare_stub_count_no_url_field() -> None:
 
 class _FakeFileSystem:
     def __init__(self) -> None:
+        import tempfile
+        from pathlib import Path
+
         self.files: dict[str, str] = {}
+        self._dir = Path(tempfile.mkdtemp())
+
+    def get_dir(self):
+        return self._dir
 
     async def write_file(self, name: str, content: str) -> None:
         self.files[name] = content
@@ -289,6 +296,8 @@ def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
 
 
 async def test_store_bridge_writes_and_mirrors() -> None:
+    import asyncio
+
     from app.agent.tools import _store_bridge
 
     store = _items_store()
@@ -300,6 +309,8 @@ async def test_store_bridge_writes_and_mirrors() -> None:
         {"title": "A", "sourceUrl": "https://x.com/1", "description": "d" * 200}
     )
     assert "Added item #0" in msg
+    assert (fs.get_dir() / "output.json").exists()
+    await asyncio.sleep(0)
     assert "output.json" in fs.files
 
     msg = await bridge["update_item"](0, {"description": "e" * 200})
@@ -425,6 +436,213 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
     assert by_url[slow_ld]["jsonld"] == {"datePosted": "2026-08-04"}
     assert tools_mod._norm_url(dead) in clipboard["_read_failed"]
     assert tools_mod._norm_url(slow_ld) in clipboard["_visited"]
+
+
+def _draft_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "sellerDescription": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "condition": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["NEW", "USED"]},
+                                {"type": "null"},
+                            ]
+                        },
+                        "extra": {
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "key": {"type": "string"},
+                                            "value": {"type": "string"},
+                                        },
+                                    },
+                                },
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "T"))
+
+
+def test_draft_row_maps_jsonld_deterministically() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _draft_store()
+    page = {
+        "url": "https://x.com/listings?id=abc12345",
+        "title": "Widget One | Store",
+        "text": "t" * 500,
+        "jsonld": {
+            "@type": "Product",
+            "title": "Widget One",
+            "description": "<p>Great &amp; sturdy.</p><p>Second para.</p>",
+            "datePosted": "2026-08-04",
+            "employmentType": "FULL_TIME",
+            "validThrough": "2026-12-01",
+        },
+    }
+    row = _draft_row(store, page)
+    assert row["sourceUrl"] == "https://x.com/listings?id=abc12345"
+    assert row["title"] == "Widget One"
+    assert row["postedAt"] == "2026-08-04"
+    assert "Great & sturdy." in row["description"]
+    assert "<p>" not in row["description"]
+    assert "sellerDescription" not in row
+    extra_keys = {e["key"] for e in row.get("extra") or []}
+    assert "validThrough" in extra_keys
+    assert "condition" not in row
+
+    ok, msg = store.add_item(row)
+    assert ok is True, msg
+
+
+def test_draft_row_falls_back_to_page_text_and_invents_nothing() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _draft_store()
+    page = {"url": "https://x.com/a", "title": "Bare page", "text": "body " * 100, "jsonld": None}
+    row = _draft_row(store, page)
+    assert row["sourceUrl"] == "https://x.com/a"
+    assert row["title"] == "Bare page"
+    assert row["description"].startswith("body")
+    assert "postedAt" not in row and "condition" not in row
+
+
+def test_strip_html_preserves_paragraphs() -> None:
+    from app.agent.tools import _strip_html
+
+    out = _strip_html("<p>One</p><p>Two &amp; three</p><br>Four")
+    assert "One" in out and "Two & three" in out
+    assert "<" not in out
+    assert "\n" in out
+
+
+def test_awaitable_helpers_work_with_and_without_await() -> None:
+    import asyncio
+
+    from app.agent.tools import _AwaitableStr, _awaitable
+
+    async def _check():
+        s = _AwaitableStr("hello")
+        assert s == "hello"
+        assert await s == "hello"
+        d = _awaitable({"a": 1})
+        assert d["a"] == 1
+        assert (await d)["a"] == 1
+        lst = _awaitable([1, 2])
+        assert lst[0] == 1
+        assert (await lst) == [1, 2]
+
+    asyncio.run(_check())
+
+
+async def test_save_json_persists_without_await(tmp_path) -> None:
+    from browser_use import Tools
+
+    from app.agent.tools import register_code_tools
+
+    class _DirFileSystem(_FakeFileSystem):
+        def __init__(self, base) -> None:
+            super().__init__()
+            self._base = base
+
+        def get_dir(self):
+            return self._base
+
+    tools = Tools()
+    register_code_tools(tools, {}, _jobs_store_or_none())
+    fs = _DirFileSystem(tmp_path)
+    entry = tools.registry.registry.actions["run_code_file"]
+    params = entry.param_model(
+        name="t", code="x = save_json({'k': 1}, 'made.json')\nprint(read_json('made.json'))"
+    )
+    import types
+
+    result = await entry.function(
+        params=params, browser_session=types.SimpleNamespace(), file_system=fs
+    )
+    assert not result.error, result.error
+    assert (tmp_path / "made.json").exists()
+    assert "'k': 1" in result.extracted_content
+
+
+def _jobs_store_or_none():
+    return None
+
+
+async def test_read_pages_impl_reports_progress(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def fake_iframe_targets(session):
+        return []
+
+    async def fake_spawn(session, url):
+        return "tid"
+
+    async def fake_close(session, tid):
+        pass
+
+    async def fake_focus(session, tid):
+        pass
+
+    async def fake_read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(tools_mod, "_read_one_page", fake_read_one)
+
+    events: list[str] = []
+
+    async def progress(msg: str) -> None:
+        events.append(msg)
+
+    urls = [f"https://x.com/{i}" for i in range(5)]
+    await tools_mod._read_pages_impl(None, urls, None, {}, concurrency=2, progress=progress)
+    assert any("3 wave(s)" in e for e in events)
+    assert sum(1 for e in events if "wave " in e) == 3
+
+
+def test_find_links_offhost_flagging_helper() -> None:
+    from collections import Counter
+    from urllib.parse import urlparse
+
+    links = [
+        {"href": "https://www.x.com/a"},
+        {"href": "https://x.com/b"},
+        {"href": "https://x.com/c"},
+        {"href": "https://www.other.com/brand"},
+    ]
+    hosts = [urlparse(link["href"]).netloc.lower().removeprefix("www.") for link in links]
+    majority = Counter(h for h in hosts if h).most_common(1)[0][0]
+    flagged = [link for link, h in zip(links, hosts) if h and h != majority]
+    assert majority == "x.com"
+    assert [f["href"] for f in flagged] == ["https://www.other.com/brand"]
 
 
 def test_url_discriminators_extracts_long_tokens() -> None:

@@ -65,12 +65,13 @@ _TOOLS_EASIEST_EXTENSION = (
     "path: (1) find_links(...) collects a listing's links with a selector "
     "(href_contains, href_regex, frame_url_contains, container_index, attr) — the "
     "only action that reads links inside an embedded/cross-origin panel; (2) "
-    "read_pages() reads every found link in parallel tabs in ONE step and saves "
-    "{url, title, text, jsonld, links} per page to pages.json — dates and other "
-    "structured details usually live in the jsonld, not the visible text; (3) one run_code_file script "
-    "maps pages.json to schema rows and save_json's them; (4) add_items_from_file "
-    "loads them all; (5) mark_absent any field the pages genuinely do not publish, "
-    "then done. A record's real detail lives only on its own page, never the "
+    "read_pages() reads every found link in parallel tabs in ONE step, saves "
+    "{url, title, text, jsonld, links} per page to pages.json AND prefills "
+    "rows_draft.json with one schema row per page; (3) "
+    "add_items_from_file('rows_draft.json') loads them all — write NO mapping "
+    "script; (4) fix judgement fields (e.g. an enum implied by prose) in ONE "
+    "update_items call; (5) mark_absent any field the pages genuinely do not "
+    "publish, then done. A record's real detail lives only on its own page, never the "
     "listing — add_item refuses more than two listing items with no detail. Use "
     "open_tabs/goto_tab/open_in_new_tab/close_tab only when you must interact with "
     "a page; find_elements and evaluate see only the MAIN page, while a script can "
@@ -755,10 +756,21 @@ async def run_agent_session(session_id: str) -> None:
         if output_model is not None:
             store = OutputStore(output_model)
 
+        async def _read_progress(label: str) -> None:
+            set_activity(session_id, label, spin=True)
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "read", "action": "read_pages"}),
+                summary=label[:200],
+                count_step=False,
+            )
+
         register_fetch_tool(tools)
         register_code_tools(tools, clipboard, store)
         register_clipboard_tools(tools, clipboard)
-        register_tab_tools(tools, tab_manager, clipboard)
+        register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
 

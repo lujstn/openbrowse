@@ -1,14 +1,18 @@
 """Custom browser-use tools — Capsolver CAPTCHA solving, Python sandbox, HTTP fetch."""
 
 import asyncio
+import html as html_lib
 import json
 import logging
 import re
+from collections import Counter
 from pathlib import Path
-from typing import Any
-from urllib.parse import urljoin
+from typing import Any, get_args, get_origin
+from urllib.parse import urljoin, urlparse
 
 import httpx
+from pydantic import BaseModel, TypeAdapter
+
 from browser_use import ActionResult, BrowserSession, Tools
 from browser_use.browser.events import (
     CloseTabEvent,
@@ -18,7 +22,12 @@ from browser_use.browser.events import (
 )
 from browser_use.filesystem.file_system import FileSystem
 
-from app.agent.output_store import OutputStore
+from app.agent.output_store import (
+    OutputStore,
+    _coerce_scalar,
+    _name_tokens,
+    _peel_optional,
+)
 from app.agent.textguard import guard_key
 from app.config import settings
 
@@ -495,12 +504,22 @@ async def _read_one_page(
     return page
 
 
+async def _emit_progress(progress: Any, message: str) -> None:
+    if progress is None:
+        return
+    try:
+        await progress(message)
+    except Exception:
+        logger.debug("_emit_progress failed", exc_info=True)
+
+
 async def _read_pages_impl(
     browser_session: BrowserSession,
     urls: list[str],
     url_contains: str | None,
     clipboard: dict[str, Any] | None,
     concurrency: int = 4,
+    progress: Any = None,
 ) -> list[dict[str, Any]]:
     """Read many pages concurrently: open a wave of tabs so they load in parallel,
     then focus and read each in turn (visible in the live view, like a human walking
@@ -539,10 +558,26 @@ async def _read_pages_impl(
             await _close_spawned_tab(browser_session, tid)
 
     try:
-        for i in range(0, len(urls), concurrency):
+        total_waves = (len(urls) + concurrency - 1) // concurrency
+        await _emit_progress(
+            progress,
+            f"read_pages: {len(urls)} page(s) in {total_waves} wave(s) of up to {concurrency} tabs",
+        )
+        for wave_no, i in enumerate(range(0, len(urls), concurrency), start=1):
             await _run_wave(urls[i : i + concurrency])
+            done = [results.get(u, {}) for u in urls[: i + concurrency] if u in results]
+            ok = sum(1 for p in done if not p.get("error"))
+            await _emit_progress(
+                progress,
+                f"read_pages wave {wave_no}/{total_waves}: {ok} of {len(done)} pages ok, "
+                f"{sum(1 for p in done if p.get('frame_matched'))} frames matched",
+            )
 
         retry = [u for u in urls if results.get(u, {}).get("error")]
+        if retry:
+            await _emit_progress(
+                progress, f"read_pages: retrying {len(retry)} failed page(s) one at a time"
+            )
         for u in retry:
             await _run_wave([u])
 
@@ -1015,6 +1050,60 @@ async def _inject_token(
         )
 
 
+class _AwaitableStr(str):
+    """A plain string that also tolerates being awaited, so a helper that completes
+    its work synchronously accepts both call styles — ``save_json(...)`` and
+    ``await save_json(...)`` — and an un-awaited call can never silently lose work.
+    """
+
+    def __await__(self):
+        async def _identity() -> str:
+            return str(self)
+
+        return _identity().__await__()
+
+
+class _AwaitableDict(dict):
+    def __await__(self):
+        async def _identity() -> dict:
+            return dict(self)
+
+        return _identity().__await__()
+
+
+class _AwaitableList(list):
+    def __await__(self):
+        async def _identity() -> list:
+            return list(self)
+
+        return _identity().__await__()
+
+
+def _awaitable(value: Any) -> Any:
+    """Wrap a plain result so both ``x = helper(...)`` and ``x = await helper(...)``
+    behave identically for the sandbox's synchronous helpers.
+    """
+    if isinstance(value, dict):
+        return _AwaitableDict(value)
+    if isinstance(value, list):
+        return _AwaitableList(value)
+    if isinstance(value, str):
+        return _AwaitableStr(value)
+    return value
+
+
+def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> None:
+    """Write a FileSystem file so it exists on disk IMMEDIATELY, then schedule the
+    official async write to keep browser-use's in-memory file registry in step —
+    an un-awaited async write used to vanish silently, taking the file with it.
+    """
+    (file_system.get_dir() / name).write_text(content)
+    try:
+        asyncio.get_running_loop().create_task(file_system.write_file(name, content))
+    except Exception:
+        logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
+
+
 async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult:
     """Compile and run one script against the persistent sandbox namespace, capturing
     stdout to a small preview. Shared by ``run_code_file`` — the only executor.
@@ -1049,13 +1138,20 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
         )
     except Exception as e:
         out = stdout.getvalue()
+        err_text = str(e).lower()
         hint = ""
-        if "coroutine" in str(e).lower():
+        if "event loop is already running" in err_text:
             hint = (
-                "\nHint: browser.*, fetch, save_json, add_item/update_item/"
-                "update_items/set_field/mark_absent are async — call them with "
-                "await. read_json, read_output, coverage, remember and recall are "
-                "synchronous — call them WITHOUT await."
+                "\nHint: your code already runs inside a live event loop — write "
+                "top-level await directly; never use asyncio.run() or "
+                "loop.run_until_complete()."
+            )
+        elif "coroutine" in err_text or "can't be used in 'await'" in err_text:
+            hint = (
+                "\nHint: browser.* and fetch are async — call them with await. "
+                "save_json, read_json, add_item/update_item/update_items/set_field/"
+                "mark_absent, read_output, coverage, remember and recall all work "
+                "with OR without await."
             )
         tail = f"\n--- stdout ---\n{out}" if out else ""
         return ActionResult(error=f"{type(e).__name__}: {e}{hint}{tail}"[:10000])
@@ -1099,12 +1195,9 @@ def register_code_tools(
     @tools.action(
         "Write and run a Python script in ONE step: pass code= to save it to 'name' "
         "then execute it. Omit code= to re-run the already-saved 'name'. Pass url= to "
-        "navigate there first. THE FAST PATTERN for a listing: pages = await "
-        "browser.read_pages(urls, frame_url_contains='<embed url part>') reads every "
-        "detail page in parallel tabs and returns [{url, title, text, jsonld, links}]; "
-        "map each page to a row (a posted/published date lives in page['jsonld'] — "
-        "e.g. row['postedAt'] = (page['jsonld'] or {}).get('datePosted')), then "
-        "await save_json(rows, 'items.json') and add_items_from_file('items.json'). "
+        "navigate there first. You rarely need a script for extraction — the "
+        "read_pages ACTION already prefills rows_draft.json for "
+        "add_items_from_file; scripts are for unusual transforms only. "
         "Also available: browser.evaluate(js) / browser.get_html(selector=None) for "
         "the MAIN page; browser.frames() / browser.frame_text(url_contains) / "
         "browser.frame_jsonld(url_contains) / browser.frame_evaluate(url_contains, js) "
@@ -1149,17 +1242,20 @@ def register_code_tools(
                     error=f"navigate to {url} failed: {type(e).__name__}: {e}"
                 )
 
-        async def _save_json(obj: Any, name: str = "output.json") -> str:
+        def _save_json(obj: Any, name: str = "output.json") -> str:
             fn = _normalise_fs_name(name, "json")
-            await file_system.write_file(fn, json.dumps(obj, indent=2, default=str))
-            return fn
+            _write_fs_file_sync(file_system, fn, json.dumps(obj, indent=2, default=str))
+            return _AwaitableStr(fn)
 
         def _read_json(name: str) -> Any:
             fn = _normalise_fs_name(name, "json")
             file_obj = file_system.get_file(fn) or file_system.get_file(name)
-            if file_obj is None:
-                raise FileNotFoundError(f"No saved file named {name!r}")
-            return json.loads(file_obj.read())
+            if file_obj is not None:
+                return _awaitable(json.loads(file_obj.read()))
+            path = file_system.get_dir() / fn
+            if path.exists():
+                return _awaitable(json.loads(path.read_text()))
+            raise FileNotFoundError(f"No saved file named {name!r}")
 
         def _remember(key: str, value: Any) -> str:
             clipboard[str(key)] = value
@@ -1454,9 +1550,16 @@ class TabManager:
 
 
 def register_tab_tools(
-    tools: Tools, tab_manager: TabManager, clipboard: dict[str, Any]
+    tools: Tools,
+    tab_manager: TabManager,
+    clipboard: dict[str, Any],
+    store: OutputStore | None = None,
+    progress: Any = None,
 ) -> None:
-    """Register the lazy multi-tab fan-out actions on a Tools instance."""
+    """Register the multi-tab fan-out actions on a Tools instance. ``store`` lets
+    read_pages prefill rows_draft.json; ``progress`` is an async callable streaming
+    wave-by-wave read_pages progress to the session feed.
+    """
 
     @tools.action(
         "Read MANY pages in ONE step — the fast way to cover a whole listing. Opens "
@@ -1465,12 +1568,12 @@ def register_tab_tools(
         "text, jsonld, links}. Call with NO arguments after find_links: it reads "
         "every found link and automatically reads inside the same embedded panel "
         "your find_links matched (frame_url_contains carries over; pass it only to "
-        "override). A posted/published date and other structured details usually "
-        "live in the page's jsonld, not its visible text. Next step after this: one "
-        "run_code_file script that maps read_json('pages.json') to rows, "
-        "save_json(rows, 'items.json'), then add_items_from_file('items.json'). "
-        "Failed pages are retried once and reported — every listed URL is covered, "
-        "so no re-crawling is needed."
+        "override). It ALSO prefills rows_draft.json — one schema row per page, "
+        "mapped from the page's jsonld and text — so afterwards you just "
+        "add_items_from_file('rows_draft.json'), fix judgement fields with "
+        "update_items, and mark_absent what the pages lack; write NO mapping "
+        "script. Failed pages are retried once and reported — every listed URL is "
+        "covered, so no re-crawling is needed."
     )
     async def read_pages(
         browser_session: BrowserSession,
@@ -1490,7 +1593,7 @@ def register_tab_tools(
             dropped = max(0, len(urls) - _READ_PAGES_MAX)
             urls = urls[:_READ_PAGES_MAX]
             pages = await _read_pages_impl(
-                browser_session, urls, frame_url_contains, clipboard
+                browser_session, urls, frame_url_contains, clipboard, progress=progress
             )
             saved: str | None = "pages.json"
             try:
@@ -1498,6 +1601,40 @@ def register_tab_tools(
             except Exception:
                 logger.warning("read_pages: failed to save pages.json", exc_info=True)
                 saved = None
+
+            draft_note = ""
+            if store is not None and store.item_model is not None:
+                drafts: list[dict[str, Any]] = []
+                thin = 0
+                for p in pages:
+                    if p.get("error"):
+                        continue
+                    if len((p.get("text") or "").strip()) < _MIN_PAGE_TEXT_CHARS:
+                        thin += 1
+                        continue
+                    row = _draft_row(store, p)
+                    if row:
+                        drafts.append(row)
+                if drafts:
+                    try:
+                        await file_system.write_file(
+                            "rows_draft.json", json.dumps(drafts, indent=2, default=str)
+                        )
+                        draft_note = (
+                            f"\nrows_draft.json prefilled with {len(drafts)} row(s) "
+                            "mapped from the pages"
+                            + (
+                                f" ({thin} thin page(s) skipped — probably not records)"
+                                if thin
+                                else ""
+                            )
+                            + ". Next: add_items_from_file('rows_draft.json'), then fix "
+                            "judgement fields (e.g. an enum implied by prose) in ONE "
+                            "update_items call, mark_absent what the pages genuinely "
+                            "lack, and done. No mapping script is needed."
+                        )
+                    except Exception:
+                        logger.warning("read_pages: failed to save rows_draft.json", exc_info=True)
             ok_count = sum(1 for p in pages if not p.get("error"))
             lines: list[str] = []
             for i, p in enumerate(pages):
@@ -1521,10 +1658,15 @@ def register_tab_tools(
                 )
                 + ".\n"
                 + "\n".join(lines)
-                + "\nNext: ONE run_code_file script that maps read_json('pages.json') "
-                "to schema rows (dates and structured details from page['jsonld']), save_json(rows, "
-                "'items.json'), then add_items_from_file('items.json'). Do not re-read "
-                "these pages."
+                + draft_note
+                + (
+                    ""
+                    if draft_note
+                    else "\nNext: ONE run_code_file script that maps "
+                    "read_json('pages.json') to schema rows (dates and structured "
+                    "details from page['jsonld']), save_json(rows, 'items.json'), "
+                    "then add_items_from_file('items.json'). Do not re-read these pages."
+                )
             )
             return ActionResult(
                 extracted_content=note,
@@ -1723,6 +1865,20 @@ def register_tab_tools(
         except Exception as e:
             return ActionResult(error=f"find_links failed: {type(e).__name__}: {e}")
 
+        offhost_count = 0
+        if len(links) >= 3:
+            hosts = [
+                urlparse(link["href"]).netloc.lower().removeprefix("www.")
+                for link in links
+            ]
+            counted = Counter(h for h in hosts if h)
+            if counted:
+                majority_host = counted.most_common(1)[0][0]
+                for link, host in zip(links, hosts):
+                    if host and host != majority_host:
+                        link["offhost"] = True
+                        offhost_count += 1
+
         clipboard["found_links"] = [link["href"] for link in links]
         clipboard["found_links_frame"] = frame_url_contains
         saved: str | None = "found_links.json"
@@ -1737,14 +1893,22 @@ def register_tab_tools(
                 f" Reuse the SAME frame_url_contains='{frame_url_contains}' you "
                 "matched here; do not look up the iframe's exact src."
             )
+        offhost_hint = ""
+        if offhost_count:
+            offhost_hint = (
+                f" {offhost_count} link(s) point at a different site than the rest "
+                "(marked offhost — probably navigation/branding); they are included, "
+                "so pass explicit urls to read_pages if you want to skip them."
+            )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
             + ". Next: call read_pages() with no args to read them ALL in one step — "
             "each item's detail (description, posted date and more) lives on its own "
-            "page, not this listing." + frame_hint + " Then one run_code_file script "
-            "maps pages.json to rows and add_items_from_file loads them. The links "
-            "stay in view below and via recall('found_links') — no need to re-read."
+            "page, not this listing." + frame_hint + offhost_hint
+            + " read_pages prefills rows_draft.json for add_items_from_file — no "
+            "mapping script needed. The links stay in view below and via "
+            "recall('found_links') — no need to re-read."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
@@ -1950,6 +2114,128 @@ def _bare_stub_count(store: OutputStore, visited: set) -> int:
     return sum(1 for it in arr if isinstance(it, dict) and _is_bare_stub(store, it, visited))
 
 
+def _strip_html(text: str) -> str:
+    """Visible text of an HTML fragment: block-level closers become newlines so
+    paragraph structure survives, remaining tags drop, entities unescape.
+    """
+    text = re.sub(r"</(?:p|div|li|ul|ol|h[1-6])>|<br\s*/?>", "\n", text or "", flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    text = re.sub(r"[ \t\r\f]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
+
+
+def _extra_style_field(store: OutputStore) -> tuple[str | None, str | None]:
+    """The item field meant for unmapped observables, if the schema has one:
+    a dict-typed field or a list of {key, value}-shaped objects. Returns
+    (field_name, 'dict'|'kv') or (None, None).
+    """
+    model = store.item_model
+    if model is None:
+        return None, None
+    for name, field in model.model_fields.items():
+        inner = _peel_optional(field.annotation)
+        origin = get_origin(inner)
+        if origin is dict:
+            return name, "dict"
+        if origin is list:
+            args = get_args(inner)
+            if args:
+                elem = _peel_optional(args[0])
+                if isinstance(elem, type) and issubclass(elem, BaseModel):
+                    elem_fields = set(elem.model_fields)
+                    if "value" in elem_fields and ("key" in elem_fields or "name" in elem_fields):
+                        return name, "kv"
+    return None, None
+
+
+def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
+    """A deterministically prefilled item row from one read page, so the model
+    reviews and judges instead of writing parsing code: the page URL fills the
+    item's own-URL field, JSON-LD scalars token-match onto schema fields
+    (datePosted -> postedAt), the description lands HTML-stripped, and leftover
+    observables go into the extra-style field. Every value is validated against
+    its field before inclusion and nothing absent from the page is invented.
+    """
+    model = store.item_model
+    if model is None:
+        return {}
+    fields = model.model_fields
+    row: dict[str, Any] = {}
+
+    def _try_set(fname: str, value: Any) -> bool:
+        if fname in row:
+            return False
+        annotation = fields[fname].annotation
+        coerced = _coerce_scalar(value, annotation)
+        try:
+            TypeAdapter(annotation).validate_python(coerced)
+        except Exception:
+            return False
+        row[fname] = coerced
+        return True
+
+    url_field = _item_url_field(store)
+    if url_field and page.get("url"):
+        _try_set(url_field, page["url"])
+
+    ld = page.get("jsonld") if isinstance(page.get("jsonld"), dict) else {}
+    used: set[str] = set()
+
+    desc_candidates = sorted(
+        (f for f in fields if "description" in f.lower()), key=len
+    )
+    desc_field = desc_candidates[0] if desc_candidates else None
+    desc = ld.get("description")
+    if isinstance(desc, str) and desc.strip():
+        used.add("description")
+        if desc_field:
+            _try_set(desc_field, _strip_html(desc))
+    elif desc_field and (page.get("text") or "").strip():
+        _try_set(desc_field, (page.get("text") or "")[:20000])
+
+    for key, value in ld.items():
+        if key in used or key.startswith("@"):
+            continue
+        if not isinstance(value, (str, int, float, bool)):
+            continue
+        key_tokens = _name_tokens(key)
+        if not key_tokens:
+            continue
+        best: tuple[int, str] | None = None
+        for fname in fields:
+            score = len(_name_tokens(fname) & key_tokens)
+            if score and (best is None or score > best[0]):
+                best = (score, fname)
+        if best and _try_set(best[1], value):
+            used.add(key)
+
+    title_candidates = [f for f in fields if "title" in f.lower() or f.lower() == "name"]
+    if title_candidates and title_candidates[0] not in row and page.get("title"):
+        _try_set(title_candidates[0], page["title"])
+
+    extra_field, extra_kind = _extra_style_field(store)
+    if extra_field and extra_field not in row:
+        leftovers = {
+            k: v
+            for k, v in ld.items()
+            if k not in used
+            and not k.startswith("@")
+            and isinstance(v, (str, int, float, bool))
+        }
+        if leftovers:
+            if extra_kind == "kv":
+                for key_name in ("key", "name"):
+                    shaped = [
+                        {key_name: k, "value": str(v)[:500]} for k, v in leftovers.items()
+                    ]
+                    if _try_set(extra_field, shaped):
+                        break
+            else:
+                _try_set(extra_field, {k: str(v)[:500] for k, v in leftovers.items()})
+    return row
+
+
 def _stub_block_msg(
     store: OutputStore, clipboard: dict[str, Any] | None, item: dict[str, Any]
 ) -> str | None:
@@ -2014,42 +2300,47 @@ def _store_bridge(
     store: OutputStore, clipboard: dict[str, Any], file_system: FileSystem
 ) -> dict[str, Any]:
     """Sandbox-side handles onto the output store, so a script can write the answer
-    directly with the same validation and stub-throttling as the store actions.
+    directly with the same validation and stub-throttling as the store actions. All
+    handles complete synchronously and tolerate await, so a missing ``await`` can
+    never silently drop a write.
     """
 
-    async def add_item(item: dict[str, Any]) -> str:
+    def _mirror() -> None:
+        _write_fs_file_sync(file_system, "output.json", store.read_output())
+
+    def add_item(item: dict[str, Any]) -> str:
         block = _stub_block_msg(store, clipboard, item)
         if block:
-            return block
+            return _AwaitableStr(block)
         ok, msg = store.add_item(item)
         if ok:
-            await _mirror_output(store, file_system)
-        return msg
+            _mirror()
+        return _AwaitableStr(msg)
 
-    async def update_item(index: int, fields: dict[str, Any]) -> str:
+    def update_item(index: int, fields: dict[str, Any]) -> str:
         ok, msg = store.update_item(index, fields)
         if ok:
-            await _mirror_output(store, file_system)
-        return msg
+            _mirror()
+        return _AwaitableStr(msg)
 
-    async def update_items(updates: list[dict[str, Any]]) -> str:
+    def update_items(updates: list[dict[str, Any]]) -> str:
         ok, msg = store.update_many(updates)
         if ok:
-            await _mirror_output(store, file_system)
-        return msg
+            _mirror()
+        return _AwaitableStr(msg)
 
-    async def set_field(key: str, value: Any) -> str:
+    def set_field(key: str, value: Any) -> str:
         ok, msg = store.set_field(key, value)
         if ok:
-            await _mirror_output(store, file_system)
-        return msg
+            _mirror()
+        return _AwaitableStr(msg)
 
-    async def mark_absent(field: str, reason: str) -> str:
+    def mark_absent(field: str, reason: str) -> str:
         unearned = _absence_unearned(store, clipboard, field)
         if unearned:
-            return unearned
+            return _AwaitableStr(unearned)
         _, msg = store.mark_absent(field, reason)
-        return msg
+        return _AwaitableStr(msg)
 
     return {
         "add_item": add_item,
@@ -2057,8 +2348,8 @@ def _store_bridge(
         "update_items": update_items,
         "set_field": set_field,
         "mark_absent": mark_absent,
-        "read_output": store.read_output,
-        "coverage": store.coverage_summary,
+        "read_output": lambda *a, **kw: _AwaitableStr(store.read_output(*a, **kw)),
+        "coverage": lambda: _AwaitableStr(store.coverage_summary()),
     }
 
 
