@@ -153,3 +153,98 @@ def test_openai_subclass_captures_cache_write(monkeypatch):
     result = llm._get_usage(types.SimpleNamespace(usage=usage))
     assert result.prompt_cached_tokens == 100
     assert result.prompt_cache_creation_tokens == 50
+
+
+def _cached_state(url: str = "https://x.com/jobs"):
+    from browser_use.browser.views import BrowserStateSummary
+    from browser_use.dom.views import SerializedDOMState
+
+    return BrowserStateSummary(
+        dom_state=SerializedDOMState(_root=None, selector_map={7: "node"}),
+        url=url,
+        title="Jobs",
+        tabs=[],
+    )
+
+
+def _fake_session(cached):
+    calls = {"full": 0}
+
+    async def full_fetch(
+        include_screenshot=True, cached=False, include_recent_events=False
+    ):
+        calls["full"] += 1
+        return "FULL"
+
+    session = types.SimpleNamespace(
+        get_browser_state_summary=full_fetch,
+        _cached_browser_state_summary=cached,
+    )
+    return session, calls
+
+
+async def test_lean_state_serves_stub_once_then_full(monkeypatch):
+    import app.agent.runner as runner_mod
+
+    session, calls = _fake_session(_cached_state())
+
+    async def fake_eval(sess, js):
+        return "https://x.com/jobs"
+
+    monkeypatch.setattr(runner_mod, "_eval_js", fake_eval)
+    flag = {"eligible": True}
+    runner_mod._install_lean_state(session, flag)
+
+    stub = await session.get_browser_state_summary()
+    assert stub != "FULL"
+    assert stub.state_error and "unchanged" in stub.state_error
+    assert stub.screenshot is None
+    assert stub.dom_state.selector_map == {7: "node"}
+    assert stub.url == "https://x.com/jobs"
+    assert flag["eligible"] is False
+    assert calls["full"] == 0
+
+    assert await session.get_browser_state_summary() == "FULL"
+    assert calls["full"] == 1
+
+
+async def test_lean_state_falls_through_on_url_change(monkeypatch):
+    import app.agent.runner as runner_mod
+
+    session, calls = _fake_session(_cached_state("https://x.com/jobs"))
+
+    async def fake_eval(sess, js):
+        return "https://x.com/other"
+
+    monkeypatch.setattr(runner_mod, "_eval_js", fake_eval)
+    flag = {"eligible": True}
+    runner_mod._install_lean_state(session, flag)
+    assert await session.get_browser_state_summary() == "FULL"
+    assert calls["full"] == 1
+
+
+async def test_lean_state_ineligible_passes_through(monkeypatch):
+    import app.agent.runner as runner_mod
+
+    session, calls = _fake_session(_cached_state())
+    flag = {"eligible": False}
+    runner_mod._install_lean_state(session, flag)
+    assert await session.get_browser_state_summary() == "FULL"
+    assert calls["full"] == 1
+
+
+def test_store_only_actions_exclude_page_changers():
+    from app.agent.runner import _STORE_ONLY_ACTIONS
+
+    for name in ("update_items", "mark_absent", "read_pages", "run_code_file"):
+        assert name in _STORE_ONLY_ACTIONS
+    for name in ("click", "navigate", "go_to_url", "goto_tab", "open_tabs", "done"):
+        assert name not in _STORE_ONLY_ACTIONS
+
+
+def test_action_detail_and_category_for_new_actions():
+    from app.agent.runner import _category_for
+
+    assert _category_for("read_pages") == "read"
+    assert _category_for("update_items") == "schema"
+    assert _category_for("mark_absent") == "schema"

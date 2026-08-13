@@ -39,7 +39,7 @@ def test_register_code_tools() -> None:
 
     register_code_tools(tools)
     actions = tools.registry.registry.actions
-    assert "write_code_file" in actions
+    assert "write_code_file" not in actions
     assert "run_code_file" in actions
     assert "run_python" not in actions
 
@@ -193,3 +193,279 @@ def test_bare_stub_count_no_url_field() -> None:
     store = OutputStore(json_schema_to_pydantic(schema, "T"))
     store.add_item({"name": "x"})
     assert _bare_stub_count(store, set()) == 0
+
+
+class _FakeFileSystem:
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+
+    async def write_file(self, name: str, content: str) -> None:
+        self.files[name] = content
+
+    def get_file(self, name: str):
+        if name not in self.files:
+            return None
+        content = self.files[name]
+
+        class _F:
+            def read(self_inner) -> str:
+                return content
+
+        return _F()
+
+
+def _jobs_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "T"))
+
+
+def test_register_output_store_tools_actions() -> None:
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    register_output_store_tools(tools, _jobs_store(), {})
+    actions = tools.registry.registry.actions
+    for name in (
+        "add_item",
+        "update_item",
+        "update_items",
+        "set_field",
+        "mark_absent",
+        "read_output",
+        "search_output",
+        "add_items_from_file",
+        "update_items_from_file",
+    ):
+        assert name in actions, name
+
+
+def test_register_tab_tools_includes_read_pages() -> None:
+    from app.agent.tools import TabManager, register_tab_tools
+
+    tools = Tools()
+    register_tab_tools(tools, TabManager(session=None), {})
+    actions = tools.registry.registry.actions
+    assert "read_pages" in actions
+    assert "open_tabs" in actions
+
+
+def test_parse_jsonld_blobs() -> None:
+    import json as _json
+
+    from app.agent.tools import _parse_jsonld_blobs
+
+    assert _parse_jsonld_blobs(None) is None
+    assert _parse_jsonld_blobs([]) is None
+    assert _parse_jsonld_blobs(["{not json"]) is None
+    plain = _parse_jsonld_blobs([_json.dumps({"@type": "Organization", "name": "X"})])
+    assert plain["name"] == "X"
+    posting = _parse_jsonld_blobs(
+        [
+            _json.dumps({"@type": "Organization"}),
+            _json.dumps([{"@type": "JobPosting", "datePosted": "2026-08-04"}]),
+        ]
+    )
+    assert posting["datePosted"] == "2026-08-04"
+
+
+def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
+    from app.agent.tools import _MAX_UNVISITED_STUBS, _stub_block_msg
+
+    store = _jobs_store()
+    clipboard: dict = {}
+    for i in range(_MAX_UNVISITED_STUBS):
+        assert (
+            _stub_block_msg(
+                store, clipboard, {"title": f"J{i}", "sourceUrl": f"https://x.com/{i}"}
+            )
+            is None
+        )
+        store.add_item({"title": f"J{i}", "sourceUrl": f"https://x.com/{i}"})
+    blocked = _stub_block_msg(
+        store, clipboard, {"title": "J9", "sourceUrl": "https://x.com/9"}
+    )
+    assert blocked is not None and "read_pages" in blocked
+    clipboard["_visited"] = {"https://x.com/9"}
+    assert (
+        _stub_block_msg(store, clipboard, {"title": "J9", "sourceUrl": "https://x.com/9"})
+        is None
+    )
+
+
+async def test_store_bridge_writes_and_mirrors() -> None:
+    from app.agent.tools import _store_bridge
+
+    store = _jobs_store()
+    fs = _FakeFileSystem()
+    clipboard: dict = {"_visited": {"https://x.com/1"}}
+    bridge = _store_bridge(store, clipboard, fs)
+
+    msg = await bridge["add_item"](
+        {"title": "A", "sourceUrl": "https://x.com/1", "description": "d" * 200}
+    )
+    assert "Added item #0" in msg
+    assert "output.json" in fs.files
+
+    msg = await bridge["update_item"](0, {"description": "e" * 200})
+    assert "Updated item #0" in msg
+    msg = await bridge["update_items"]([{"index": 0, "fields": {"title": "A2"}}])
+    assert "Applied 1 of 1" in msg
+    msg = await bridge["mark_absent"]("description", "not published")
+    assert "Marked 'description'" in msg
+    assert "A2" in bridge["read_output"]()
+    assert bridge["coverage"]().startswith("Coverage — ")
+
+
+async def test_store_bridge_respects_stub_limit() -> None:
+    from app.agent.tools import _MAX_UNVISITED_STUBS, _store_bridge
+
+    store = _jobs_store()
+    fs = _FakeFileSystem()
+    bridge = _store_bridge(store, {}, fs)
+    for i in range(_MAX_UNVISITED_STUBS):
+        await bridge["add_item"]({"title": f"J{i}", "sourceUrl": f"https://x.com/{i}"})
+    msg = await bridge["add_item"]({"title": "J9", "sourceUrl": "https://x.com/9"})
+    assert "Slow down" in msg
+    assert store.item_count() == _MAX_UNVISITED_STUBS
+
+
+async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    spawned: list[str] = []
+    closed: list[str] = []
+    fail_once = {"https://x.com/2"}
+
+    async def fake_iframe_targets(session):
+        return []
+
+    async def fake_spawn(session, url):
+        spawned.append(url)
+        return f"tid-{len(spawned)}"
+
+    async def fake_close(session, tid):
+        closed.append(tid)
+
+    async def fake_read_one(session, url, tid, url_contains, claimed, baseline):
+        if url in fail_once:
+            fail_once.discard(url)
+            return {"url": url, "error": "no readable text rendered"}
+        return {"url": url, "title": "t", "text": "body", "jsonld": None, "links": []}
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+    monkeypatch.setattr(tools_mod, "_read_one_page", fake_read_one)
+
+    urls = [f"https://x.com/{i}" for i in range(5)]
+    clipboard: dict = {}
+    pages = await tools_mod._read_pages_impl(None, urls, "ashby", clipboard, concurrency=2)
+
+    assert [p["url"] for p in pages] == urls
+    assert all(not p.get("error") for p in pages)
+    assert len(spawned) == 6
+    assert len(closed) == 6
+    assert len(clipboard["_visited"]) == 5
+
+
+def _hints_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "extra": {
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "key": {"type": "string"},
+                                            "value": {"type": "string"},
+                                        },
+                                    },
+                                },
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "T"))
+
+
+async def test_completeness_gate_bounces_once_with_hints() -> None:
+    from app.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _hints_store()
+    store.add_item(
+        {"title": "A", "extra": [{"key": "datePosted", "value": "2026-08-04"}]}
+    )
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(empties: list[str]) -> None:
+        bounces.append(empties)
+
+    register_completeness_gate(tools, store, on_incomplete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    fs = _FakeFileSystem()
+
+    first = await entry.function(params=params, file_system=fs)
+    assert first.is_done is False
+    assert "mark_absent" in first.extracted_content
+    assert "datePosted" in first.extracted_content
+    assert "postedAt" in first.extracted_content
+    assert len(bounces) == 1
+
+    second = await entry.function(params=params, file_system=fs)
+    assert second.is_done is True
+    assert len(bounces) == 1
+
+
+async def test_completeness_gate_passes_when_absent_marked() -> None:
+    from app.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _hints_store()
+    store.add_item({"title": "A"})
+    store.mark_absent("postedAt", "no dates published")
+    store.mark_absent("extra", "no extra attributes shown")
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert result.is_done is True

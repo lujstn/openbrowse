@@ -13,7 +13,8 @@ browser-use action wrappers that expose it to the agent live in ``tools.py``.
 from __future__ import annotations
 
 import json
-from typing import Any, Union, get_args, get_origin
+import re
+from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -58,6 +59,46 @@ def _is_empty_value(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
+def _literal_choices(annotation: Any) -> tuple[str, ...] | None:
+    """The string choices of a ``Literal[...]`` field annotation (optionally wrapped
+    in Optional), or None when the field is not a string-literal enum.
+    """
+    inner = _peel_optional(annotation)
+    if get_origin(inner) is Literal:
+        args = get_args(inner)
+        if args and all(isinstance(a, str) for a in args):
+            return args
+    return None
+
+
+def _coerce_scalar(value: Any, annotation: Any) -> Any:
+    """Forgiving pre-validation coercion: trim string whitespace, and map a string
+    case-insensitively onto a ``Literal`` enum choice ('Hybrid ' -> 'HYBRID') so an
+    obviously-right value is never rejected over casing.
+    """
+    if not isinstance(value, str):
+        return value
+    value = value.strip()
+    choices = _literal_choices(annotation)
+    if choices and value not in choices:
+        folded = value.lower()
+        for choice in choices:
+            if choice.lower() == folded:
+                return choice
+    return value
+
+
+_TOKEN_STOPWORDS = {"at", "is", "the", "a", "of", "in", "on", "id", "url"}
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Meaningful lowercase tokens of a camelCase/snake_case identifier, for fuzzy
+    matching a schema field against a raw key (postedAt <-> datePosted).
+    """
+    parts = re.findall(r"[A-Za-z][a-z0-9]*", re.sub(r"[_\-]", " ", name))
+    return {p.lower() for p in parts if len(p) > 1} - _TOKEN_STOPWORDS
+
+
 def _first_error(exc: ValidationError) -> str:
     errs = exc.errors()
     if not errs:
@@ -85,6 +126,7 @@ class OutputStore:
             name: _empty_for(field.annotation)
             for name, field in output_model.model_fields.items()
         }
+        self._absent: dict[str, str] = {}
 
     @property
     def output_model(self) -> type[BaseModel]:
@@ -120,6 +162,30 @@ class OutputStore:
         arr.append(clean)
         return True, f"Added item #{len(arr) - 1} to '{self._array_field}' ({len(arr)} total)."
 
+    def update_many(self, updates: Any) -> tuple[bool, str]:
+        """Apply a list of ``{"index": n, "fields": {...}}`` merges in one call.
+        Reports per-entry failures without aborting the rest.
+        """
+        if not isinstance(updates, list) or not updates:
+            return False, (
+                "update_items expects a non-empty list of {index, fields} objects."
+            )
+        applied = 0
+        failures: list[str] = []
+        for i, entry in enumerate(updates):
+            if not isinstance(entry, dict) or "index" not in entry:
+                failures.append(f"entry {i}: must be an object with index and fields")
+                continue
+            ok, msg = self.update_item(entry.get("index"), entry.get("fields"))
+            if ok:
+                applied += 1
+            else:
+                failures.append(f"entry {i}: {msg}")
+        summary = f"Applied {applied} of {len(updates)} updates."
+        if failures:
+            summary += " Failed: " + "; ".join(failures)
+        return applied > 0, summary
+
     def update_item(self, index: Any, fields: Any) -> tuple[bool, str]:
         if not self._array_field:
             return False, "This output has no list to update."
@@ -146,9 +212,10 @@ class OutputStore:
             return False, f"'{key}' is not an output field. Fields: {known}."
         if key == self._array_field:
             return False, f"'{key}' is a list; use add_item/update_item instead."
-        adapter = TypeAdapter(self._model.model_fields[key].annotation)
+        annotation = self._model.model_fields[key].annotation
+        adapter = TypeAdapter(annotation)
         try:
-            validated = adapter.validate_python(value)
+            validated = adapter.validate_python(_coerce_scalar(value, annotation))
         except ValidationError as exc:
             return False, f"'{key}' rejected: {_first_error(exc)}"
         self._data[key] = adapter.dump_python(validated, mode="json")
@@ -187,8 +254,32 @@ class OutputStore:
         return [
             name
             for name in self._item_model.model_fields
-            if _is_empty_value(item.get(name))
+            if name not in self._absent and _is_empty_value(item.get(name))
         ]
+
+    def mark_absent(self, field: str, reason: str) -> tuple[bool, str]:
+        """Record that ``field`` was looked for on the source and is genuinely not
+        published there, so the completeness gate and nudges stop counting it as
+        unfinished work. Accepts item fields and top-level fields.
+        """
+        field = (field or "").strip()
+        reason = (reason or "").strip()
+        known = set(self._model.model_fields)
+        if self._item_model is not None:
+            known |= set(self._item_model.model_fields)
+        if field not in known:
+            return False, f"'{field}' is not a schema field. Fields: {', '.join(sorted(known))}."
+        if not reason:
+            return False, "mark_absent needs a short reason saying where you looked."
+        self._absent[field] = reason
+        return True, (
+            f"Marked '{field}' as absent from the source ({reason}). It no longer "
+            "counts as unfinished; values you do find can still be written to it."
+        )
+
+    @property
+    def absent_fields(self) -> dict[str, str]:
+        return dict(self._absent)
 
     def item_count(self) -> int:
         if not self._array_field:
@@ -197,10 +288,14 @@ class OutputStore:
         return len(arr) if isinstance(arr, list) else 0
 
     def empty_fields(self) -> list[str]:
-        """Schema fields still empty but plausibly fillable, for the completeness gate."""
+        """Schema fields still empty but plausibly fillable, for the completeness gate.
+        Fields marked absent via ``mark_absent`` are settled and never listed.
+        """
         out: list[str] = []
         for name, value in self._data.items():
-            if name != self._array_field and _is_empty_value(value):
+            if name == self._array_field or name in self._absent:
+                continue
+            if _is_empty_value(value):
                 out.append(f"{name} (not set)")
         if self._array_field:
             arr = self._data[self._array_field]
@@ -209,6 +304,8 @@ class OutputStore:
             elif self._item_model is not None:
                 total = len(arr)
                 for fname in self._item_model.model_fields:
+                    if fname in self._absent:
+                        continue
                     missing = sum(
                         1
                         for it in arr
@@ -220,11 +317,124 @@ class OutputStore:
                         )
         return out
 
+    def coverage_summary(self) -> str:
+        """A compact fill-state readout: item count, then item fields grouped as
+        full / partial / empty / marked-absent, then unset top-level fields. This is
+        the one-glance answer to "what is still missing", so verification never
+        needs a full read_output dump.
+        """
+        parts: list[str] = []
+        top_unset = [
+            name
+            for name, value in self._data.items()
+            if name != self._array_field
+            and name not in self._absent
+            and _is_empty_value(value)
+        ]
+        if self._array_field:
+            arr = self._data.get(self._array_field) or []
+            total = len(arr)
+            parts.append(f"{self._array_field}: {total} item(s)")
+            if total and self._item_model is not None:
+                full: list[str] = []
+                partial: list[str] = []
+                empty: list[str] = []
+                for fname in self._item_model.model_fields:
+                    if fname in self._absent:
+                        continue
+                    filled = sum(
+                        1
+                        for it in arr
+                        if isinstance(it, dict) and not _is_empty_value(it.get(fname))
+                    )
+                    if filled == total:
+                        full.append(fname)
+                    elif filled:
+                        partial.append(f"{fname} {filled}/{total}")
+                    else:
+                        empty.append(fname)
+                if full:
+                    parts.append("filled on all: " + ", ".join(full))
+                if partial:
+                    parts.append("partial: " + ", ".join(partial))
+                if empty:
+                    parts.append("empty on all: " + ", ".join(empty))
+        if self._absent:
+            parts.append("marked absent: " + ", ".join(sorted(self._absent)))
+        if top_unset:
+            parts.append("top-level not set: " + ", ".join(top_unset))
+        return "Coverage — " + "; ".join(parts) + "."
+
+    def extra_key_hints(self) -> list[str]:
+        """Detect raw captured keys that look like they fill an empty schema field
+        (extra.datePosted vs an empty postedAt), so the gate can point at a bulk
+        promotion instead of sending the agent back to re-read pages.
+        """
+        if not self._array_field or self._item_model is None:
+            return []
+        arr = self._data.get(self._array_field) or []
+        if not arr:
+            return []
+        total = len(arr)
+        empty_fields = [
+            fname
+            for fname in self._item_model.model_fields
+            if fname not in self._absent
+            and any(
+                isinstance(it, dict) and _is_empty_value(it.get(fname)) for it in arr
+            )
+        ]
+        if not empty_fields:
+            return []
+
+        raw_keys: set[str] = set()
+        for it in arr:
+            if not isinstance(it, dict):
+                continue
+            for value in it.values():
+                if isinstance(value, dict):
+                    raw_keys.update(k for k in value if isinstance(k, str))
+                elif isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            key = entry.get("key") or entry.get("name")
+                            if isinstance(key, str):
+                                raw_keys.add(key)
+        hints: list[str] = []
+        for fname in empty_fields:
+            ftokens = _name_tokens(fname)
+            if not ftokens:
+                continue
+            for key in sorted(raw_keys):
+                if key in self._item_model.model_fields:
+                    continue
+                if ftokens & _name_tokens(key):
+                    missing = sum(
+                        1
+                        for it in arr
+                        if isinstance(it, dict) and _is_empty_value(it.get(fname))
+                    )
+                    hints.append(
+                        f"captured key '{key}' looks like it fills '{fname}' "
+                        f"(empty on {missing} of {total}) — promote it with "
+                        "update_items in one step instead of re-reading pages"
+                    )
+                    break
+        return hints
+
     def _validate_item(self, item: dict) -> tuple[dict | None, str | None]:
         if self._item_model is None:
             return item, None
+        coerced = {
+            name: (
+                _coerce_scalar(value, self._item_model.model_fields[name].annotation)
+                if name in self._item_model.model_fields
+                else value
+            )
+            for name, value in item.items()
+        }
         try:
-            validated = self._item_model.model_validate(item)
+            validated = self._item_model.model_validate(coerced)
         except ValidationError as exc:
             return None, f"item rejected: {_first_error(exc)}"
         return validated.model_dump(mode="json"), None

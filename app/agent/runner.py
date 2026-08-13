@@ -61,29 +61,28 @@ _DRILL_IN_EXTENSION = (
 )
 
 _TOOLS_EASIEST_EXTENSION = (
-    "Browsing here is easiest with your own tools. find_links(...) collects links with "
-    "a selector (href_contains, href_regex, frame_url_contains, container_index, attr) "
-    "and is the only action that reads links inside an embedded/cross-origin panel. "
-    "find_elements and evaluate see only the MAIN page — but a script can read inside an "
-    "embed with browser.frame_text(url_part) / browser.frame_evaluate(url_part, js). "
-    "open_tabs([...]) opens many links at once, open_in_new_tab(index) follows one, "
-    "close_tab brings you back. The listing gives you links, not answers: a record's real "
-    "detail lives only on its own page, so there are two good ways to fill items — (1) "
-    "open_tabs() then walk each tab (goto_tab, read, update_item, next), or (2) call "
-    "run_code_file('extract', code=<one script that navigates each saved link, reads the "
-    "embed with frame_text, and save_json's the batch>) — this writes AND runs the script "
-    "in one step; do not write it separately or rewrite it, just run it and read the "
-    "output — then add_items_from_file. Either way you MUST open each item's own page: "
-    "add_item refuses more than two listing items with no detail. Never batch items in "
-    "from the listing alone."
+    "Browsing here is easiest with your own tools, and extraction has ONE golden "
+    "path: (1) find_links(...) collects a listing's links with a selector "
+    "(href_contains, href_regex, frame_url_contains, container_index, attr) — the "
+    "only action that reads links inside an embedded/cross-origin panel; (2) "
+    "read_pages() reads every found link in parallel tabs in ONE step and saves "
+    "{url, title, text, jsonld, links} per page to pages.json — dates and salary "
+    "usually live in the jsonld, not the visible text; (3) one run_code_file script "
+    "maps pages.json to schema rows and save_json's them; (4) add_items_from_file "
+    "loads them all; (5) mark_absent any field the pages genuinely do not publish, "
+    "then done. A record's real detail lives only on its own page, never the "
+    "listing — add_item refuses more than two listing items with no detail. Use "
+    "open_tabs/goto_tab/open_in_new_tab/close_tab only when you must interact with "
+    "a page; find_elements and evaluate see only the MAIN page, while a script can "
+    "read inside an embed with browser.frame_text(url_part)."
 )
 
 _CODE_REUSE_EXTENSION = (
     "Any code you write is a reusable script: parameterise it so it works on every "
-    "similar/templated page, save it once with write_code_file, then run_code_file("
-    "name, url=…) against each page. Never write one-off code per page, and never "
-    "call a site's backend/JSON API from a script — read the rendered page or its "
-    "embedded data instead."
+    "similar/templated page and run it with run_code_file(name, code=…) — it saves "
+    "AND runs in one step; re-run with run_code_file(name). Never write one-off "
+    "code per page, and never call a site's backend/JSON API from a script — read "
+    "the rendered page or its embedded data instead."
 )
 
 _OVERLAY_EXTENSION = (
@@ -114,8 +113,9 @@ _OUTPUT_STORE_EXTENSION = (
 
 _VERIFY_EXTENSION = (
     "Before you finish, read_output() and treat every empty field as unfinished work: "
-    "go back to the page that could fill it. A blank is only acceptable once you have "
-    "looked where the information should be and found it genuinely absent."
+    "go back to the page that could fill it, or — once you have looked where the "
+    "information should be and found the site genuinely does not publish it — settle "
+    "the field with mark_absent(field, reason) so it stops counting."
 )
 
 _BEGIN_EXTENSION = (
@@ -131,6 +131,84 @@ _NORTH_STAR_PROMPT = (
 
 class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
+
+
+_STORE_ONLY_ACTIONS = {
+    "add_item",
+    "update_item",
+    "update_items",
+    "set_field",
+    "mark_absent",
+    "read_output",
+    "search_output",
+    "add_items_from_file",
+    "update_items_from_file",
+    "remember",
+    "recall",
+    "read_file",
+    "write_file",
+    "replace_file_str",
+    "run_code_file",
+    "read_pages",
+    "http_fetch",
+}
+
+
+def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) -> None:
+    """Wrap the session's state fetch so that, when the previous step only did
+    store/file/sandbox work (``flag['eligible']``) and the page URL is unchanged,
+    the next step gets a stub state — URL, title and tabs, but no DOM listing and no
+    screenshot — instead of re-serialising the same page. The cached selector map is
+    kept, so element indices from the last full state still resolve for clicks.
+    One-shot per arming: only the agent's own per-step fetch sees the stub, never a
+    call made mid-action.
+    """
+    from browser_use.browser.views import BrowserStateSummary
+    from browser_use.dom.views import SerializedDOMState
+
+    original = browser_session.get_browser_state_summary
+
+    async def lean_get(
+        include_screenshot: bool = True,
+        cached: bool = False,
+        include_recent_events: bool = False,
+    ) -> Any:
+        if flag.get("eligible"):
+            flag["eligible"] = False
+            cached_state = getattr(browser_session, "_cached_browser_state_summary", None)
+            current_url = None
+            try:
+                current_url = await _eval_js(browser_session, "window.location.href")
+            except Exception:
+                logger.debug("lean state: url check failed", exc_info=True)
+            if (
+                cached_state is not None
+                and cached_state.dom_state is not None
+                and current_url
+                and current_url == cached_state.url
+            ):
+                return BrowserStateSummary(
+                    dom_state=SerializedDOMState(
+                        _root=None, selector_map=cached_state.dom_state.selector_map
+                    ),
+                    url=cached_state.url,
+                    title=cached_state.title,
+                    tabs=cached_state.tabs,
+                    screenshot=None,
+                    state_error=(
+                        "Page unchanged since your last browser action; the DOM "
+                        "listing is omitted to keep this step small. Element indices "
+                        "from the earlier state remain valid, and any browser action "
+                        "refreshes the full view."
+                    ),
+                )
+        return await original(
+            include_screenshot=include_screenshot,
+            cached=cached,
+            include_recent_events=include_recent_events,
+        )
+
+    browser_session.get_browser_state_summary = lean_get
 
 
 class _CacheAwareChatOpenAI(ChatOpenAI):
@@ -414,8 +492,15 @@ def _action_detail(actions: list) -> tuple[str, bool]:
             if v not in (None, ""):
                 return (f"{pk}={v}"[:200], False)
         return ("", False)
-    if name == "write_code_file" and isinstance(params, dict):
-        return (str(params.get("name", ""))[:200], False)
+    if name == "read_pages" and isinstance(params, dict):
+        urls = params.get("urls") or []
+        frame = params.get("frame_url_contains")
+        base = f"{len(urls)} urls" if urls else "found_links"
+        return ((f"{base} (frame: {frame})" if frame else base)[:200], False)
+    if name == "update_items" and isinstance(params, dict):
+        return (f"{len(params.get('updates') or [])} updates", False)
+    if name == "mark_absent" and isinstance(params, dict):
+        return (str(params.get("field", ""))[:200], False)
     if name == "run_code_file" and isinstance(params, dict):
         url = params.get("url")
         base = str(params.get("name", ""))
@@ -449,8 +534,10 @@ def _primary_action_name(actions: list) -> str | None:
 
 def _category_for(action_name: str | None) -> str:
     n = (action_name or "").lower()
-    if any(k in n for k in ("add_item", "update_item", "set_field", "read_output", "search_output")):
+    if any(k in n for k in ("add_item", "update_item", "set_field", "read_output", "search_output", "mark_absent")):
         return "schema"
+    if "read_pages" in n:
+        return "read"
     if any(k in n for k in ("navigate", "go_to", "go_back", "search", "switch")):
         return "navigation"
     if any(k in n for k in ("click", "input", "scroll", "send_keys", "select", "dropdown", "upload", "type")):
@@ -651,12 +738,6 @@ async def run_agent_session(session_id: str) -> None:
         clipboard: dict[str, Any] = {}
         tab_manager = TabManager(browser_session)
         tools = Tools()
-        register_fetch_tool(tools)
-        register_code_tools(tools, clipboard)
-        register_clipboard_tools(tools, clipboard)
-        register_tab_tools(tools, tab_manager, clipboard)
-        capsolver_costs: list[float] = []
-        register_capsolver_tool(tools, capsolver_costs)
 
         output_model: type | None = None
         if output_schema:
@@ -667,10 +748,18 @@ async def run_agent_session(session_id: str) -> None:
                     "output_schema -> model conversion failed, using prose fallback: %s", e
                 )
                 output_model = None
-
         store: OutputStore | None = None
         if output_model is not None:
             store = OutputStore(output_model)
+
+        register_fetch_tool(tools)
+        register_code_tools(tools, clipboard, store)
+        register_clipboard_tools(tools, clipboard)
+        register_tab_tools(tools, tab_manager, clipboard)
+        capsolver_costs: list[float] = []
+        register_capsolver_tool(tools, capsolver_costs)
+
+        if store is not None:
             register_output_store_tools(tools, store, clipboard)
 
             async def _on_incomplete_done(empties: list[str]) -> None:
@@ -729,9 +818,13 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
+        lean_flag: dict[str, bool] = {"eligible": False}
+        _install_lean_state(browser_session, lean_flag)
+
         # Step callback for real-time dashboard streaming
         step_count = 0
         step_started_at: dict[str, Any] = {"t": None}
+        logged_history_len = {"n": 0}
 
         async def on_step_start(agent_instance: Agent) -> None:
             step_started_at["t"] = datetime.now(timezone.utc)
@@ -764,6 +857,18 @@ async def run_agent_session(session_id: str) -> None:
             steps = agent_instance.history.history
             if not steps:
                 return
+            # @nonobvious(forced-by): browser-use fires on_step_end even when the
+            # step was cancelled by step_timeout, in which case no new history entry
+            # exists — re-reading history[-1] would double-log the previous step.
+            if len(steps) == logged_history_len["n"]:
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="browser_action_error",
+                    summary="Step timed out and was cancelled before completing",
+                )
+                return
+            logged_history_len["n"] = len(steps)
             step = steps[-1]
 
             if north_star and step_count % 10 == 0:
@@ -808,9 +913,19 @@ async def run_agent_session(session_id: str) -> None:
 
             action_name = None
             category = None
+            all_action_names: list[str] = []
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
+                for act in step.model_output.action:
+                    try:
+                        dumped = act.model_dump(exclude_none=True)
+                    except Exception:
+                        continue
+                    all_action_names.extend(dumped.keys())
+            lean_flag["eligible"] = bool(all_action_names) and all(
+                n in _STORE_ONLY_ACTIONS for n in all_action_names
+            )
 
             started = step_started_at.get("t")
             duration_s = (
@@ -870,7 +985,14 @@ async def run_agent_session(session_id: str) -> None:
             "tools": tools,
             "calculate_cost": True,
             "llm_timeout": 180,
-            "max_actions_per_step": 1,
+            # @nonobvious(forced-by): browser-use cancels the WHOLE step (LLM call +
+            # actions) at step_timeout; the default 180 silently killed 180s sandbox
+            # scripts mid-run. Must exceed llm_timeout + the 300s sandbox cap.
+            "step_timeout": 520,
+            # @nonobvious(means): >1 lets non-page-changing work (update_item runs,
+            # store reads, file saves) batch into one LLM step; browser-use itself
+            # truncates the chain at the first page-changing action.
+            "max_actions_per_step": 8,
             # @nonobvious(forced-by): browser-use middle-shortens long URLs at the
             # LLM-input layer (default 25 chars of query+fragment), which made the
             # agent read hashed ashby_jid links as corrupt data; a limit past the

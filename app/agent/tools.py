@@ -87,6 +87,45 @@ def _norm_url(url: str) -> str:
     return u.rstrip("/")
 
 
+_BODY_TEXT_JS = "document.body ? document.body.innerText : ''"
+_JSONLD_JS = (
+    "(function(){var out=[];document.querySelectorAll("
+    "'script[type=\"application/ld+json\"]').forEach(function(s){"
+    "out.push(s.textContent)});return out;})()"
+)
+_LINKS_JS = (
+    "(function(){var out=[];document.querySelectorAll('a[href]').forEach(function(a){"
+    "if(out.length<80)out.push({text:(a.innerText||'').trim().slice(0,120),href:a.href})"
+    "});return out;})()"
+)
+_IFRAME_SRC_JS = (
+    "(function(){var out=[];document.querySelectorAll('iframe').forEach(function(f){"
+    "if(f.src)out.push(f.src)});return out;})()"
+)
+
+
+def _parse_jsonld_blobs(raw_list: Any) -> Any:
+    """Parse raw JSON-LD script contents and pick the best object: the first
+    JobPosting-like dict, else the first parseable object, else None. Handles the
+    common case of a top-level list wrapping the real object.
+    """
+    parsed: list[Any] = []
+    if isinstance(raw_list, list):
+        for raw in raw_list:
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(obj, list):
+                parsed.extend(obj)
+            else:
+                parsed.append(obj)
+    for obj in parsed:
+        if isinstance(obj, dict) and "JobPosting" in str(obj.get("@type", "")):
+            return obj
+    return parsed[0] if parsed else None
+
+
 async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
     """Execute JavaScript via BrowserSession's CDP connection.
 
@@ -102,6 +141,239 @@ async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
     if result.get("exceptionDetails"):
         raise RuntimeError(f"JS error: {result['exceptionDetails']}")
     return result.get("result", {}).get("value")
+
+
+async def _eval_on_target(
+    browser_session: BrowserSession, target_id: str, expression: str
+) -> Any:
+    """Runtime.evaluate against a specific CDP target (a background tab or an OOPIF)."""
+    sess = await browser_session.get_or_create_cdp_session(target_id, focus=False)
+    result = await sess.cdp_client.send.Runtime.evaluate(
+        params={"expression": expression, "returnByValue": True, "awaitPromise": True},
+        session_id=sess.session_id,
+    )
+    if result.get("exceptionDetails"):
+        raise RuntimeError(f"JS error: {result['exceptionDetails']}")
+    return result.get("result", {}).get("value")
+
+
+async def _spawn_tab(browser_session: BrowserSession, url: str) -> str | None:
+    """Create a real background tab via CDP and return its target id, emitting the
+    TabCreatedEvent browser-use's watchdogs expect.
+
+    @nonobvious(forced-by): dispatching ``NavigateToUrlEvent(new_tab=True)`` cannot
+    fan out — browser-use rewrites new_tab->False whenever the current tab is a
+    new-tab page, so calls 2..N re-navigate the SAME blank tab. Target.createTarget
+    makes a distinct target every time.
+    """
+    try:
+        target_id = await browser_session._cdp_create_new_page(url, background=True)
+    except Exception:
+        logger.debug("_spawn_tab: _cdp_create_new_page failed", exc_info=True)
+        return None
+    try:
+        evt = browser_session.event_bus.dispatch(
+            TabCreatedEvent(target_id=target_id, url=url)
+        )
+        await evt
+        await evt.event_result(raise_if_any=False, raise_if_none=False)
+    except Exception:
+        logger.debug("_spawn_tab: TabCreatedEvent dispatch failed", exc_info=True)
+    return target_id
+
+
+async def _close_spawned_tab(browser_session: BrowserSession, target_id: str) -> None:
+    try:
+        evt = browser_session.event_bus.dispatch(CloseTabEvent(target_id=target_id))
+        await evt
+        await evt.event_result(raise_if_any=False, raise_if_none=False)
+    except Exception:
+        logger.debug("_close_spawned_tab failed", exc_info=True)
+
+
+async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str]]:
+    cdp = await browser_session.get_or_create_cdp_session()
+    targets = await cdp.cdp_client.send.Target.getTargets()
+    return [
+        {"targetId": t["targetId"], "url": t.get("url", "")}
+        for t in targets.get("targetInfos", [])
+        if t.get("type") == "iframe"
+    ]
+
+
+async def _match_frame_target(
+    browser_session: BrowserSession,
+    page_target_id: str,
+    url_contains: str,
+    claimed: set[str],
+    baseline: set[str],
+) -> str | None:
+    """The OOPIF target belonging to ``page_target_id`` whose URL contains
+    ``url_contains``. Ownership is resolved by matching the global iframe-target
+    list against the page's own frame tree and iframe srcs, because CDP's target
+    list carries no parent linkage; falls back to the single unclaimed candidate
+    created since read_pages started.
+    """
+    needle = (url_contains or "").lower()
+    tree_urls: set[str] = set()
+    try:
+        sess = await browser_session.get_or_create_cdp_session(
+            page_target_id, focus=False
+        )
+        tree = await sess.cdp_client.send.Page.getFrameTree(
+            session_id=sess.session_id
+        )
+        stack = [tree.get("frameTree")]
+        while stack:
+            node = stack.pop()
+            if not node:
+                continue
+            frame_url = (node.get("frame") or {}).get("url", "")
+            if frame_url:
+                tree_urls.add(frame_url)
+            stack.extend(node.get("childFrames") or [])
+    except Exception:
+        logger.debug("_match_frame_target: getFrameTree failed", exc_info=True)
+    srcs: list[str] = []
+    try:
+        srcs = await _eval_on_target(browser_session, page_target_id, _IFRAME_SRC_JS) or []
+    except Exception:
+        logger.debug("_match_frame_target: iframe src read failed", exc_info=True)
+
+    candidates: list[dict[str, str]] = []
+    for t in await _iframe_targets(browser_session):
+        tid, turl = t["targetId"], t["url"]
+        if tid in claimed:
+            continue
+        if needle and needle not in turl.lower():
+            continue
+        if turl in tree_urls:
+            return tid
+        for src in srcs:
+            base = str(src).split("#", 1)[0]
+            if base and (turl == src or turl.startswith(base)):
+                return tid
+        if tid not in baseline:
+            candidates.append(t)
+    if len(candidates) == 1:
+        return candidates[0]["targetId"]
+    return None
+
+
+_READ_PAGES_MAX = 48
+_READ_PAGES_TEXT_CAP = 60_000
+_PAGE_READY_TIMEOUT_S = 18.0
+
+
+async def _read_one_page(
+    browser_session: BrowserSession,
+    url: str,
+    target_id: str,
+    url_contains: str | None,
+    claimed: set[str],
+    baseline: set[str],
+) -> dict[str, Any]:
+    """Wait for a spawned tab (and, when asked, its embedded panel) to render, then
+    read {url, title, text, jsonld, links} from it — the panel when one matches,
+    else the main document.
+    """
+    page: dict[str, Any] = {"url": url}
+    frame_tid: str | None = None
+    deadline = asyncio.get_event_loop().time() + _PAGE_READY_TIMEOUT_S
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            if url_contains:
+                frame_tid = await _match_frame_target(
+                    browser_session, target_id, url_contains, claimed, baseline
+                )
+                if frame_tid:
+                    txt = await _eval_on_target(browser_session, frame_tid, _BODY_TEXT_JS)
+                    if txt and txt.strip():
+                        break
+            else:
+                ready = await _eval_on_target(
+                    browser_session, target_id, "document.readyState"
+                )
+                if ready in ("interactive", "complete"):
+                    txt = await _eval_on_target(browser_session, target_id, _BODY_TEXT_JS)
+                    if txt and txt.strip():
+                        break
+        except Exception:
+            logger.debug("_read_one_page: poll failed", exc_info=True)
+        await asyncio.sleep(0.5)
+
+    read_tid = frame_tid or target_id
+    if frame_tid:
+        claimed.add(frame_tid)
+        page["frame_matched"] = True
+    try:
+        page["title"] = await _eval_on_target(browser_session, target_id, "document.title")
+        text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+        page["text"] = text[:_READ_PAGES_TEXT_CAP]
+        jsonld = _parse_jsonld_blobs(
+            await _eval_on_target(browser_session, read_tid, _JSONLD_JS)
+        )
+        if jsonld is None and read_tid != target_id:
+            jsonld = _parse_jsonld_blobs(
+                await _eval_on_target(browser_session, target_id, _JSONLD_JS)
+            )
+        page["jsonld"] = jsonld
+        page["links"] = await _eval_on_target(browser_session, read_tid, _LINKS_JS) or []
+    except Exception as e:
+        page["error"] = f"{type(e).__name__}: {e}"
+        return page
+    if not (page.get("text") or "").strip():
+        page["error"] = (
+            "no readable text rendered"
+            + (" (no matching embedded panel found)" if url_contains and not frame_tid else "")
+        )
+    return page
+
+
+async def _read_pages_impl(
+    browser_session: BrowserSession,
+    urls: list[str],
+    url_contains: str | None,
+    clipboard: dict[str, Any] | None,
+    concurrency: int = 4,
+) -> list[dict[str, Any]]:
+    """Read many pages concurrently: open a wave of background tabs so they load in
+    parallel, read each in turn, close the wave, repeat; then retry failures once
+    one at a time. Every successfully read URL is marked visited.
+    """
+    concurrency = max(1, min(int(concurrency or 4), 8))
+    baseline = {t["targetId"] for t in await _iframe_targets(browser_session)}
+    results: dict[str, dict[str, Any]] = {}
+
+    async def _run_wave(wave: list[str]) -> None:
+        pairs: list[tuple[str, str]] = []
+        for u in wave:
+            tid = await _spawn_tab(browser_session, u)
+            if tid is None:
+                results[u] = {"url": u, "error": "could not open a tab"}
+            else:
+                pairs.append((u, tid))
+        claimed: set[str] = set()
+        for u, tid in pairs:
+            results[u] = await _read_one_page(
+                browser_session, u, tid, url_contains, claimed, baseline
+            )
+        for _, tid in pairs:
+            await _close_spawned_tab(browser_session, tid)
+
+    for i in range(0, len(urls), concurrency):
+        await _run_wave(urls[i : i + concurrency])
+
+    retry = [u for u in urls if results.get(u, {}).get("error")]
+    for u in retry:
+        await _run_wave([u])
+
+    if clipboard is not None:
+        visited = clipboard.setdefault("_visited", set())
+        for u, page in results.items():
+            if not page.get("error"):
+                visited.add(_norm_url(u))
+    return [results[u] for u in urls if u in results]
 
 
 class _SandboxBrowser:
@@ -198,23 +470,8 @@ class _SandboxBrowser:
         text. Returns the first JobPosting-like object, else the first parseable object,
         else None (e.g. read ``(await browser.frame_jsonld('ashby'))['datePosted']``).
         """
-        js = (
-            "(function(){var out=[];document.querySelectorAll("
-            "'script[type=\"application/ld+json\"]').forEach(function(s){"
-            "out.push(s.textContent)});return out;})()"
-        )
-        raw_list = await self.frame_evaluate(url_contains, js)
-        parsed: list[Any] = []
-        if isinstance(raw_list, list):
-            for raw in raw_list:
-                try:
-                    parsed.append(json.loads(raw))
-                except Exception:
-                    continue
-        for obj in parsed:
-            if isinstance(obj, dict) and "JobPosting" in str(obj.get("@type", "")):
-                return obj
-        return parsed[0] if parsed else None
+        raw_list = await self.frame_evaluate(url_contains, _JSONLD_JS)
+        return _parse_jsonld_blobs(raw_list)
 
     async def wait_for_frame(self, url_contains: str, timeout_s: float = 12.0) -> bool:
         """Poll until a cross-origin iframe matching ``url_contains`` has rendered text,
@@ -226,6 +483,22 @@ class _SandboxBrowser:
                 return True
             await asyncio.sleep(0.5)
         return False
+
+    async def read_pages(
+        self,
+        urls: list[str],
+        frame_url_contains: str | None = None,
+        concurrency: int = 4,
+    ) -> list[dict[str, Any]]:
+        """Read many pages in parallel background tabs and return
+        ``[{url, title, text, jsonld, links, error?}, …]`` — the bulk way to read a
+        whole listing's detail pages without navigating the current tab. When
+        ``frame_url_contains`` is given, text/jsonld/links come from the matching
+        embedded panel on each page.
+        """
+        return await _read_pages_impl(
+            self._session, list(urls), frame_url_contains, self._clipboard, concurrency
+        )
 
     async def navigate(
         self, url: str, wait_for: str | None = None, settle_s: float = 2.0
@@ -558,11 +831,15 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
                 await coro
 
     try:
-        await asyncio.wait_for(_run(), timeout=180.0)
+        await asyncio.wait_for(_run(), timeout=300.0)
     except asyncio.TimeoutError:
+        out = stdout.getvalue()
+        tail = f"\n--- stdout so far ---\n{out[-2000:]}" if out else ""
         return ActionResult(
-            error="Script timed out after 180 seconds. Process a smaller batch of URLs "
-            "per run, save progress with save_json, and continue in the next run."
+            error="Script timed out after 300 seconds. Anything you saved with "
+            "save_json before the timeout is still on disk. For bulk page reads use "
+            "browser.read_pages(urls, frame_url_contains) instead of a navigate "
+            f"loop; otherwise process a smaller batch and continue in the next run.{tail}"
         )
     except Exception as e:
         out = stdout.getvalue()
@@ -581,12 +858,16 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
     return ActionResult(extracted_content=preview or "(no output)")
 
 
-def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -> None:
-    """Register the browser-connected code sandbox as a write-then-run pair — the v3
-    cloud sandbox capability, but code can never execute directly. ``write_code_file``
-    only persists a reusable script; ``run_code_file`` loads a saved script and runs
-    it in-process against the live page, with a namespace that persists across runs so
-    variables and imports carry over.
+def register_code_tools(
+    tools: Tools,
+    clipboard: dict[str, Any] | None = None,
+    store: "OutputStore | None" = None,
+) -> None:
+    """Register the browser-connected code sandbox. ``run_code_file`` saves and runs a
+    script in one step against the live page, with a namespace that persists across
+    runs so variables and imports carry over. When an output store exists, the
+    sandbox can write to it directly (add_item/update_item/…) with the same
+    validation as the store actions.
 
     @nonobvious(forced-by): in-process ``exec`` (not a subprocess) is required so the
     code can reach the live BrowserSession/CDP; acceptable on this single-tenant,
@@ -602,49 +883,28 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         return d
 
     @tools.action(
-        "Save a reusable Python script to a file WITHOUT running it (rarely needed — to "
-        "run a script, call run_code_file with code= which writes AND runs it in one step). "
-        "Write it to work on EVERY similar/templated page: read the page or its embedded "
-        "panel and extract into a structure; parameterise anything page-specific. The FAST "
-        "pattern for a listing: run_code_file('extract', code=<one script that loops the "
-        "saved detail links and for each does await browser.navigate(url, wait_for='<embed "
-        "url part>'); text = await browser.frame_text('<embed url part>'), collects the "
-        "fields, then save_json(rows, 'jobs.json')>), then add_items_from_file('jobs.json'). "
-        "A field missing from the visible text (e.g. a posted/published date) is in the "
-        "page's JSON-LD, so ALSO do ld = await browser.frame_jsonld('<embed url part>') and "
-        "set row['postedAt'] = ld.get('datePosted') if ld else None. Inside a script you have: "
-        "browser.evaluate(js) / browser.get_html("
-        "selector=None) for the MAIN page; browser.frames() / await browser.frame_text("
-        "url_contains) / await browser.frame_jsonld(url_contains) / await browser.frame_evaluate(url_contains, js, all_matches=False) / "
-        "await browser.wait_for_frame(url_contains) to READ INSIDE a cross-origin embed "
-        "(the only way — main-frame evaluate/get_html cannot); await browser.navigate(url, "
-        "wait_for=None); fetch(url,...) -> .status_code/.text/.json() (server-side, no CORS, "
-        "and never a site's backend API); await save_json(obj, name) / await read_json(name); "
-        "remember(key, value) / recall(key); plus asyncio, json, re. Variables persist across "
-        "run_code_file calls."
-    )
-    async def write_code_file(
-        name: str, code: str, file_system: FileSystem
-    ) -> ActionResult:
-        fname = _normalise_py_name(name)
-        try:
-            (_scripts_dir(file_system) / fname).write_text(code)
-        except Exception as e:
-            return ActionResult(error=f"write_code_file failed: {type(e).__name__}: {e}")
-        note = (
-            f"Saved script '{fname}'. Run it with run_code_file('{fname}', url=<page>). "
-            "Reuse this same script on every similar page rather than writing new code."
-        )
-        return ActionResult(extracted_content=note, long_term_memory=f"wrote script {fname}")
-
-    @tools.action(
-        "Write and run a reusable script in ONE step: pass code= to save it to 'name' "
-        "then execute it (this is the normal way — you do not need a separate "
-        "write_code_file first). Omit code= to re-run the already-saved 'name'. Pass url= "
-        "to navigate there before running. Reuse the SAME script across every similar "
-        "page. STDOUT is truncated to a small preview — save large results with save_json "
-        "and print only specific keys/slices; read them back with read_file or "
-        "add_items_from_file."
+        "Write and run a Python script in ONE step: pass code= to save it to 'name' "
+        "then execute it. Omit code= to re-run the already-saved 'name'. Pass url= to "
+        "navigate there first. THE FAST PATTERN for a listing: pages = await "
+        "browser.read_pages(urls, frame_url_contains='<embed url part>') reads every "
+        "detail page in parallel tabs and returns [{url, title, text, jsonld, links}]; "
+        "map each page to a row (a posted/published date lives in page['jsonld'] — "
+        "e.g. row['postedAt'] = (page['jsonld'] or {}).get('datePosted')), then "
+        "await save_json(rows, 'jobs.json') and add_items_from_file('jobs.json'). "
+        "Also available: browser.evaluate(js) / browser.get_html(selector=None) for "
+        "the MAIN page; browser.frames() / browser.frame_text(url_contains) / "
+        "browser.frame_jsonld(url_contains) / browser.frame_evaluate(url_contains, js) "
+        "/ browser.wait_for_frame(url_contains) to read INSIDE a cross-origin embed "
+        "on the CURRENT tab; browser.navigate(url, wait_for=None); fetch(url, ...) -> "
+        ".status_code/.text/.json() (server-side, no CORS, never a site's backend "
+        "API); save_json(obj, name) / read_json(name) / open('name.json') for saved "
+        "files; pick_jsonld(raw) normalises JSON-LD that may be a list; remember/"
+        "recall; and, when a schema output exists, await add_item(item) / await "
+        "update_item(index, fields) / await update_items([{index, fields}, ...]) / "
+        "await set_field(key, value) / await mark_absent(field, reason) / "
+        "read_output() / coverage() write straight to the validated output. STDOUT "
+        "is truncated to a small preview — print only counts/keys, never whole blobs. "
+        "Variables persist across runs."
     )
     async def run_code_file(
         name: str,
@@ -710,6 +970,21 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         if url:
             clipboard.setdefault("_visited", set()).add(_norm_url(url))
 
+        _builtin_open = open
+
+        def _sandbox_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any):
+            """Resolve bare relative filenames against the agent's FileSystem dir, so
+            a script's plain ``open('jobs.json')`` finds files saved with save_json.
+            """
+            if isinstance(file, str) and "/" not in file and not file.startswith("."):
+                candidate = file_system.get_dir() / file
+                if "r" in mode and not candidate.exists():
+                    fixed = file_system.get_dir() / _normalise_fs_name(file, "json")
+                    if fixed.exists():
+                        candidate = fixed
+                return _builtin_open(candidate, mode, *args, **kwargs)
+            return _builtin_open(file, mode, *args, **kwargs)
+
         namespace.update(
             {
                 "browser": _SandboxBrowser(browser_session, clipboard),
@@ -717,6 +992,8 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
                 "save_json": _save_json,
                 "save_checkpoint_json": _save_json,
                 "read_json": _read_json,
+                "pick_jsonld": _parse_jsonld_blobs,
+                "open": _sandbox_open,
                 "remember": _remember,
                 "recall": _recall,
                 "asyncio": asyncio,
@@ -724,6 +1001,8 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
                 "re": re,
             }
         )
+        if store is not None:
+            namespace.update(_store_bridge(store, clipboard, file_system))
         return await _exec_in_sandbox(code, namespace)
 
 
@@ -965,11 +1244,76 @@ def register_tab_tools(
     """Register the lazy multi-tab fan-out actions on a Tools instance."""
 
     @tools.action(
-        "Queue URLs as lightweight, UNLOADED background tabs for efficient fan-out "
+        "Read MANY pages in ONE step — the fast way to cover a whole listing. Opens "
+        "the URLs in parallel background tabs, waits for each to render, reads them, "
+        "closes the tabs, and saves the results to pages.json: for each page {url, "
+        "title, text, jsonld, links} (pass frame_url_contains, e.g. 'ashby', to read "
+        "each page's embedded/cross-origin panel — same value you matched in "
+        "find_links). Call with NO urls to read every link from your last find_links. "
+        "A posted/published date and salary usually live in the page's jsonld, not "
+        "its visible text. Next step after this: one run_code_file script that maps "
+        "read_json('pages.json') to rows, save_json(rows, 'jobs.json'), then "
+        "add_items_from_file('jobs.json'). Failed pages are retried once and "
+        "reported — every listed URL is covered, so no re-crawling is needed."
+    )
+    async def read_pages(
+        browser_session: BrowserSession,
+        file_system: FileSystem,
+        urls: list[str] | None = None,
+        frame_url_contains: str | None = None,
+    ) -> ActionResult:
+        try:
+            if not urls:
+                urls = list(clipboard.get("found_links") or [])
+                if not urls:
+                    return ActionResult(
+                        error="No urls given and no saved found_links — run find_links first."
+                    )
+            urls = urls[:_READ_PAGES_MAX]
+            pages = await _read_pages_impl(
+                browser_session, urls, frame_url_contains, clipboard
+            )
+            saved: str | None = "pages.json"
+            try:
+                await file_system.write_file(saved, json.dumps(pages, indent=2, default=str))
+            except Exception:
+                logger.warning("read_pages: failed to save pages.json", exc_info=True)
+                saved = None
+            ok_count = sum(1 for p in pages if not p.get("error"))
+            lines: list[str] = []
+            for i, p in enumerate(pages):
+                if p.get("error"):
+                    lines.append(f"#{i} FAILED {p['url']} — {p['error']}")
+                else:
+                    lines.append(
+                        f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
+                        f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
+                        f"{len(p.get('links') or [])} links"
+                    )
+            note = (
+                f"Read {ok_count} of {len(pages)} pages"
+                + (f"; full content saved to '{saved}'" if saved else "")
+                + ".\n"
+                + "\n".join(lines)
+                + "\nNext: ONE run_code_file script that maps read_json('pages.json') "
+                "to schema rows (dates/salary from page['jsonld']), save_json(rows, "
+                "'jobs.json'), then add_items_from_file('jobs.json'). Do not re-read "
+                "these pages."
+            )
+            return ActionResult(
+                extracted_content=note,
+                long_term_memory=f"read_pages: {ok_count}/{len(pages)} pages -> {saved}",
+            )
+        except Exception as e:
+            return ActionResult(error=f"read_pages failed: {type(e).__name__}: {e}")
+
+    @tools.action(
+        "Queue URLs as lightweight, UNLOADED background tabs for MANUAL fan-out "
         "(hard cap 48 total). Each becomes a blank about:blank tab at a stable 0-based "
         "index; the real URL is only fetched when you call goto_tab(n). Call with NO "
-        "urls to open every link from your last find_links (saved as found_links) — the "
-        "one-shot way to open a whole listing. Your current/start tab is left untouched."
+        "urls to queue every link from your last find_links. Prefer read_pages when "
+        "you just need each page's content — it covers the whole listing in one step; "
+        "use tabs when you must interact with the pages."
     )
     async def open_tabs(urls: list[str] | None = None) -> ActionResult:
         try:
@@ -982,8 +1326,7 @@ def register_tab_tools(
             note = await tab_manager.open_tabs(urls)
             note += (
                 " Next: walk them — goto_tab(0), read the detail page, update_item that "
-                "role, then goto_tab(1), and so on. Or run one extraction script across "
-                "the saved links. Do NOT add items from the listing alone."
+                "role, then goto_tab(1), and so on. Do NOT add items from the listing alone."
             )
             return ActionResult(extracted_content=note, long_term_memory=note)
         except Exception as e:
@@ -1156,22 +1499,17 @@ def register_tab_tools(
         frame_hint = ""
         if frame_url_contains:
             frame_hint = (
-                f" In a script, read each detail page's embed with "
-                f"browser.frame_text('{frame_url_contains}') — reuse the SAME "
-                f"'{frame_url_contains}' you matched here; do not look up the iframe's "
-                "exact src."
+                f" Reuse the SAME frame_url_contains='{frame_url_contains}' you "
+                "matched here; do not look up the iframe's exact src."
             )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
-            + ". Next: call open_tabs() with no args to open them ALL, then walk the "
-            "tabs one by one — goto_tab(n), read the detail page, add_item or "
-            "update_item with what it shows, close_tab — because each item's detail "
-            "(description, posted date and more) lives on its own page, not this "
-            "listing. Or run_code_file('extract', code=<one script that reads every saved "
-            "link and save_json's the rows>) in ONE step, then add_items_from_file."
-            + frame_hint + " The links stay in view below and via recall('found_links') — "
-            "no need to re-read."
+            + ". Next: call read_pages() with no args to read them ALL in one step — "
+            "each item's detail (description, posted date and more) lives on its own "
+            "page, not this listing." + frame_hint + " Then one run_code_file script "
+            "maps pages.json to rows and add_items_from_file loads them. The links "
+            "stay in view below and via recall('found_links') — no need to re-read."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
@@ -1325,7 +1663,7 @@ def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
     """
     empties = store.item_missing_fields(index)
     if not empties:
-        return f"{base_msg} Every field on this item is filled."
+        return f"{base_msg} Every field on this item is filled. {store.coverage_summary()}"
     shown = ", ".join(empties[:12])
     if len(empties) > 12:
         shown += f", +{len(empties) - 12} more"
@@ -1335,8 +1673,8 @@ def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
         f"{base_msg} Still empty on this item: {shown}. If you have not read this "
         f"item's own page yet, open {where} and update_item({index}, {{…}}) to fill "
         "what that page shows — detail such as a description or posted date lives on "
-        "the item's page, not the listing. Leave a field blank only once you have "
-        "looked there and found it genuinely absent."
+        "the item's page, not the listing. A field the site genuinely does not "
+        "publish should be settled once with mark_absent, not left blank."
     )
 
 
@@ -1377,6 +1715,76 @@ def _bare_stub_count(store: OutputStore, visited: set) -> int:
     return sum(1 for it in arr if isinstance(it, dict) and _is_bare_stub(store, it, visited))
 
 
+def _stub_block_msg(
+    store: OutputStore, clipboard: dict[str, Any] | None, item: dict[str, Any]
+) -> str | None:
+    """The refusal message when adding ``item`` would exceed the allowance of
+    listing stubs whose own pages have not been opened, else None.
+    """
+    visited: set = (
+        clipboard.setdefault("_visited", set()) if clipboard is not None else set()
+    )
+    if not _is_bare_stub(store, item, visited):
+        return None
+    if _bare_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
+        return None
+    return (
+        f"Slow down — you already have {_MAX_UNVISITED_STUBS} listing stubs with no "
+        "detail. Read the roles' own pages before adding more: read_pages() covers "
+        "them all in one step, then add items with the descriptions it returns. Do "
+        "not batch items in from the listing."
+    )
+
+
+def _store_bridge(
+    store: OutputStore, clipboard: dict[str, Any], file_system: FileSystem
+) -> dict[str, Any]:
+    """Sandbox-side handles onto the output store, so a script can write the answer
+    directly with the same validation and stub-throttling as the store actions.
+    """
+
+    async def add_item(item: dict[str, Any]) -> str:
+        block = _stub_block_msg(store, clipboard, item)
+        if block:
+            return block
+        ok, msg = store.add_item(item)
+        if ok:
+            await _mirror_output(store, file_system)
+        return msg
+
+    async def update_item(index: int, fields: dict[str, Any]) -> str:
+        ok, msg = store.update_item(index, fields)
+        if ok:
+            await _mirror_output(store, file_system)
+        return msg
+
+    async def update_items(updates: list[dict[str, Any]]) -> str:
+        ok, msg = store.update_many(updates)
+        if ok:
+            await _mirror_output(store, file_system)
+        return msg
+
+    async def set_field(key: str, value: Any) -> str:
+        ok, msg = store.set_field(key, value)
+        if ok:
+            await _mirror_output(store, file_system)
+        return msg
+
+    async def mark_absent(field: str, reason: str) -> str:
+        _, msg = store.mark_absent(field, reason)
+        return msg
+
+    return {
+        "add_item": add_item,
+        "update_item": update_item,
+        "update_items": update_items,
+        "set_field": set_field,
+        "mark_absent": mark_absent,
+        "read_output": store.read_output,
+        "coverage": store.coverage_summary,
+    }
+
+
 def register_output_store_tools(
     tools: Tools, store: OutputStore, clipboard: dict[str, Any] | None = None
 ) -> None:
@@ -1389,34 +1797,16 @@ def register_output_store_tools(
     """
     array = store.array_field or "output"
 
-    def _visited() -> set:
-        if clipboard is None:
-            return set()
-        return clipboard.setdefault("_visited", set())
-
-    def _stub_block(item: dict[str, Any]) -> str | None:
-        visited = _visited()
-        if not _is_bare_stub(store, item, visited):
-            return None
-        if _bare_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
-            return None
-        return (
-            f"Slow down — you already have {_MAX_UNVISITED_STUBS} listing stubs with no "
-            "detail. Open THIS role's page before adding more: goto_tab on its queued "
-            "tab, or navigate to its URL in a script and read the embed with "
-            "browser.frame_text, then add_item / update_item with the description. Do "
-            "not batch items in from the listing."
-        )
-
     @tools.action(
         f"Append one item to the '{array}' list — the primary answer array. "
         f"{_describe_item_fields(store)} Provide every field you already know now; "
-        "enrich the rest with update_item once you have opened the item's own page. "
+        "enrich the rest with update_item once you have read the item's own page. "
         "Validated against the schema and rejected if it does not fit. You may hold at "
-        "most two items whose own page you have not opened yet — open them before adding more."
+        "most two items whose own page you have not read yet — read_pages() covers "
+        "them all in one step."
     )
     async def add_item(item: dict[str, Any], file_system: FileSystem) -> ActionResult:
-        block = _stub_block(item)
+        block = _stub_block_msg(store, clipboard, item)
         if block:
             return ActionResult(error=block)
         ok, msg = store.add_item(item)
@@ -1430,7 +1820,8 @@ def register_output_store_tools(
         f"Enrich the item at integer index (0-based, as reported by add_item) in the "
         f"'{array}' list by merging in the given fields — this is how a detail-page "
         "visit fills a stub's missing values such as description or postedAt. "
-        "Re-validated against the schema."
+        "Re-validated against the schema. To touch several items, use update_items "
+        "instead of one call per item."
     )
     async def update_item(
         index: int, fields: dict[str, Any], file_system: FileSystem
@@ -1440,6 +1831,22 @@ def register_output_store_tools(
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
         note = _enrichment_note(store, msg, int(index))
+        return ActionResult(extracted_content=note, long_term_memory=note)
+
+    @tools.action(
+        f"Merge fields into MANY '{array}' items in one step: pass updates as a list "
+        'of {"index": n, "fields": {...}} objects. Each merge is schema-validated; '
+        "failures are reported per entry without aborting the rest. Always prefer "
+        "this over a run of single update_item calls."
+    )
+    async def update_items(
+        updates: list[dict[str, Any]], file_system: FileSystem
+    ) -> ActionResult:
+        ok, msg = store.update_many(updates)
+        if not ok:
+            return ActionResult(error=msg)
+        await _mirror_output(store, file_system)
+        note = f"{msg} {store.coverage_summary()}"
         return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
@@ -1454,11 +1861,28 @@ def register_output_store_tools(
         return ActionResult(extracted_content=msg, long_term_memory=msg)
 
     @tools.action(
-        "Read the output you are building so far — the schema with everything you "
-        "have filled in. Any empty or null field is unfinished work."
+        "Declare that a schema field is genuinely not published on the source site "
+        "after you have looked where it should be (e.g. no salary anywhere on the "
+        "detail pages). Give the field name and a one-line reason saying where you "
+        "looked. The field stops counting as unfinished work and done() will accept "
+        "it empty. Use this instead of leaving known-absent fields to be flagged."
+    )
+    async def mark_absent(field: str, reason: str) -> ActionResult:
+        ok, msg = store.mark_absent(field, reason)
+        if not ok:
+            return ActionResult(error=msg)
+        note = f"{msg} {store.coverage_summary()}"
+        return ActionResult(extracted_content=note, long_term_memory=note)
+
+    @tools.action(
+        "Read the output you are building so far — a coverage summary plus the full "
+        "schema with everything you have filled in. Every empty field is either "
+        "unfinished work or should be mark_absent'ed."
     )
     async def read_output() -> ActionResult:
-        return ActionResult(extracted_content=store.read_output())
+        return ActionResult(
+            extracted_content=f"{store.coverage_summary()}\n\n{store.read_output()}"
+        )
 
     @tools.action(
         "Search the output you have built so far for a case-insensitive substring "
@@ -1491,30 +1915,57 @@ def register_output_store_tools(
             return ActionResult(error=f"{name} must contain a JSON array of items.")
 
         added = 0
-        failures: list[str] = []
+        failures: dict[str, list[int]] = {}
         blocked = 0
         for i, it in enumerate(arr):
             if not isinstance(it, dict):
-                failures.append(f"#{i}: not an object")
+                failures.setdefault("not an object", []).append(i)
                 continue
-            if _stub_block(it):
+            if _stub_block_msg(store, clipboard, it):
                 blocked += 1
                 continue
             ok, msg = store.add_item(it)
             if ok:
                 added += 1
             else:
-                failures.append(f"#{i}: {msg}")
+                failures.setdefault(msg, []).append(i)
         await _mirror_output(store, file_system)
         parts = [f"Added {added} of {len(arr)} items from {fn}."]
-        if failures:
-            parts.append("Rejected: " + "; ".join(failures[:5]))
+        for reason, indices in failures.items():
+            idx = ", ".join(f"#{n}" for n in indices)
+            parts.append(f"Rejected {len(indices)} ({idx}): {reason}")
         if blocked:
             parts.append(
-                f"{blocked} skipped because their own pages were not opened — visit them "
-                "(or navigate to them in your script) before loading."
+                f"{blocked} skipped because their own pages were not read — read_pages() "
+                "covers them all in one step before loading."
             )
+        if added:
+            parts.append(store.coverage_summary())
         note = " ".join(parts)
+        return ActionResult(extracted_content=note, long_term_memory=note)
+
+    @tools.action(
+        f"Bulk-merge fields into existing '{array}' items from a JSON file you saved: "
+        'the file must be an array of {"index": n, "fields": {...}} objects '
+        "(e.g. built in a script and saved with save_json). Validates each merge and "
+        "reports per-entry failures in ONE step."
+    )
+    async def update_items_from_file(name: str, file_system: FileSystem) -> ActionResult:
+        fn = _normalise_fs_name(name, "json")
+        file_obj = file_system.get_file(fn) or file_system.get_file(name)
+        if file_obj is None:
+            return ActionResult(
+                error=f"No file named {name!r}. Save it first with save_json in a script."
+            )
+        try:
+            arr = json.loads(file_obj.read())
+        except Exception as e:
+            return ActionResult(error=f"{name} is not valid JSON: {e}")
+        ok, msg = store.update_many(arr)
+        if not ok:
+            return ActionResult(error=msg)
+        await _mirror_output(store, file_system)
+        note = f"{msg} {store.coverage_summary()}"
         return ActionResult(extracted_content=note, long_term_memory=note)
 
 
@@ -1549,6 +2000,14 @@ def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) 
                     except Exception:
                         logger.debug("completeness gate event emit failed", exc_info=True)
                 listing = "\n- ".join(empties)
+                hints = ""
+                try:
+                    hint_lines = store.extra_key_hints()
+                except Exception:
+                    logger.debug("extra_key_hints failed", exc_info=True)
+                    hint_lines = []
+                if hint_lines:
+                    hints = "\n\nShortcuts spotted:\n- " + "\n- ".join(hint_lines)
                 date_hint = ""
                 if any(
                     any(k in e.lower() for k in ("posted", "published", "date"))
@@ -1556,19 +2015,18 @@ def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) 
                 ):
                     date_hint = (
                         "\n\nA posted/published date is usually NOT in the visible text — "
-                        "it is in the page's JSON-LD. In a script read it with: ld = await "
-                        "browser.frame_jsonld('<embed url part>'); "
-                        "row['postedAt'] = ld.get('datePosted') if ld else None."
+                        "it is in each page's JSON-LD, which read_pages already returns "
+                        "as page['jsonld'] (e.g. its 'datePosted')."
                     )
                 return ActionResult(
                     is_done=False,
                     extracted_content=(
                         "Not finished — these fields in the output are still empty:\n- "
-                        f"{listing}\n\nGo back to the page that could fill each one and "
-                        "record it with add_item / update_item / set_field. A blank is "
-                        "only acceptable once you have looked where the information "
-                        "should be and found it genuinely absent. Then call done again."
-                        + date_hint
+                        f"{listing}\n\nFor each one, either fill it (update_items in "
+                        "bulk, or go back to the page that shows it) or, if you have "
+                        "looked where it should be and the site genuinely does not "
+                        "publish it, settle it with mark_absent(field, reason). Then "
+                        "call done again." + hints + date_hint
                     ),
                 )
         return await original_done(params=params, file_system=file_system)
