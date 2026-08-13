@@ -72,10 +72,14 @@ def _literal_choices(annotation: Any) -> tuple[str, ...] | None:
 
 
 def _coerce_scalar(value: Any, annotation: Any) -> Any:
-    """Forgiving pre-validation coercion: trim string whitespace, and map a string
-    case-insensitively onto a ``Literal`` enum choice ('Used ' -> 'USED') so an
-    obviously-right value is never rejected over casing.
+    """Forgiving pre-validation coercion: trim string whitespace, map a string
+    case-insensitively onto a ``Literal`` enum choice ('Used ' -> 'USED'), and
+    render a bool as 'true'/'false' for a plain string field — a model deciding
+    yes/no reaches for booleans first, and rejecting the type while keeping the
+    decision wastes a repair round-trip.
     """
+    if isinstance(value, bool) and _peel_optional(annotation) is str:
+        return "true" if value else "false"
     if not isinstance(value, str):
         return value
     value = value.strip()

@@ -389,6 +389,16 @@ def test_extra_key_hints_quiet_when_filled_or_absent():
     assert not any("postedAt" in h for h in s2.extra_key_hints())
 
 
+def test_bool_coerces_to_string_for_plain_str_fields():
+    s = _store()
+    s.add_item({"title": "A", "url": "u1"})
+    ok, msg = s.update_item(0, {"description": True})
+    assert ok is True, msg
+    assert s.data["items"][0]["description"] == "true"
+    ok, _ = s.update_item(0, {"description": False})
+    assert s.data["items"][0]["description"] == "false"
+
+
 def test_read_output_paging_windows_the_array():
     s = _store()
     s.set_field("indexPageUrl", "https://example.com")

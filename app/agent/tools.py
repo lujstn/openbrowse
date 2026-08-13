@@ -1676,6 +1676,19 @@ def register_tab_tools(
                         await file_system.write_file(
                             "rows_draft.json", json.dumps(drafts, indent=2, default=str)
                         )
+                        filled_counts: Counter = Counter()
+                        for r in drafts:
+                            for k, v in r.items():
+                                if v not in (None, "", [], {}):
+                                    filled_counts[k] += 1
+                        coverage = ", ".join(
+                            f"{k} {n}/{len(drafts)}" for k, n in sorted(filled_counts.items())
+                        )
+                        unfilled = [
+                            f
+                            for f in store.item_model.model_fields
+                            if f not in filled_counts
+                        ]
                         draft_note = (
                             f"\nrows_draft.json prefilled with {len(drafts)} row(s) "
                             "mapped from the pages"
@@ -1684,10 +1697,18 @@ def register_tab_tools(
                                 if thin
                                 else ""
                             )
-                            + ". Next: add_items_from_file('rows_draft.json'), then fix "
-                            "judgement fields (e.g. an enum implied by prose) in ONE "
-                            "update_items call, mark_absent what the pages genuinely "
-                            "lack, and done. No mapping script is needed."
+                            + f". Draft fills: {coverage}."
+                            + (
+                                " Not in the draft (fill from the listing rows above "
+                                "via update_items, or mark_absent): "
+                                + ", ".join(unfilled) + "."
+                                if unfilled
+                                else ""
+                            )
+                            + " Next: add_items_from_file('rows_draft.json') — no need "
+                            "to read the draft first — then ONE update_items call for "
+                            "the rest, mark_absent what no page publishes, and done. "
+                            "No mapping script is needed."
                         )
                     except Exception:
                         logger.warning("read_pages: failed to save rows_draft.json", exc_info=True)
@@ -1697,11 +1718,13 @@ def register_tab_tools(
                 if p.get("error"):
                     lines.append(f"#{i} FAILED {p['url']} — {p['error']}")
                 else:
+                    listing = " ".join((p.get("listing_text") or "").split())[:80]
                     lines.append(
                         f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
                         f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
                         f"frame {'yes' if p.get('frame_matched') else 'no'}, "
                         f"{len(p.get('links') or [])} links"
+                        + (f" | listing row: {listing}" if listing else "")
                     )
             note = (
                 f"Read {ok_count} of {len(pages)} pages"
@@ -2576,20 +2599,31 @@ def register_output_store_tools(
         return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
-        "Declare that a schema field is genuinely not published on the source site "
-        "after you have looked where it should be (a field no detail page shows "
-        "anywhere). Give the field name and a one-line reason saying where you "
-        "looked. The field stops counting as unfinished work and done() will accept "
-        "it empty. Use this instead of leaving known-absent fields to be flagged."
+        "Declare that schema field(s) are genuinely not published on the source "
+        "site after you have looked where they should be (a field no detail page "
+        "shows anywhere). Pass one field name or a LIST of them (settle them all "
+        "in one call) plus a one-line reason saying where you looked. Settled "
+        "fields stop counting as unfinished work and done() accepts them empty. A "
+        "field found on SOME pages needs no marking — partial is complete once "
+        "every page is read."
     )
-    async def mark_absent(field: str, reason: str) -> ActionResult:
-        unearned = _absence_unearned(store, clipboard, field)
-        if unearned:
-            return ActionResult(error=unearned)
-        ok, msg = store.mark_absent(field, reason)
-        if not ok:
-            return ActionResult(error=msg)
-        note = f"{msg} {store.coverage_summary()}"
+    async def mark_absent(field: str | list[str], reason: str) -> ActionResult:
+        field_names = field if isinstance(field, list) else [field]
+        messages: list[str] = []
+        errors: list[str] = []
+        for name in field_names:
+            unearned = _absence_unearned(store, clipboard, name)
+            if unearned:
+                errors.append(unearned)
+                continue
+            ok, msg = store.mark_absent(name, reason)
+            (messages if ok else errors).append(msg)
+        if errors and not messages:
+            return ActionResult(error=" ".join(errors))
+        note = " ".join(messages)
+        if errors:
+            note += " NOT settled: " + " ".join(errors)
+        note += f" {store.coverage_summary()}"
         return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
@@ -2635,8 +2669,17 @@ def register_output_store_tools(
             return ActionResult(error=f"{name} must contain a JSON array of items.")
 
         added = 0
+        added_titles: list[str] = []
         failures: dict[str, list[int]] = {}
         blocked = 0
+        title_field = next(
+            (
+                f
+                for f in (store.item_model.model_fields if store.item_model else {})
+                if "title" in f.lower() or f.lower() == "name"
+            ),
+            None,
+        )
         for i, it in enumerate(arr):
             if not isinstance(it, dict):
                 failures.setdefault("not an object", []).append(i)
@@ -2646,11 +2689,16 @@ def register_output_store_tools(
                 continue
             ok, msg = store.add_item(it)
             if ok:
+                idx = store.item_count() - 1
+                label = str(it.get(title_field) or "")[:40] if title_field else ""
+                added_titles.append(f"#{idx} {label}".strip())
                 added += 1
             else:
                 failures.setdefault(msg, []).append(i)
         await _mirror_output(store, file_system)
         parts = [f"Added {added} of {len(arr)} items from {fn}."]
+        if added_titles:
+            parts.append("Loaded as: " + "; ".join(added_titles) + ".")
         for reason, indices in failures.items():
             idx = ", ".join(f"#{n}" for n in indices)
             parts.append(f"Rejected {len(indices)} ({idx}): {reason}")

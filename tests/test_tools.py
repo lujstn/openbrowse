@@ -872,6 +872,44 @@ def test_load_saved_json_disk_fallback(tmp_path) -> None:
     assert missing is None
 
 
+async def test_mark_absent_action_accepts_field_list() -> None:
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard = {"_visited": {"https://x.com/a"}}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    register_output_store_tools(tools, store, clipboard)
+    entry = tools.registry.registry.actions["mark_absent"]
+    params = entry.param_model(field=["description"], reason="never published")
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert not result.error, result.error
+    assert "description" in store.absent_fields
+
+
+async def test_add_items_from_file_lists_loaded_titles() -> None:
+    import json as _json
+
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard = {"_visited": {"https://x.com/a", "https://x.com/b"}}
+    register_output_store_tools(tools, store, clipboard)
+    fs = _FakeFileSystem()
+    fs.files["rows.json"] = _json.dumps(
+        [
+            {"title": "Alpha", "sourceUrl": "https://x.com/a", "description": "d" * 300},
+            {"title": "Beta", "sourceUrl": "https://x.com/b", "description": "d" * 300},
+        ]
+    )
+    entry = tools.registry.registry.actions["add_items_from_file"]
+    params = entry.param_model(name="rows.json")
+    result = await entry.function(params=params, file_system=fs)
+    assert "#0 Alpha" in result.extracted_content
+    assert "#1 Beta" in result.extracted_content
+
+
 def test_find_links_offhost_flagging_helper() -> None:
     from collections import Counter
     from urllib.parse import urlparse
