@@ -69,11 +69,13 @@ _TOOLS_EASIEST_EXTENSION = (
     "open_tabs([...]) opens many links at once, open_in_new_tab(index) follows one, "
     "close_tab brings you back. The listing gives you links, not answers: a record's real "
     "detail lives only on its own page, so there are two good ways to fill items — (1) "
-    "open_tabs() then walk each tab (goto_tab, read, update_item, next), or (2) write ONE "
-    "extraction script that navigates each saved link, reads the embed with frame_text, "
-    "save_json the batch, then add_items_from_file. Either way you MUST open each item's "
-    "own page: add_item refuses more than two items whose pages you have not opened. "
-    "Never batch items in from the listing alone."
+    "open_tabs() then walk each tab (goto_tab, read, update_item, next), or (2) call "
+    "run_code_file('extract', code=<one script that navigates each saved link, reads the "
+    "embed with frame_text, and save_json's the batch>) — this writes AND runs the script "
+    "in one step; do not write it separately or rewrite it, just run it and read the "
+    "output — then add_items_from_file. Either way you MUST open each item's own page: "
+    "add_item refuses more than two listing items with no detail. Never batch items in "
+    "from the listing alone."
 )
 
 _CODE_REUSE_EXTENSION = (

@@ -578,14 +578,15 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         return d
 
     @tools.action(
-        "Write a reusable Python script to a file (code is NEVER run here — save it, "
-        "then execute with run_code_file). Write it to work on EVERY similar/templated "
-        "page: read the page or its embedded panel and extract into a structure; "
-        "parameterise anything page-specific. The FAST pattern for a listing: one script "
-        "that loops the saved detail links, and for each — await browser.navigate(url, "
-        "wait_for='<embed url part>'); text = await browser.frame_text('<embed url part>') "
-        "— collects the fields, then save_json(rows, 'jobs.json'); finally add_items_from_file"
-        "('jobs.json'). A field missing from the visible text (e.g. a posted/published date) "
+        "Save a reusable Python script to a file WITHOUT running it (rarely needed — to "
+        "run a script, call run_code_file with code= which writes AND runs it in one step). "
+        "Write it to work on EVERY similar/templated page: read the page or its embedded "
+        "panel and extract into a structure; parameterise anything page-specific. The FAST "
+        "pattern for a listing: run_code_file('extract', code=<one script that loops the "
+        "saved detail links and for each does await browser.navigate(url, wait_for='<embed "
+        "url part>'); text = await browser.frame_text('<embed url part>'), collects the "
+        "fields, then save_json(rows, 'jobs.json')>), then add_items_from_file('jobs.json'). "
+        "A field missing from the visible text (e.g. a posted/published date) "
         "is usually in the page's JSON-LD: frame_evaluate the script[type=application/ld+json] "
         "and parse its datePosted. Inside a script you have: browser.evaluate(js) / browser.get_html("
         "selector=None) for the MAIN page; browser.frames() / await browser.frame_text("
@@ -612,22 +613,31 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         return ActionResult(extracted_content=note, long_term_memory=f"wrote script {fname}")
 
     @tools.action(
-        "Run a script previously saved with write_code_file, optionally navigating to "
-        "url first, then executing it against the current page. Reuse the SAME script "
-        "across every similar/templated page. STDOUT is truncated to a small preview — "
-        "save large results with save_json and print only specific keys/slices."
+        "Write and run a reusable script in ONE step: pass code= to save it to 'name' "
+        "then execute it (this is the normal way — you do not need a separate "
+        "write_code_file first). Omit code= to re-run the already-saved 'name'. Pass url= "
+        "to navigate there before running. Reuse the SAME script across every similar "
+        "page. STDOUT is truncated to a small preview — save large results with save_json "
+        "and print only specific keys/slices; read them back with read_file or "
+        "add_items_from_file."
     )
     async def run_code_file(
         name: str,
         browser_session: BrowserSession,
         file_system: FileSystem,
+        code: str | None = None,
         url: str | None = None,
     ) -> ActionResult:
         fname = _normalise_py_name(name)
         path = _scripts_dir(file_system) / fname
+        if code is not None:
+            try:
+                path.write_text(code)
+            except Exception as e:
+                return ActionResult(error=f"saving script failed: {type(e).__name__}: {e}")
         if not path.exists():
             return ActionResult(
-                error=f"No script named '{fname}'. Write it first with write_code_file."
+                error=f"No script named '{fname}'. Pass code= to write and run it in one step."
             )
         code = path.read_text()
 
@@ -1133,9 +1143,10 @@ def register_tab_tools(
             "tabs one by one — goto_tab(n), read the detail page, add_item or "
             "update_item with what it shows, close_tab — because each item's detail "
             "(description, posted date and more) lives on its own page, not this "
-            "listing. Or write ONE extraction script and run it across the links, then "
-            "add_items_from_file." + frame_hint + " The links stay in view below and via "
-            "recall('found_links') — no need to re-read."
+            "listing. Or run_code_file('extract', code=<one script that reads every saved "
+            "link and save_json's the rows>) in ONE step, then add_items_from_file."
+            + frame_hint + " The links stay in view below and via recall('found_links') — "
+            "no need to re-read."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
