@@ -146,23 +146,37 @@ def _jobs_store():
     return OutputStore(json_schema_to_pydantic(schema, "T"))
 
 
-def test_unvisited_stub_count_counts_unopened_pages() -> None:
-    from app.agent.tools import _norm_url, _unvisited_stub_count
+def test_bare_stub_count_counts_unopened_contentless_items() -> None:
+    from app.agent.tools import _norm_url, _bare_stub_count
 
     store = _jobs_store()
     store.add_item({"title": "A", "sourceUrl": "https://x/a"})
     store.add_item({"title": "B", "sourceUrl": "https://x/b"})
-    store.add_item({"title": "C"})  # no url -> never a stub
+    store.add_item({"title": "C"})
 
-    assert _unvisited_stub_count(store, set()) == 2
-    assert _unvisited_stub_count(store, {_norm_url("https://x/a")}) == 1
-    assert _unvisited_stub_count(store, {_norm_url("https://x/a"), _norm_url("https://x/b")}) == 0
+    assert _bare_stub_count(store, set()) == 2
+    assert _bare_stub_count(store, {_norm_url("https://x/a")}) == 1
+    assert _bare_stub_count(store, {_norm_url("https://x/a"), _norm_url("https://x/b")}) == 0
 
 
-def test_unvisited_stub_count_no_url_field() -> None:
+def test_item_with_description_is_not_a_stub() -> None:
+    from app.agent.tools import _bare_stub_count, _is_bare_stub
+
+    store = _jobs_store()
+    long_desc = "We are hiring. " * 20
+    filled = {"title": "A", "sourceUrl": "https://x/a", "description": long_desc}
+    bare = {"title": "B", "sourceUrl": "https://x/b"}
+    assert _is_bare_stub(store, filled, set()) is False
+    assert _is_bare_stub(store, bare, set()) is True
+    store.add_item(filled)
+    store.add_item(bare)
+    assert _bare_stub_count(store, set()) == 1
+
+
+def test_bare_stub_count_no_url_field() -> None:
     from app.agent.output_store import OutputStore
     from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _unvisited_stub_count
+    from app.agent.tools import _bare_stub_count
 
     schema = {
         "type": "object",
@@ -178,4 +192,4 @@ def test_unvisited_stub_count_no_url_field() -> None:
     }
     store = OutputStore(json_schema_to_pydantic(schema, "T"))
     store.add_item({"name": "x"})
-    assert _unvisited_stub_count(store, set()) == 0
+    assert _bare_stub_count(store, set()) == 0

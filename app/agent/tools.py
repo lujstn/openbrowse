@@ -161,10 +161,12 @@ class _SandboxBrowser:
         can read an embedded/cross-origin panel (e.g. a job description in an Ashby embed).
         """
         needle = (url_contains or "").lower()
+        all_frames = await self.frames()
+        matched = [f for f in all_frames if not needle or needle in f["url"].lower()]
+        if not matched and all_frames:
+            matched = all_frames
         results: list[tuple[str, Any]] = []
-        for f in await self.frames():
-            if needle and needle not in f["url"].lower():
-                continue
+        for f in matched:
             try:
                 sess = await self._session.get_or_create_cdp_session(
                     f["targetId"], focus=False
@@ -194,13 +196,10 @@ class _SandboxBrowser:
         """Poll until a cross-origin iframe matching ``url_contains`` has rendered text,
         because an embed loads asynchronously after navigation. Returns True on success.
         """
-        needle = (url_contains or "").lower()
         for _ in range(int(max(1.0, timeout_s) * 2)):
-            for f in await self.frames():
-                if needle in f["url"].lower():
-                    txt = await self.frame_text(url_contains)
-                    if txt and txt.strip():
-                        return True
+            txt = await self.frame_text(url_contains)
+            if txt and txt.strip():
+                return True
             await asyncio.sleep(0.5)
         return False
 
@@ -535,10 +534,10 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
                 await coro
 
     try:
-        await asyncio.wait_for(_run(), timeout=120.0)
+        await asyncio.wait_for(_run(), timeout=180.0)
     except asyncio.TimeoutError:
         return ActionResult(
-            error="Script timed out after 120 seconds. Process a smaller batch of URLs "
+            error="Script timed out after 180 seconds. Process a smaller batch of URLs "
             "per run, save progress with save_json, and continue in the next run."
         )
     except Exception as e:
@@ -586,7 +585,9 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         "that loops the saved detail links, and for each — await browser.navigate(url, "
         "wait_for='<embed url part>'); text = await browser.frame_text('<embed url part>') "
         "— collects the fields, then save_json(rows, 'jobs.json'); finally add_items_from_file"
-        "('jobs.json'). Inside a script you have: browser.evaluate(js) / browser.get_html("
+        "('jobs.json'). A field missing from the visible text (e.g. a posted/published date) "
+        "is usually in the page's JSON-LD: frame_evaluate the script[type=application/ld+json] "
+        "and parse its datePosted. Inside a script you have: browser.evaluate(js) / browser.get_html("
         "selector=None) for the MAIN page; browser.frames() / await browser.frame_text("
         "url_contains) / await browser.frame_evaluate(url_contains, js, all_matches=False) / "
         "await browser.wait_for_frame(url_contains) to READ INSIDE a cross-origin embed "
@@ -1117,6 +1118,14 @@ def register_tab_tools(
         except Exception:
             logger.warning("find_links: failed to save found_links.json", exc_info=True)
             saved = None
+        frame_hint = ""
+        if frame_url_contains:
+            frame_hint = (
+                f" In a script, read each detail page's embed with "
+                f"browser.frame_text('{frame_url_contains}') — reuse the SAME "
+                f"'{frame_url_contains}' you matched here; do not look up the iframe's "
+                "exact src."
+            )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
@@ -1124,8 +1133,9 @@ def register_tab_tools(
             "tabs one by one — goto_tab(n), read the detail page, add_item or "
             "update_item with what it shows, close_tab — because each item's detail "
             "(description, posted date and more) lives on its own page, not this "
-            "listing. Or write ONE extraction script and run it across the links. The "
-            "links stay in view below and via recall('found_links') — no need to re-read."
+            "listing. Or write ONE extraction script and run it across the links, then "
+            "add_items_from_file." + frame_hint + " The links stay in view below and via "
+            "recall('found_links') — no need to re-read."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
@@ -1295,23 +1305,40 @@ def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
 
 
 _MAX_UNVISITED_STUBS = 2
+_STUB_CONTENT_CHARS = 120
 
 
-def _unvisited_stub_count(store: OutputStore, visited: set) -> int:
-    """How many items already hold a detail URL whose page has not been opened — the
-    throttle that stops the agent batch-adding the whole listing without drilling in.
+def _item_has_substantial_content(item: dict) -> bool:
+    """True if the item carries a real page-read field (a description far exceeds a
+    listing's short title/location), so it is drilled-in data, not a bare listing row.
+    """
+    return any(
+        isinstance(v, str) and len(v) > _STUB_CONTENT_CHARS for v in item.values()
+    )
+
+
+def _is_bare_stub(store: OutputStore, item: dict, visited: set) -> bool:
+    """A bare stub is an item with a detail URL whose page has NOT been opened and which
+    carries no substantial content yet — i.e. a listing row added without drilling in.
+    An item with a real description, or whose URL was visited, is never a bare stub.
     """
     url_field = _item_url_field(store)
-    if not url_field or not store.array_field:
+    url_val = item.get(url_field) if url_field else None
+    if not url_val:
+        return False
+    if _item_has_substantial_content(item):
+        return False
+    return _norm_url(url_val) not in visited
+
+
+def _bare_stub_count(store: OutputStore, visited: set) -> int:
+    """How many bare stubs are already in the store — the throttle that stops the agent
+    batch-adding the whole listing without opening any detail page.
+    """
+    if not store.array_field:
         return 0
     arr = store.data.get(store.array_field) or []
-    return sum(
-        1
-        for it in arr
-        if isinstance(it, dict)
-        and it.get(url_field)
-        and _norm_url(it.get(url_field)) not in visited
-    )
+    return sum(1 for it in arr if isinstance(it, dict) and _is_bare_stub(store, it, visited))
 
 
 def register_output_store_tools(
@@ -1332,21 +1359,17 @@ def register_output_store_tools(
         return clipboard.setdefault("_visited", set())
 
     def _stub_block(item: dict[str, Any]) -> str | None:
-        url_field = _item_url_field(store)
-        url_val = item.get(url_field) if url_field else None
-        if not url_val:
-            return None
         visited = _visited()
-        if _norm_url(url_val) in visited:
+        if not _is_bare_stub(store, item, visited):
             return None
-        if _unvisited_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
+        if _bare_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
             return None
         return (
-            f"Slow down — you already have {_MAX_UNVISITED_STUBS} items whose own pages "
-            "you have not opened. Open THIS role's page before adding more: goto_tab on "
-            "its queued tab, or navigate to its URL in a script and read the embed with "
-            "browser.frame_text. Then add_item / update_item from what the page shows. "
-            "Do not batch items in from the listing."
+            f"Slow down — you already have {_MAX_UNVISITED_STUBS} listing stubs with no "
+            "detail. Open THIS role's page before adding more: goto_tab on its queued "
+            "tab, or navigate to its URL in a script and read the embed with "
+            "browser.frame_text, then add_item / update_item with the description. Do "
+            "not batch items in from the listing."
         )
 
     @tools.action(
