@@ -207,12 +207,15 @@ async def _match_frame_target(
     url_contains: str,
     claimed: set[str],
     baseline: set[str],
+    allow_sole_candidate: bool = False,
 ) -> str | None:
     """The OOPIF target belonging to ``page_target_id`` whose URL contains
     ``url_contains``. Ownership is resolved by matching the global iframe-target
     list against the page's own frame tree and iframe srcs, because CDP's target
-    list carries no parent linkage; falls back to the single unclaimed candidate
-    created since read_pages started.
+    list carries no parent linkage. The sole-unclaimed-candidate fallback is only
+    honoured when ``allow_sole_candidate`` (single-page reads) — in a concurrent
+    wave a slow page's sole candidate could be a SIBLING page's embed, which would
+    silently attribute the wrong item's data.
     """
     needle = (url_contains or "").lower()
     tree_urls: set[str] = set()
@@ -255,7 +258,7 @@ async def _match_frame_target(
                 return tid
         if tid not in baseline:
             candidates.append(t)
-    if len(candidates) == 1:
+    if allow_sole_candidate and len(candidates) == 1:
         return candidates[0]["targetId"]
     return None
 
@@ -263,6 +266,8 @@ async def _match_frame_target(
 _READ_PAGES_MAX = 48
 _READ_PAGES_TEXT_CAP = 60_000
 _PAGE_READY_TIMEOUT_S = 18.0
+_MIN_PAGE_TEXT_CHARS = 200
+_JSONLD_GRACE_S = 3.0
 
 
 async def _read_one_page(
@@ -272,24 +277,37 @@ async def _read_one_page(
     url_contains: str | None,
     claimed: set[str],
     baseline: set[str],
+    allow_sole_candidate: bool = False,
 ) -> dict[str, Any]:
     """Wait for a spawned tab (and, when asked, its embedded panel) to render, then
     read {url, title, text, jsonld, links} from it — the panel when one matches,
-    else the main document.
+    else the main document. Rendering only counts once the text is substantial
+    (embeds paint a thin loading shell first), and a page whose JSON-LD has not
+    arrived with the text gets a short grace poll — that is where posted dates and
+    salary live, so reading the shell would silently null those fields.
     """
     page: dict[str, Any] = {"url": url}
     frame_tid: str | None = None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _PAGE_READY_TIMEOUT_S
+
+    def _substantial(txt: Any) -> bool:
+        return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
+
     while loop.time() < deadline:
         try:
             if url_contains:
                 frame_tid = await _match_frame_target(
-                    browser_session, target_id, url_contains, claimed, baseline
+                    browser_session,
+                    target_id,
+                    url_contains,
+                    claimed,
+                    baseline,
+                    allow_sole_candidate,
                 )
                 if frame_tid:
                     txt = await _eval_on_target(browser_session, frame_tid, _BODY_TEXT_JS)
-                    if txt and txt.strip():
+                    if _substantial(txt):
                         break
             else:
                 ready = await _eval_on_target(
@@ -297,7 +315,7 @@ async def _read_one_page(
                 )
                 if ready in ("interactive", "complete"):
                     txt = await _eval_on_target(browser_session, target_id, _BODY_TEXT_JS)
-                    if txt and txt.strip():
+                    if _substantial(txt):
                         break
         except Exception:
             logger.debug("_read_one_page: poll failed", exc_info=True)
@@ -311,14 +329,29 @@ async def _read_one_page(
         page["title"] = await _eval_on_target(browser_session, target_id, "document.title")
         text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
         page["text"] = text[:_READ_PAGES_TEXT_CAP]
-        jsonld = _parse_jsonld_blobs(
-            await _eval_on_target(browser_session, read_tid, _JSONLD_JS)
-        )
-        if jsonld is None and read_tid != target_id:
-            jsonld = _parse_jsonld_blobs(
-                await _eval_on_target(browser_session, target_id, _JSONLD_JS)
+
+        async def _jsonld_now() -> Any:
+            found = _parse_jsonld_blobs(
+                await _eval_on_target(browser_session, read_tid, _JSONLD_JS)
             )
+            if found is None and read_tid != target_id:
+                found = _parse_jsonld_blobs(
+                    await _eval_on_target(browser_session, target_id, _JSONLD_JS)
+                )
+            return found
+
+        jsonld = await _jsonld_now()
+        arrived_late = False
+        grace_deadline = loop.time() + _JSONLD_GRACE_S
+        while jsonld is None and page["text"].strip() and loop.time() < grace_deadline:
+            await asyncio.sleep(0.5)
+            jsonld = await _jsonld_now()
+            arrived_late = jsonld is not None
         page["jsonld"] = jsonld
+        if arrived_late:
+            text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+            if len(text) > len(page["text"]):
+                page["text"] = text[:_READ_PAGES_TEXT_CAP]
         page["links"] = await _eval_on_target(browser_session, read_tid, _LINKS_JS) or []
     except Exception as e:
         page["error"] = f"{type(e).__name__}: {e}"
@@ -357,7 +390,13 @@ async def _read_pages_impl(
         claimed: set[str] = set()
         for u, tid in pairs:
             results[u] = await _read_one_page(
-                browser_session, u, tid, url_contains, claimed, baseline
+                browser_session,
+                u,
+                tid,
+                url_contains,
+                claimed,
+                baseline,
+                allow_sole_candidate=len(pairs) == 1,
             )
         for _, tid in pairs:
             await _close_spawned_tab(browser_session, tid)
@@ -1749,6 +1788,41 @@ def _stub_block_msg(
     )
 
 
+def _absence_unearned(
+    store: OutputStore, clipboard: dict[str, Any] | None, field: str
+) -> str | None:
+    """The refusal message when ``field`` may not be marked absent yet because the
+    items' own pages have not actually been read — absence must be observed, not
+    assumed, or gate pressure invites marking everything absent without looking.
+    Item fields only; a top-level field has no per-item page to verify against.
+    """
+    if store.item_model is None or field not in store.item_model.model_fields:
+        return None
+    url_field = _item_url_field(store)
+    if not url_field or not store.array_field:
+        return None
+    arr = store.data.get(store.array_field) or []
+    urls = [
+        it.get(url_field)
+        for it in arr
+        if isinstance(it, dict) and it.get(url_field)
+    ]
+    if not urls:
+        return None
+    visited: set = (
+        clipboard.setdefault("_visited", set()) if clipboard is not None else set()
+    )
+    unread = [u for u in urls if _norm_url(u) not in visited]
+    if len(unread) * 5 > len(urls):
+        return (
+            f"Cannot mark '{field}' absent yet — {len(unread)} of {len(urls)} item "
+            f"pages have not been read (e.g. {unread[0]}). Absence has to be "
+            "observed: read_pages() covers them all in one step, then mark it "
+            "absent if the value is genuinely not there."
+        )
+    return None
+
+
 def _store_bridge(
     store: OutputStore, clipboard: dict[str, Any], file_system: FileSystem
 ) -> dict[str, Any]:
@@ -1784,6 +1858,9 @@ def _store_bridge(
         return msg
 
     async def mark_absent(field: str, reason: str) -> str:
+        unearned = _absence_unearned(store, clipboard, field)
+        if unearned:
+            return unearned
         _, msg = store.mark_absent(field, reason)
         return msg
 
@@ -1882,6 +1959,9 @@ def register_output_store_tools(
         "it empty. Use this instead of leaving known-absent fields to be flagged."
     )
     async def mark_absent(field: str, reason: str) -> ActionResult:
+        unearned = _absence_unearned(store, clipboard, field)
+        if unearned:
+            return ActionResult(error=unearned)
         ok, msg = store.mark_absent(field, reason)
         if not ok:
             return ActionResult(error=msg)
@@ -1889,13 +1969,17 @@ def register_output_store_tools(
         return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
-        "Read the output you are building so far — a coverage summary plus the full "
-        "schema with everything you have filled in. Every empty field is either "
-        "unfinished work or should be mark_absent'ed."
+        "Read the output you are building so far — a coverage summary plus the "
+        "schema with everything you have filled in. On a large output pass offset= "
+        "and limit= to window the item array (a full dump gets truncated upstream "
+        "at 60k chars, silently hiding the tail — page through instead). Every "
+        "empty field is either unfinished work or should be mark_absent'ed."
     )
-    async def read_output() -> ActionResult:
+    async def read_output(offset: int = 0, limit: int | None = None) -> ActionResult:
         return ActionResult(
-            extracted_content=f"{store.coverage_summary()}\n\n{store.read_output()}"
+            extracted_content=(
+                f"{store.coverage_summary()}\n\n{store.read_output(offset, limit)}"
+            )
         )
 
     @tools.action(

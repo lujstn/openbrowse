@@ -210,3 +210,38 @@ async def test_profile_delete_cascade_nulls_session(client, tmp_path):
     assert await crud.get_profile(pid) is None
     assert (await crud.get_session(session["id"]))["profile_id"] is None
     assert not (tmp_path / "data" / "profiles" / f"{pid}.json").exists()
+
+
+async def test_session_log_export_scopes(client):
+    import json
+
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape jobs")
+    sid = session["id"]
+    await crud.update_session(sid, output=json.dumps({"jobs": [{"title": "A"}]}))
+    await crud.create_message(
+        session_id=sid,
+        role="ai",
+        msg_type="browser_action",
+        summary="step one",
+        data=json.dumps({"step": 1, "see": "a page", "thinking": "private reasoning"}),
+    )
+    auth = _basic("admin", "secret-key")
+
+    full = (await client.get(f"/session/{sid}/log", headers=auth)).json()
+    assert any(
+        m["data"] and "private reasoning" in m["data"] for m in full["messages"]
+    )
+
+    steps = (
+        await client.get(f"/session/{sid}/log?scope=steps", headers=auth)
+    ).json()
+    step_rows = [m for m in steps["messages"] if m["data"]]
+    assert step_rows and all("private reasoning" not in m["data"] for m in step_rows)
+    assert any("a page" in m["data"] for m in step_rows)
+
+    output = (
+        await client.get(f"/session/{sid}/log?scope=output", headers=auth)
+    ).json()
+    assert output == {"jobs": [{"title": "A"}]}

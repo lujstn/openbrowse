@@ -365,7 +365,12 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     async def fake_close(session, tid):
         closed.append(tid)
 
-    async def fake_read_one(session, url, tid, url_contains, claimed, baseline):
+    sole_flags: list[bool] = []
+
+    async def fake_read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        sole_flags.append(allow_sole_candidate)
         if url in fail_once:
             fail_once.discard(url)
             return {"url": url, "error": "no readable text rendered"}
@@ -385,6 +390,84 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     assert len(spawned) == 6
     assert len(closed) == 6
     assert len(clipboard["_visited"]) == 5
+    assert sole_flags == [False, False, False, False, True, True]
+
+
+async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> None:
+    import json as _json
+
+    import app.agent.tools as tools_mod
+
+    texts = iter(["Loading", "Loading…", "X" * 300, "X" * 300, "X" * 400])
+    jsonlds = iter([[], [_json.dumps({"@type": "JobPosting", "datePosted": "2026-08-04"})]])
+    last_text = {"v": ""}
+
+    async def fake_eval(session, tid, js):
+        if js == tools_mod._BODY_TEXT_JS:
+            last_text["v"] = next(texts, last_text["v"])
+            return last_text["v"]
+        if js == tools_mod._JSONLD_JS:
+            return next(jsonlds, [])
+        if js == tools_mod._LINKS_JS:
+            return [{"text": "Apply", "href": "https://x.com/apply"}]
+        if "readyState" in js:
+            return "complete"
+        return "Job title"
+
+    async def fake_match(session, tid, needle, claimed, baseline, allow_sole=False):
+        return "frame-1"
+
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+
+    page = await tools_mod._read_one_page(
+        None, "https://x.com/j1", "tid-1", "ashby", set(), set()
+    )
+    assert not page.get("error")
+    assert len(page["text"]) >= 300
+    assert page["jsonld"]["datePosted"] == "2026-08-04"
+    assert page["frame_matched"] is True
+
+
+async def test_mark_absent_requires_pages_read() -> None:
+    from app.agent.tools import _absence_unearned
+
+    store = _jobs_store()
+    clipboard: dict = {}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200})
+
+    blocked = _absence_unearned(store, clipboard, "description")
+    assert blocked is not None and "read_pages" in blocked
+
+    clipboard["_visited"] = {"https://x.com/a", "https://x.com/b"}
+    assert _absence_unearned(store, clipboard, "description") is None
+
+
+async def test_mark_absent_earn_check_skips_top_level_and_urlless() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _absence_unearned
+
+    store = _jobs_store()
+    assert _absence_unearned(store, {}, "careersPageUrl") is None
+    assert _absence_unearned(store, {}, "description") is None
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                },
+            }
+        },
+    }
+    urlless = OutputStore(json_schema_to_pydantic(schema, "T"))
+    urlless.add_item({"name": "x"})
+    assert _absence_unearned(urlless, {}, "name") is None
 
 
 def _hints_store():

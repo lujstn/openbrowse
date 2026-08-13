@@ -302,11 +302,39 @@ async def session_detail(request: Request, session_id: str):
     )
 
 
+def _strip_thinking(data: str | None) -> str | None:
+    """A message's data blob without its raw thinking text, for the steps-only
+    export scope. Non-JSON data passes through untouched.
+    """
+    if not data:
+        return data
+    try:
+        parsed = json.loads(data)
+    except (json.JSONDecodeError, TypeError):
+        return data
+    if isinstance(parsed, dict) and "thinking" in parsed:
+        parsed.pop("thinking", None)
+        return json.dumps(parsed)
+    return data
+
+
 @router.get("/session/{session_id}/log")
-async def session_log(session_id: str):
+async def session_log(session_id: str, scope: str = "full"):
+    """Session export at three scopes: ``output`` is only the schema answer,
+    ``steps`` is the session and step log without raw thinking, ``full`` is
+    everything the feed shows.
+    """
     session = await crud.get_session(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    if scope == "output":
+        raw = session.get("output")
+        try:
+            return JSONResponse(json.loads(raw) if raw else None)
+        except (json.JSONDecodeError, TypeError):
+            return JSONResponse({"output": raw})
+
     messages, _ = await crud.list_messages(session_id, limit=1000)
     export = _to_session_response(session).model_dump()
     export["task"] = session.get("task")
@@ -315,7 +343,7 @@ async def session_log(session_id: str):
             "createdAt": m.get("created_at"),
             "type": m.get("type"),
             "summary": m.get("summary"),
-            "data": m.get("data"),
+            "data": _strip_thinking(m.get("data")) if scope == "steps" else m.get("data"),
         }
         for m in messages
     ]

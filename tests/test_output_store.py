@@ -389,5 +389,23 @@ def test_extra_key_hints_quiet_when_filled_or_absent():
     assert not any("postedAt" in h for h in s2.extra_key_hints())
 
 
+def test_read_output_paging_windows_the_array():
+    s = _store()
+    s.set_field("careersPageUrl", "https://example.com")
+    for i in range(5):
+        s.add_item({"title": f"Job {i}", "url": f"https://x.com/{i}"})
+
+    full = json.loads(s.read_output())
+    assert len(full["jobs"]) == 5 and "_window" not in full
+
+    page = json.loads(s.read_output(offset=1, limit=2))
+    assert [j["title"] for j in page["jobs"]] == ["Job 1", "Job 2"]
+    assert "jobs[1:3] of 5" in page["_window"]
+    assert page["careersPageUrl"] == "https://example.com"
+
+    tail = json.loads(s.read_output(offset=4, limit=10))
+    assert [j["title"] for j in tail["jobs"]] == ["Job 4"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

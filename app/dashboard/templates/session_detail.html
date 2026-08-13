@@ -156,6 +156,31 @@ Browser Use Pi{% endblock %} {% block head %}
     border-color: #444;
     color: #fff;
   }
+  .export-wrap {
+    position: relative;
+  }
+  .export-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    display: flex;
+    flex-direction: column;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 5px;
+    min-width: 190px;
+    z-index: 30;
+    overflow: hidden;
+  }
+  .export-menu .feed-btn {
+    border: none;
+    border-radius: 0;
+    text-align: left;
+    padding: 6px 10px;
+  }
+  .export-menu .feed-btn:hover {
+    background: #242424;
+  }
   .step-row {
     display: flex;
     gap: 10px;
@@ -484,9 +509,22 @@ Browser Use Pi{% endblock %} {% block head %}
       <span>Live Feed</span>
       <span class="feed-btns" style="display: flex; gap: 6px">
         <button id="stop-btn" class="feed-btn stop" title="Stop the agent (saves partial output)" style="display: none">⏹ Stop</button>
-        <button id="copy-json" class="feed-btn" title="Copy the full step-by-step log as JSON">
-          {} Copy JSON
-        </button>
+        <span class="export-wrap">
+          <button id="copy-json" class="feed-btn" title="Copy this session as JSON">
+            {} Copy JSON ▾
+          </button>
+          <div id="export-menu" class="export-menu" style="display: none">
+            <button class="feed-btn export-opt" data-scope="output" title="Just the schema-validated result — what the platform receives">
+              Output only
+            </button>
+            <button class="feed-btn export-opt" data-scope="steps" title="Session details and the full step log, without the model's raw thinking">
+              Steps &amp; session data
+            </button>
+            <button class="feed-btn export-opt" data-scope="full" title="Everything the feed shows, including the model's thinking">
+              Full JSON incl. thinking
+            </button>
+          </div>
+        </span>
       </span>
     </div>
     <div class="panel-body" id="output-panel">
@@ -716,15 +754,27 @@ Browser Use Pi{% endblock %} {% block head %}
   formatTimes();
   detectOverflow(feedRows);
 
-  document.getElementById("copy-json").onclick = async function () {
-    const btn = this;
-    try {
-      const resp = await fetch("/session/" + SESSION_ID + "/log");
-      const data = await resp.json();
-      await copyText(JSON.stringify(data, null, 2));
-      flash(btn, "Copied");
-    } catch (e) {}
+  const exportMenu = document.getElementById("export-menu");
+  const exportBtn = document.getElementById("copy-json");
+  exportBtn.onclick = function () {
+    exportMenu.style.display = exportMenu.style.display === "none" ? "flex" : "none";
   };
+  exportMenu.querySelectorAll(".export-opt").forEach(function (opt) {
+    opt.onclick = async function () {
+      exportMenu.style.display = "none";
+      try {
+        const resp = await fetch(
+          "/session/" + SESSION_ID + "/log?scope=" + opt.dataset.scope
+        );
+        const data = await resp.json();
+        await copyText(JSON.stringify(data, null, 2));
+        flash(exportBtn, "Copied");
+      } catch (e) {}
+    };
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest(".export-wrap")) exportMenu.style.display = "none";
+  });
 
   const stopBtn = document.getElementById("stop-btn");
 

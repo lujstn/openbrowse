@@ -147,8 +147,26 @@ class OutputStore:
     def is_empty(self) -> bool:
         return all(_is_empty_value(v) for v in self._data.values())
 
-    def read_output(self) -> str:
-        return json.dumps(self._data, indent=2, default=str)
+    def read_output(self, offset: int = 0, limit: int | None = None) -> str:
+        """The output as JSON; ``offset``/``limit`` window the item array so a read
+        of a large store never depends on a full dump (upstream layers truncate
+        long tool results, silently hiding the tail).
+        """
+        if limit is None and not offset:
+            return json.dumps(self._data, indent=2, default=str)
+        if not self._array_field:
+            return json.dumps(self._data, indent=2, default=str)
+        arr = self._data.get(self._array_field) or []
+        total = len(arr)
+        offset = max(0, int(offset))
+        end = total if limit is None else min(total, offset + max(0, int(limit)))
+        windowed = dict(self._data)
+        windowed[self._array_field] = arr[offset:end]
+        windowed["_window"] = (
+            f"showing {self._array_field}[{offset}:{end}] of {total}; "
+            "call read_output with offset/limit for the rest"
+        )
+        return json.dumps(windowed, indent=2, default=str)
 
     def add_item(self, item: Any) -> tuple[bool, str]:
         if not self._array_field:

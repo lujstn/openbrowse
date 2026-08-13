@@ -190,3 +190,30 @@ def test_repair_message_scrubs_and_hoists():
     assert inp["action"] == [{"navigate": {"url": "https://x"}}]
     assert inp["next_move"].startswith("Call find_elements on canonical/og:url tags")
     _assert_no_tags(inp["plan_to_goal"])
+
+
+def test_html_tags_in_prose_are_not_treated_as_leaks():
+    """A model reasoning ABOUT page HTML (<a>, <title>, <script> …) in its thinking
+    is prose, not tool-call scaffolding — the scrubber and hoister must leave it
+    byte-for-byte intact. Only the card-field tags, <invoke>/<parameter> junk and
+    <action> payloads count as leaks.
+    """
+    from app.agent.leak_repair import scrub_tag_bleed
+
+    prose = (
+        "The page has an <a> tag pointing at the job and a <title> element; "
+        "the JSON-LD sits in a <script type=\"application/ld+json\"> block. "
+        "I should read the <iframe> content next."
+    )
+    tool_input = {
+        "thinking": prose,
+        "what_i_see": "A listing with 16 <a> links inside an embed.",
+        "action": [{"navigate": {"url": "https://x"}}],
+    }
+    before = dict(tool_input)
+    assert scrub_tag_bleed(tool_input) is False
+    assert tool_input == before
+
+    msg = _Msg([_Blk("tool_use", dict(before))])
+    assert repair_anthropic_message(msg) == 0
+    assert msg.content[0].input["thinking"] == prose
