@@ -62,3 +62,52 @@ def test_parse_capsolver_cost() -> None:
     assert _parse_capsolver_cost({}) == 0.0
     assert _parse_capsolver_cost({"cost": None}) == 0.0
     assert _parse_capsolver_cost({"cost": "not-a-number"}) == 0.0
+
+
+def test_item_url_field_prefers_detail_over_company() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _item_url_field
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "companyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "applyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema, "T"))
+    assert _item_url_field(store) == "sourceUrl"
+
+
+def test_item_url_field_falls_back_to_bare_url() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _item_url_field
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "companyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema, "T"))
+    assert _item_url_field(store) == "url"

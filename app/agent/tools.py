@@ -1114,15 +1114,29 @@ async def _mirror_output(store: OutputStore, file_system: FileSystem) -> None:
 
 
 def _item_url_field(store: OutputStore) -> str | None:
-    """The item field that points at its own detail page, so the enrichment nudge can
-    name where to go. Schema-generic: the first url/link-ish item field.
+    """The item field that points at its OWN detail page, so the enrichment nudge can
+    name where to go. Schema-generic and priority-ordered: a source/detail/apply link
+    first, then a generic link, and only a bare ``*url`` that is not a company- or
+    employer-level URL last (else a ``companyUrl`` would send the agent to the wrong
+    page ahead of the real ``sourceUrl``).
     """
     model = store.item_model
     if model is None:
         return None
-    for name in model.model_fields:
+    names = list(model.model_fields)
+    for kw in ("sourceurl", "applyurl", "detailurl", "joburl", "posturl", "permalink"):
+        for name in names:
+            if kw in name.lower():
+                return name
+    for kw in ("href", "link"):
+        for name in names:
+            if kw in name.lower():
+                return name
+    for name in names:
         low = name.lower()
-        if any(k in low for k in ("sourceurl", "applyurl", "url", "link", "href")):
+        if "url" in low and not any(
+            x in low for x in ("company", "employer", "org", "logo", "image", "careers")
+        ):
             return name
     return None
 
