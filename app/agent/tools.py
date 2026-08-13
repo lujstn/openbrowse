@@ -1611,6 +1611,9 @@ def register_tab_tools(
         "element (usually an embed's own index); attr returns links carrying a shared "
         "attribute, e.g. {\"class\": \"posting\"}. Multiple selectors narrow together. "
         "This is the ONLY tool that can read links inside embedded/cross-origin panels. "
+        "Lazy-loading is handled for you: the page and any matching panel are "
+        "scrolled and settled until the link count is stable, so ONE call collects "
+        "the whole listing — do not re-run it to check for late items. "
         "The result is saved as found_links, so open them ALL with open_tabs() (no args) "
         "or one with open_in_new_tab(index) — no need to copy hrefs back."
     )
