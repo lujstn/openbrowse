@@ -989,8 +989,11 @@ def register_tab_tools(
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
-            + ". Open them ALL with open_tabs() (no args), or one with "
-            "open_in_new_tab(index)."
+            + ". Next: call open_tabs() with no args to open them ALL, then walk the "
+            "tabs one by one — goto_tab(n), read the detail page, add_item or "
+            "update_item with what it shows, close_tab — because each item's detail "
+            "(description, posted date and more) lives on its own page, not this "
+            "listing. Do not read this file back; open_tabs() already holds every link."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
@@ -1110,6 +1113,42 @@ async def _mirror_output(store: OutputStore, file_system: FileSystem) -> None:
         logger.warning("output store: failed to mirror output.json", exc_info=True)
 
 
+def _item_url_field(store: OutputStore) -> str | None:
+    """The item field that points at its own detail page, so the enrichment nudge can
+    name where to go. Schema-generic: the first url/link-ish item field.
+    """
+    model = store.item_model
+    if model is None:
+        return None
+    for name in model.model_fields:
+        low = name.lower()
+        if any(k in low for k in ("sourceurl", "applyurl", "url", "link", "href")):
+            return name
+    return None
+
+
+def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
+    """Append to an add_item/update_item result the fields still empty on that item and
+    a push to open its own page and fill them — this is what turns a listing stub into
+    a full record instead of the finished answer.
+    """
+    empties = store.item_missing_fields(index)
+    if not empties:
+        return f"{base_msg} Every field on this item is filled."
+    shown = ", ".join(empties[:12])
+    if len(empties) > 12:
+        shown += f", +{len(empties) - 12} more"
+    url_field = _item_url_field(store)
+    where = f"its {url_field}" if url_field else "its own page"
+    return (
+        f"{base_msg} Still empty on this item: {shown}. If you have not read this "
+        f"item's own page yet, open {where} and update_item({index}, {{…}}) to fill "
+        "what that page shows — detail such as a description or posted date lives on "
+        "the item's page, not the listing. Leave a field blank only once you have "
+        "looked there and found it genuinely absent."
+    )
+
+
 def register_output_store_tools(tools: Tools, store: OutputStore) -> None:
     """Expose the schema-validated output store as agent actions. The store is the
     single answer surface: the agent fills it as it discovers data, every write is
@@ -1129,7 +1168,8 @@ def register_output_store_tools(tools: Tools, store: OutputStore) -> None:
         if not ok:
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
-        return ActionResult(extracted_content=msg, long_term_memory=msg)
+        note = _enrichment_note(store, msg, store.item_count() - 1)
+        return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
         f"Enrich the item at integer index (0-based, as reported by add_item) in the "
@@ -1144,7 +1184,8 @@ def register_output_store_tools(tools: Tools, store: OutputStore) -> None:
         if not ok:
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
-        return ActionResult(extracted_content=msg, long_term_memory=msg)
+        note = _enrichment_note(store, msg, int(index))
+        return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
         "Set a top-level, non-list output field, validated against its type. "

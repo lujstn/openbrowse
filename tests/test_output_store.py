@@ -173,6 +173,21 @@ def test_empty_fields_empty_list():
     assert "careersPageUrl (not set)" in flags
 
 
+def test_item_missing_fields_tracks_per_item_gaps():
+    s = _store()
+    s.add_item({"title": "A", "url": "u1"})
+    assert set(s.item_missing_fields(0)) == {"department", "location", "description", "postedAt"}
+    s.update_item(0, {"description": "d", "postedAt": "2026-01-01", "department": "Eng", "location": "London"})
+    assert s.item_missing_fields(0) == []
+    assert s.item_count() == 1
+
+
+def test_item_missing_fields_out_of_range():
+    s = _store()
+    assert s.item_missing_fields(0) == []
+    assert s.item_count() == 0
+
+
 def test_single_array_no_item_model():
     schema = {
         "type": "object",

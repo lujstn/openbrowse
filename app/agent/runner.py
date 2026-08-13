@@ -67,7 +67,10 @@ _TOOLS_EASIEST_EXTENSION = (
     "— find_elements and evaluate see only the main page and cannot read anything "
     "inside an embed. open_tabs([...]) opens many links at once, open_in_new_tab(index) "
     "follows one, and close_tab brings you back. Reach for these before you wrestle "
-    "the DOM."
+    "the DOM. The listing gives you links, not answers: after find_links, open_tabs() "
+    "to fan the whole listing out, then walk each tab — read the detail page and fill "
+    "that item with add_item/update_item before close_tab — because a record's real "
+    "detail only exists on its own page. Never batch items in from the listing alone."
 )
 
 _CODE_REUSE_EXTENSION = (

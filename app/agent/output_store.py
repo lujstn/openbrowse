@@ -172,6 +172,30 @@ class OutputStore:
                 matches[name] = value
         return json.dumps(matches, indent=2, default=str)
 
+    def item_missing_fields(self, index: int) -> list[str]:
+        """The item-model fields still empty on the array item at ``index`` — the
+        drill-in nudge for a stub added from listing data.
+        """
+        if not self._array_field or self._item_model is None:
+            return []
+        arr = self._data.get(self._array_field) or []
+        if not 0 <= index < len(arr):
+            return []
+        item = arr[index]
+        if not isinstance(item, dict):
+            return []
+        return [
+            name
+            for name in self._item_model.model_fields
+            if _is_empty_value(item.get(name))
+        ]
+
+    def item_count(self) -> int:
+        if not self._array_field:
+            return 0
+        arr = self._data.get(self._array_field)
+        return len(arr) if isinstance(arr, list) else 0
+
     def empty_fields(self) -> list[str]:
         """Schema fields still empty but plausibly fillable, for the completeness gate."""
         out: list[str] = []
