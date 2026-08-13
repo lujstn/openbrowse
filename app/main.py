@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+
+# @nonobvious(forced-by): browser-use reads this env var ONCE at module import to
+# set its global per-action timeout (default 180s), which cancelled long
+# read_pages calls mid-flight; must be set before any browser_use import and
+# stay above read_pages' own 420s budget and below the 520s step_timeout.
+os.environ.setdefault("BROWSER_USE_ACTION_TIMEOUT_S", "480")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

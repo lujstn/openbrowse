@@ -400,6 +400,11 @@ async def _settle_lazy_links(
 
 _READ_PAGES_MAX = 48
 _READ_PAGES_TEXT_CAP = 60_000
+# @nonobvious(mirrors): must stay below BROWSER_USE_ACTION_TIMEOUT_S (set in
+# app/agent/runner.py) which must stay below the agent step_timeout there —
+# read_pages stops itself gracefully; the outer caps must never fire first.
+_READ_PAGES_BUDGET_S = 420.0
+_READ_PAGES_MIN_WAVE_S = 30.0
 # @nonobvious(means): measured live — a heavy marketing page took ~12s to DOMContentLoaded
 # with its embed rendering ~2.5s later, so 18s left almost no margin.
 _PAGE_READY_TIMEOUT_S = 25.0
@@ -533,29 +538,53 @@ async def _read_pages_impl(
     baseline = {t["targetId"] for t in await _iframe_targets(browser_session)}
     home_target = getattr(browser_session, "agent_focus_target_id", None)
     results: dict[str, dict[str, Any]] = {}
+    loop = asyncio.get_running_loop()
+    budget_deadline = loop.time() + _READ_PAGES_BUDGET_S
 
     async def _run_wave(wave: list[str]) -> None:
         pairs: list[tuple[str, str]] = []
-        for u in wave:
-            tid = await _spawn_tab(browser_session, u)
-            if tid is None:
-                results[u] = {"url": u, "error": "could not open a tab"}
-            else:
-                pairs.append((u, tid))
-        claimed: set[str] = set()
-        for u, tid in pairs:
-            await _focus_target(browser_session, tid)
-            results[u] = await _read_one_page(
-                browser_session,
-                u,
-                tid,
-                url_contains,
-                claimed,
-                baseline,
-                allow_sole_candidate=len(pairs) == 1,
-            )
-        for _, tid in pairs:
-            await _close_spawned_tab(browser_session, tid)
+        try:
+            for u in wave:
+                tid = await _spawn_tab(browser_session, u)
+                if tid is None:
+                    results[u] = {"url": u, "error": "could not open a tab"}
+                else:
+                    pairs.append((u, tid))
+            claimed: set[str] = set()
+            for u, tid in pairs:
+                await _focus_target(browser_session, tid)
+                results[u] = await _read_one_page(
+                    browser_session,
+                    u,
+                    tid,
+                    url_contains,
+                    claimed,
+                    baseline,
+                    allow_sole_candidate=len(pairs) == 1,
+                )
+        finally:
+            # @nonobvious(forced-by): closing a FOCUSED target fires browser-use's
+            # focus-detach auto-recovery, which can race the next close and wedge
+            # the session into 'browser not connected' (observed live) — so focus
+            # home before closing, and close in a shielded finally so a cancelled
+            # wave never orphans its tabs.
+            await asyncio.shield(_focus_target(browser_session, home_target))
+            for _, tid in pairs:
+                await asyncio.shield(_close_spawned_tab(browser_session, tid))
+
+    def _out_of_budget(pending: list[str]) -> bool:
+        if loop.time() + _READ_PAGES_MIN_WAVE_S <= budget_deadline:
+            return False
+        for u in pending:
+            if u not in results or results[u].get("error"):
+                results[u] = {
+                    "url": u,
+                    "error": (
+                        "not attempted — read_pages stopped before its time budget "
+                        "expired; call read_pages again with the remaining urls"
+                    ),
+                }
+        return True
 
     try:
         total_waves = (len(urls) + concurrency - 1) // concurrency
@@ -564,6 +593,9 @@ async def _read_pages_impl(
             f"read_pages: {len(urls)} page(s) in {total_waves} wave(s) of up to {concurrency} tabs",
         )
         for wave_no, i in enumerate(range(0, len(urls), concurrency), start=1):
+            if _out_of_budget(urls[i:]):
+                await _emit_progress(progress, "read_pages: time budget reached, stopping early")
+                break
             await _run_wave(urls[i : i + concurrency])
             done = [results.get(u, {}) for u in urls[: i + concurrency] if u in results]
             ok = sum(1 for p in done if not p.get("error"))
@@ -579,6 +611,8 @@ async def _read_pages_impl(
                 progress, f"read_pages: retrying {len(retry)} failed page(s) one at a time"
             )
         for u in retry:
+            if _out_of_budget([u]):
+                break
             await _run_wave([u])
 
         any_jsonld = any(
@@ -591,6 +625,8 @@ async def _read_pages_impl(
                     continue
                 if not (page.get("text") or "").strip():
                     continue
+                if loop.time() + _READ_PAGES_MIN_WAVE_S > budget_deadline:
+                    break
                 before = results[u]
                 await _run_wave([u])
                 after = results.get(u) or {}

@@ -628,6 +628,94 @@ async def test_read_pages_impl_reports_progress(monkeypatch) -> None:
     assert sum(1 for e in events if "wave " in e) == 3
 
 
+def _wave_fakes(monkeypatch, read_one, home="home-tid"):
+    import types
+
+    import app.agent.tools as tools_mod
+
+    order: list[tuple[str, str]] = []
+    spawn_counter = {"n": 0}
+
+    async def fake_iframe_targets(session):
+        return []
+
+    async def fake_spawn(session, url):
+        spawn_counter["n"] += 1
+        tid = f"tid-{spawn_counter['n']}"
+        order.append(("spawn", tid))
+        return tid
+
+    async def fake_close(session, tid):
+        order.append(("close", tid))
+
+    async def fake_focus(session, tid):
+        order.append(("focus", tid))
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(tools_mod, "_read_one_page", read_one)
+    session = types.SimpleNamespace(agent_focus_target_id=home)
+    return tools_mod, order, session
+
+
+async def test_read_pages_impl_focuses_home_before_closing(monkeypatch) -> None:
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    urls = ["https://x.com/1", "https://x.com/2"]
+    await tools_mod._read_pages_impl(session, urls, None, {}, concurrency=2)
+
+    first_close = order.index(("close", "tid-1"))
+    home_focus_before = [
+        i for i, ev in enumerate(order) if ev == ("focus", "home-tid") and i < first_close
+    ]
+    assert home_focus_before, f"no home focus before first close: {order}"
+    assert ("close", "tid-2") in order
+
+
+async def test_read_pages_impl_closes_tabs_even_when_cancelled(monkeypatch) -> None:
+    import asyncio
+
+    import pytest
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        if url.endswith("/2"):
+            raise asyncio.CancelledError()
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    urls = ["https://x.com/1", "https://x.com/2"]
+    with pytest.raises(asyncio.CancelledError):
+        await tools_mod._read_pages_impl(session, urls, None, {}, concurrency=2)
+
+    closes = {tid for ev, tid in order if ev == "close"}
+    assert closes == {"tid-1", "tid-2"}, f"tabs orphaned: {order}"
+
+
+async def test_read_pages_impl_budget_stops_before_starting(monkeypatch) -> None:
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    monkeypatch.setattr(tools_mod, "_READ_PAGES_BUDGET_S", 0.0)
+    urls = ["https://x.com/1", "https://x.com/2"]
+    clipboard: dict = {}
+    pages = await tools_mod._read_pages_impl(session, urls, None, clipboard, concurrency=2)
+
+    assert all("not attempted" in (p.get("error") or "") for p in pages)
+    assert not [ev for ev in order if ev[0] == "spawn"]
+    assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_read_failed"]
+
+
 def test_find_links_offhost_flagging_helper() -> None:
     from collections import Counter
     from urllib.parse import urlparse
