@@ -318,7 +318,7 @@ async def test_store_bridge_writes_and_mirrors() -> None:
     msg = await bridge["update_items"]([{"index": 0, "fields": {"title": "A2"}}])
     assert "Applied 1 of 1" in msg
     msg = await bridge["mark_absent"]("description", "not published")
-    assert "Marked 'description'" in msg
+    assert "already settled" in msg
     assert "A2" in bridge["read_output"]()
     assert bridge["coverage"]().startswith("Coverage — ")
 
@@ -716,6 +716,162 @@ async def test_read_pages_impl_budget_stops_before_starting(monkeypatch) -> None
     assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_read_failed"]
 
 
+def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _draft_store()
+    page = {
+        "url": "https://x.com/listings?id=abc12345",
+        "title": "Widget One",
+        "text": "t" * 500,
+        "jsonld": {
+            "@type": "Product",
+            "title": "Widget One",
+            "datePosted": "2026-08-04",
+            "jobLocation": {
+                "@type": "Place",
+                "address": {"@type": "PostalAddress", "addressLocality": "London"},
+            },
+            "employmentType": "FULL_TIME",
+        },
+        "links": [
+            {"text": "Learn more", "href": "https://x.com/about"},
+            {"text": "Order this widget", "href": "https://x.com/orders/abc/order"},
+        ],
+    }
+    schema_store = store
+    row = _draft_row(schema_store, page)
+    assert row["postedAt"] == "2026-08-04"
+    assert "condition" not in row
+    extra_keys = {e["key"] for e in row.get("extra") or []}
+    assert "employmentType" in extra_keys
+
+
+def test_draft_row_maps_url_field_from_links() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "applyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema, "T"))
+    page = {
+        "url": "https://x.com/job?id=abc12345",
+        "title": "Role",
+        "text": "t" * 500,
+        "jsonld": None,
+        "links": [
+            {"text": "Overview", "href": "https://x.com/overview"},
+            {"text": "Apply for this Job", "href": "https://x.com/apply/abc"},
+        ],
+    }
+    row = _draft_row(store, page)
+    assert row["applyUrl"] == "https://x.com/apply/abc"
+    assert row["sourceUrl"] == "https://x.com/job?id=abc12345"
+
+
+def test_strong_overlap_guards_weak_tokens() -> None:
+    from app.agent.tools import _strong_overlap
+
+    assert _strong_overlap({"posted", "at"}, {"date", "posted"}) is True
+    assert _strong_overlap({"location", "type"}, {"employment", "type"}) is False
+    assert _strong_overlap({"location", "type"}, {"location", "type"}) is True
+
+
+def test_gate_settles_partial_fields_when_all_pages_read() -> None:
+    from app.agent.tools import _gate_empty_fields
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
+
+    clipboard = {"_visited": {"https://x.com/a", "https://x.com/b"}, "_read_failed": set()}
+    entries = _gate_empty_fields(store, clipboard)
+    assert not any(e.startswith("description") for e in entries)
+
+    partial_coverage = {"_visited": {"https://x.com/a"}, "_read_failed": set()}
+    entries = _gate_empty_fields(store, partial_coverage)
+    assert any(e.startswith("description") for e in entries)
+
+
+def test_mark_absent_rejected_for_partial_field_with_full_coverage() -> None:
+    from app.agent.tools import _absence_unearned
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 300})
+    store.update_item(1, {"description": None})
+    clipboard = {"_visited": {"https://x.com/a", "https://x.com/b"}}
+    msg = _absence_unearned(store, clipboard, "description")
+    assert msg is not None and "already settled" in msg
+
+
+async def test_sandbox_asyncio_run_works(tmp_path) -> None:
+    import types
+
+    from browser_use import Tools
+
+    from app.agent.tools import register_code_tools
+
+    class _DirFileSystem(_FakeFileSystem):
+        def __init__(self, base) -> None:
+            super().__init__()
+            self._base = base
+
+        def get_dir(self):
+            return self._base
+
+    tools = Tools()
+    register_code_tools(tools, {})
+    fs = _DirFileSystem(tmp_path)
+    entry = tools.registry.registry.actions["run_code_file"]
+    code = (
+        "async def main():\n"
+        "    return 41 + 1\n"
+        "print(asyncio.run(main()))"
+    )
+    params = entry.param_model(name="t2", code=code)
+    result = await entry.function(
+        params=params, browser_session=types.SimpleNamespace(), file_system=fs
+    )
+    assert not result.error, result.error
+    assert "42" in result.extracted_content
+
+
+def test_load_saved_json_disk_fallback(tmp_path) -> None:
+    from app.agent.tools import _load_saved_json
+
+    class _DirFileSystem(_FakeFileSystem):
+        def __init__(self, base) -> None:
+            super().__init__()
+            self._base = base
+
+        def get_dir(self):
+            return self._base
+
+    fs = _DirFileSystem(tmp_path)
+    (tmp_path / "onDisk.json").write_text('[{"index": 0, "fields": {}}]')
+    data, fn = _load_saved_json(fs, "onDisk.json")
+    assert data == [{"index": 0, "fields": {}}]
+    missing, _ = _load_saved_json(fs, "nope.json")
+    assert missing is None
+
+
 def test_find_links_offhost_flagging_helper() -> None:
     from collections import Counter
     from urllib.parse import urlparse
@@ -749,10 +905,10 @@ async def test_mark_absent_accepts_read_failures_as_looked() -> None:
     from app.agent.tools import _absence_unearned
 
     store = _items_store()
-    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200})
-    store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200})
-
     clipboard: dict = {"_visited": {"https://x.com/a"}}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
+
     assert _absence_unearned(store, clipboard, "description") is not None
 
     clipboard["_read_failed"] = {"https://x.com/b"}
@@ -801,14 +957,13 @@ async def test_mark_absent_requires_pages_read() -> None:
     from app.agent.tools import _absence_unearned
 
     store = _items_store()
-    clipboard: dict = {}
-    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200})
-    store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200})
+    clipboard: dict = {"_visited": {"https://x.com/a", "https://x.com/b"}}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
 
-    blocked = _absence_unearned(store, clipboard, "description")
+    blocked = _absence_unearned(store, {}, "description")
     assert blocked is not None and "read_pages" in blocked
 
-    clipboard["_visited"] = {"https://x.com/a", "https://x.com/b"}
     assert _absence_unearned(store, clipboard, "description") is None
 
 

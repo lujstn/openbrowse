@@ -638,7 +638,10 @@ async def _read_pages_impl(
     if clipboard is not None:
         visited = clipboard.setdefault("_visited", set())
         failed = clipboard.setdefault("_read_failed", set())
+        listing_meta = clipboard.get("found_links_meta") or {}
         for u, page in results.items():
+            if listing_meta.get(u):
+                page.setdefault("listing_text", listing_meta[u])
             if page.get("error"):
                 failed.add(_norm_url(u))
             else:
@@ -1317,6 +1320,23 @@ def register_code_tools(
         if url:
             clipboard.setdefault("_visited", set()).add(_norm_url(url))
 
+        class _SandboxAsyncio:
+            """asyncio facade whose run()/run_until_complete execute the coroutine on
+            a throwaway thread with its own loop — sandbox code already lives inside
+            a running loop, where the real asyncio.run raises; models reach for it by
+            trained habit regardless of guidance, so it has to just work.
+            """
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(asyncio, name)
+
+            @staticmethod
+            def run(coro: Any, *, debug: Any = None) -> Any:
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool_:
+                    return pool_.submit(asyncio.run, coro).result()
+
         _builtin_open = open
 
         def _sandbox_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any):
@@ -1343,7 +1363,7 @@ def register_code_tools(
                 "open": _sandbox_open,
                 "remember": _remember,
                 "recall": _recall,
-                "asyncio": asyncio,
+                "asyncio": _SandboxAsyncio(),
                 "json": json,
                 "re": re,
             }
@@ -1917,6 +1937,7 @@ def register_tab_tools(
 
         clipboard["found_links"] = [link["href"] for link in links]
         clipboard["found_links_frame"] = frame_url_contains
+        clipboard["found_links_meta"] = {link["href"]: link["text"] for link in links}
         saved: str | None = "found_links.json"
         try:
             await file_system.write_file(saved, json.dumps(links, indent=2))
@@ -2185,6 +2206,44 @@ def _extra_style_field(store: OutputStore) -> tuple[str | None, str | None]:
     return None, None
 
 
+_WEAK_TOKENS = {"name", "type", "url", "id", "value", "key", "date", "time", "text", "status"}
+
+
+def _flatten_jsonld_scalars(
+    obj: Any, prefix: str = "", out: dict[str, Any] | None = None, depth: int = 0
+) -> dict[str, Any]:
+    """Scalar leaves of a JSON-LD object keyed by dotted path, so nested values
+    (jobLocation.address.addressLocality) can token-match schema fields the way
+    top-level keys do.
+    """
+    if out is None:
+        out = {}
+    if depth > 3 or not isinstance(obj, dict):
+        return out
+    for key, value in obj.items():
+        if key.startswith("@"):
+            continue
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, (str, int, float, bool)):
+            out[path] = value
+        elif isinstance(value, dict):
+            _flatten_jsonld_scalars(value, path, out, depth + 1)
+    return out
+
+
+def _strong_overlap(a: set[str], b: set[str]) -> bool:
+    """True when two token sets share meaning, not just generic vocabulary — at
+    least one non-weak token in common, or two weak ones (so 'employmentType'
+    cannot claim 'locationType' on the shared 'type' alone).
+    """
+    common = a & b
+    if not common:
+        return False
+    if common - _WEAK_TOKENS:
+        return True
+    return len(common) >= 2
+
+
 def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     """A deterministically prefilled item row from one read page, so the model
     reviews and judges instead of writing parsing code: the page URL fills the
@@ -2230,25 +2289,45 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     elif desc_field and (page.get("text") or "").strip():
         _try_set(desc_field, (page.get("text") or "")[:20000])
 
-    for key, value in ld.items():
-        if key in used or key.startswith("@"):
+    flat = _flatten_jsonld_scalars(ld)
+    for path in sorted(flat, key=lambda p: p.count(".")):
+        if path in used or path.split(".", 1)[0] in used:
             continue
-        if not isinstance(value, (str, int, float, bool)):
-            continue
-        key_tokens = _name_tokens(key)
+        key_tokens = _name_tokens(path.replace(".", " "))
         if not key_tokens:
             continue
         best: tuple[int, str] | None = None
         for fname in fields:
-            score = len(_name_tokens(fname) & key_tokens)
-            if score and (best is None or score > best[0]):
+            ftokens = _name_tokens(fname)
+            if not _strong_overlap(ftokens, key_tokens):
+                continue
+            score = len(ftokens & key_tokens)
+            if best is None or score > best[0]:
                 best = (score, fname)
-        if best and _try_set(best[1], value):
-            used.add(key)
+        if best and _try_set(best[1], flat[path]):
+            used.add(path)
 
     title_candidates = [f for f in fields if "title" in f.lower() or f.lower() == "name"]
     if title_candidates and title_candidates[0] not in row and page.get("title"):
         _try_set(title_candidates[0], page["title"])
+
+    for fname in fields:
+        if fname in row:
+            continue
+        low = fname.lower()
+        if "url" not in low and "link" not in low:
+            continue
+        ftokens = _name_tokens(fname) - {"url", "link"}
+        if not ftokens:
+            continue
+        for link in page.get("links") or []:
+            if not isinstance(link, dict) or not link.get("href"):
+                continue
+            link_tokens = _name_tokens(
+                f"{link.get('text') or ''} {link.get('href') or ''}".replace("/", " ")
+            )
+            if ftokens & link_tokens and _try_set(fname, link["href"]):
+                break
 
     extra_field, extra_kind = _extra_style_field(store)
     if extra_field and extra_field not in row:
@@ -2270,6 +2349,21 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             else:
                 _try_set(extra_field, {k: str(v)[:500] for k, v in leftovers.items()})
     return row
+
+
+def _load_saved_json(file_system: FileSystem, name: str) -> tuple[Any | None, str]:
+    """A saved JSON file's parsed content via the FileSystem registry, falling back
+    to disk (the sync save path writes to disk first and the registry catches up a
+    beat later). Returns (data, resolved_name); data None when nothing exists.
+    """
+    fn = _normalise_fs_name(name, "json")
+    file_obj = file_system.get_file(fn) or file_system.get_file(name)
+    if file_obj is not None:
+        return json.loads(file_obj.read()), fn
+    path = file_system.get_dir() / fn
+    if path.exists():
+        return json.loads(path.read_text()), fn
+    return None, fn
 
 
 def _stub_block_msg(
@@ -2329,7 +2423,23 @@ def _absence_unearned(
             "observed on every item's page: read_pages() covers them all in one "
             "step, then mark it absent if the value is genuinely not there."
         )
+    filled = sum(
+        1
+        for it in arr
+        if isinstance(it, dict) and not _is_empty_value_like(it.get(field))
+    )
+    if filled:
+        return (
+            f"'{field}' is already settled — it has a value on {filled} item(s) and "
+            "every item's page has been read, so the remaining nulls are the honest "
+            "final state. A partial field needs no marking; do not mark_absent a "
+            "field you found on any page."
+        )
     return None
+
+
+def _is_empty_value_like(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
 
 
 def _store_bridge(
@@ -2513,16 +2623,14 @@ def register_output_store_tools(
         "skipped — open them first."
     )
     async def add_items_from_file(name: str, file_system: FileSystem) -> ActionResult:
-        fn = _normalise_fs_name(name, "json")
-        file_obj = file_system.get_file(fn) or file_system.get_file(name)
-        if file_obj is None:
+        try:
+            arr, fn = _load_saved_json(file_system, name)
+        except Exception as e:
+            return ActionResult(error=f"{name} is not valid JSON: {e}")
+        if arr is None:
             return ActionResult(
                 error=f"No file named {name!r}. Save it first with save_json in a script."
             )
-        try:
-            arr = json.loads(file_obj.read())
-        except Exception as e:
-            return ActionResult(error=f"{name} is not valid JSON: {e}")
         if not isinstance(arr, list):
             return ActionResult(error=f"{name} must contain a JSON array of items.")
 
@@ -2563,16 +2671,14 @@ def register_output_store_tools(
         "reports per-entry failures in ONE step."
     )
     async def update_items_from_file(name: str, file_system: FileSystem) -> ActionResult:
-        fn = _normalise_fs_name(name, "json")
-        file_obj = file_system.get_file(fn) or file_system.get_file(name)
-        if file_obj is None:
+        try:
+            arr, fn = _load_saved_json(file_system, name)
+        except Exception as e:
+            return ActionResult(error=f"{name} is not valid JSON: {e}")
+        if arr is None:
             return ActionResult(
                 error=f"No file named {name!r}. Save it first with save_json in a script."
             )
-        try:
-            arr = json.loads(file_obj.read())
-        except Exception as e:
-            return ActionResult(error=f"{name} is not valid JSON: {e}")
         ok, msg = store.update_many(arr)
         if not ok:
             return ActionResult(error=msg)
@@ -2581,7 +2687,40 @@ def register_output_store_tools(
         return ActionResult(extracted_content=note, long_term_memory=note)
 
 
-def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) -> None:
+def _gate_empty_fields(
+    store: OutputStore, clipboard: dict[str, Any] | None
+) -> list[str]:
+    """The gate's deficiency list, with partially-filled item fields dropped once
+    every item's page has been read — per-item absence proven by the read is a
+    finished state, and bouncing it pressures the model into marking a field
+    absent that it demonstrably found on some pages.
+    """
+    empties = store.empty_fields()
+    if clipboard is None or store.item_model is None or not store.array_field:
+        return empties
+    arr = store.data.get(store.array_field) or []
+    url_field = _item_url_field(store)
+    if not arr or not url_field:
+        return empties
+    urls = [it.get(url_field) for it in arr if isinstance(it, dict) and it.get(url_field)]
+    looked = (clipboard.get("_visited") or set()) | (clipboard.get("_read_failed") or set())
+    if not urls or any(_norm_url(u) not in looked for u in urls):
+        return empties
+    filtered: list[str] = []
+    for entry in empties:
+        m = re.match(r"^(\w+) — empty on (\d+) of (\d+)", entry)
+        if m and int(m.group(2)) < int(m.group(3)):
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def register_completeness_gate(
+    tools: Tools,
+    store: OutputStore,
+    on_incomplete,
+    clipboard: dict[str, Any] | None = None,
+) -> None:
     """One-shot soft gate on ``done``: the first time the agent tries to finish with
     schema fields still empty, bounce it back to fill them; accept the next done
     unconditionally so it can never loop. Re-registers ``done`` under the same name
@@ -2603,7 +2742,7 @@ def register_completeness_gate(tools: Tools, store: OutputStore, on_incomplete) 
     )
     async def done(params: Any, file_system: FileSystem) -> ActionResult:
         if not state["bounced"]:
-            empties = store.empty_fields()
+            empties = _gate_empty_fields(store, clipboard)
             if empties:
                 state["bounced"] = True
                 if on_incomplete is not None:

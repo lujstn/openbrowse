@@ -69,9 +69,13 @@ _TOOLS_EASIEST_EXTENSION = (
     "{url, title, text, jsonld, links} per page to pages.json AND prefills "
     "rows_draft.json with one schema row per page; (3) "
     "add_items_from_file('rows_draft.json') loads them all — write NO mapping "
-    "script; (4) fix judgement fields (e.g. an enum implied by prose) in ONE "
-    "update_items call; (5) mark_absent any field the pages genuinely do not "
-    "publish, then done. A record's real detail lives only on its own page, never the "
+    "script; (4) fix judgement fields in ONE update_items call, deciding from what "
+    "you have already read (each page's listing-row text is in page['listing_text'] "
+    "in pages.json) — never write a parser script for prose, and NEVER guess an "
+    "enum or default one: a value the page does not state stays null; (5) "
+    "mark_absent any field NO page publishes — a field found on some pages with "
+    "the rest read is already complete as a partial — then done. A record's real "
+    "detail lives only on its own page, never the "
     "listing — add_item refuses more than two listing items with no detail. Use "
     "open_tabs/goto_tab/open_in_new_tab/close_tab only when you must interact with "
     "a page; find_elements and evaluate see only the MAIN page, while a script can "
@@ -113,10 +117,12 @@ _OUTPUT_STORE_EXTENSION = (
 )
 
 _VERIFY_EXTENSION = (
-    "Before you finish, read_output() and treat every empty field as unfinished work: "
-    "go back to the page that could fill it, or — once you have looked where the "
-    "information should be and found the site genuinely does not publish it — settle "
-    "the field with mark_absent(field, reason) so it stops counting."
+    "The coverage summary printed after every store write IS your verification — "
+    "when it shows every field filled, partial-with-all-pages-read, or marked "
+    "absent, call done directly; do not re-read the output first. Treat an "
+    "empty-on-all field as unfinished work: go back to the page that could fill "
+    "it, or — once you have looked and the site genuinely does not publish it — "
+    "settle it with mark_absent(field, reason)."
 )
 
 _BEGIN_EXTENSION = (
@@ -193,14 +199,20 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
                         _root=None, selector_map=cached_state.dom_state.selector_map
                     ),
                     url=cached_state.url,
-                    title=cached_state.title,
+                    title=(
+                        f"{cached_state.title} [PAGE FINE & UNCHANGED — DOM listing "
+                        "deliberately omitted this step to save space, NOT empty or "
+                        "stalled]"
+                    ),
                     tabs=cached_state.tabs,
                     screenshot=None,
                     state_error=(
-                        "Page unchanged since your last browser action; the DOM "
-                        "listing is omitted to keep this step small. Element indices "
-                        "from the earlier state remain valid, and any browser action "
-                        "refreshes the full view."
+                        "The page is healthy and unchanged since your last browser "
+                        "action; its DOM listing is deliberately omitted this step "
+                        "because you only did store/file work. Do not describe the "
+                        "page as empty, stale or stuck. Element indices from the "
+                        "earlier state remain valid; any browser action refreshes "
+                        "the full view."
                     ),
                 )
         return await original(
@@ -787,7 +799,7 @@ async def run_agent_session(session_id: str) -> None:
                     count_step=False,
                 )
 
-            register_completeness_gate(tools, store, _on_incomplete_done)
+            register_completeness_gate(tools, store, _on_incomplete_done, clipboard)
 
         register_output_guard_overrides(tools)
 
