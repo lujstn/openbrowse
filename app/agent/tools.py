@@ -192,6 +192,30 @@ class _SandboxBrowser:
         )
         return val or ""
 
+    async def frame_jsonld(self, url_contains: str) -> Any:
+        """Parsed JSON-LD structured data from the matching cross-origin iframe — where a
+        posted/published date, salary and other fields live that are not in the visible
+        text. Returns the first JobPosting-like object, else the first parseable object,
+        else None (e.g. read ``(await browser.frame_jsonld('ashby'))['datePosted']``).
+        """
+        js = (
+            "(function(){var out=[];document.querySelectorAll("
+            "'script[type=\"application/ld+json\"]').forEach(function(s){"
+            "out.push(s.textContent)});return out;})()"
+        )
+        raw_list = await self.frame_evaluate(url_contains, js)
+        parsed: list[Any] = []
+        if isinstance(raw_list, list):
+            for raw in raw_list:
+                try:
+                    parsed.append(json.loads(raw))
+                except Exception:
+                    continue
+        for obj in parsed:
+            if isinstance(obj, dict) and "JobPosting" in str(obj.get("@type", "")):
+                return obj
+        return parsed[0] if parsed else None
+
     async def wait_for_frame(self, url_contains: str, timeout_s: float = 12.0) -> bool:
         """Poll until a cross-origin iframe matching ``url_contains`` has rendered text,
         because an embed loads asynchronously after navigation. Returns True on success.
@@ -586,11 +610,12 @@ def register_code_tools(tools: Tools, clipboard: dict[str, Any] | None = None) -
         "saved detail links and for each does await browser.navigate(url, wait_for='<embed "
         "url part>'); text = await browser.frame_text('<embed url part>'), collects the "
         "fields, then save_json(rows, 'jobs.json')>), then add_items_from_file('jobs.json'). "
-        "A field missing from the visible text (e.g. a posted/published date) "
-        "is usually in the page's JSON-LD: frame_evaluate the script[type=application/ld+json] "
-        "and parse its datePosted. Inside a script you have: browser.evaluate(js) / browser.get_html("
+        "A field missing from the visible text (e.g. a posted/published date) is in the "
+        "page's JSON-LD, so ALSO do ld = await browser.frame_jsonld('<embed url part>') and "
+        "set row['postedAt'] = ld.get('datePosted') if ld else None. Inside a script you have: "
+        "browser.evaluate(js) / browser.get_html("
         "selector=None) for the MAIN page; browser.frames() / await browser.frame_text("
-        "url_contains) / await browser.frame_evaluate(url_contains, js, all_matches=False) / "
+        "url_contains) / await browser.frame_jsonld(url_contains) / await browser.frame_evaluate(url_contains, js, all_matches=False) / "
         "await browser.wait_for_frame(url_contains) to READ INSIDE a cross-origin embed "
         "(the only way — main-frame evaluate/get_html cannot); await browser.navigate(url, "
         "wait_for=None); fetch(url,...) -> .status_code/.text/.json() (server-side, no CORS, "
