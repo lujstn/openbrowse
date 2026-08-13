@@ -73,8 +73,8 @@ def test_cloud_schema_1_builds_and_validates():
 def test_cloud_schema_2_builds_and_enforces_enum():
     model = json_schema_to_pydantic(_load("cloud_output_schema_2.json"), "CloudTwo")
     ok = model.model_validate(
-        {"jobs": [{"title": "Engineer", "locationType": "HYBRID"}], "careersPageUrl": "https://x"}
+        {"items": [{"title": "Widget", "condition": "USED"}], "indexPageUrl": "https://x"}
     )
-    assert ok.jobs[0].title == "Engineer"
+    assert ok.items[0].title == "Widget"
     with pytest.raises(ValidationError):
-        model.model_validate({"jobs": [{"locationType": "NOT_A_REAL_ENUM"}]})
+        model.model_validate({"items": [{"condition": "NOT_A_REAL_ENUM"}]})

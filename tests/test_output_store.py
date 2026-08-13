@@ -13,9 +13,9 @@ from app.agent.schema import json_schema_to_pydantic
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["jobs", "careersPageUrl"],
+    "required": ["items", "indexPageUrl"],
     "properties": {
-        "jobs": {
+        "items": {
             "type": "array",
             "items": {
                 "type": "object",
@@ -31,7 +31,7 @@ SCHEMA = {
                 },
             },
         },
-        "careersPageUrl": {"type": "string"},
+        "indexPageUrl": {"type": "string"},
     },
 }
 
@@ -42,11 +42,11 @@ def _store() -> OutputStore:
 
 def test_empty_from_schema():
     s = _store()
-    assert s.data == {"jobs": [], "careersPageUrl": None}
-    assert s.array_field == "jobs"
+    assert s.data == {"items": [], "indexPageUrl": None}
+    assert s.array_field == "items"
     assert s.item_model is not None
     assert s.is_empty() is True
-    assert json.loads(s.read_output()) == {"jobs": [], "careersPageUrl": None}
+    assert json.loads(s.read_output()) == {"items": [], "indexPageUrl": None}
 
 
 def test_add_item_valid_fills_optional_fields_as_null():
@@ -54,7 +54,7 @@ def test_add_item_valid_fills_optional_fields_as_null():
     ok, msg = s.add_item({"title": "Engineer", "url": "https://x/1"})
     assert ok is True
     assert "#0" in msg
-    job = s.data["jobs"][0]
+    job = s.data["items"][0]
     assert job == {
         "title": "Engineer",
         "department": None,
@@ -71,14 +71,14 @@ def test_add_item_missing_required_rejected():
     ok, msg = s.add_item({"title": "No URL"})
     assert ok is False
     assert "url" in msg
-    assert s.data["jobs"] == []
+    assert s.data["items"] == []
 
 
 def test_add_item_extra_field_rejected():
     s = _store()
     ok, msg = s.add_item({"title": "X", "url": "u", "salary": "lots"})
     assert ok is False
-    assert s.data["jobs"] == []
+    assert s.data["items"] == []
 
 
 def test_add_item_wrong_type_rejected():
@@ -92,9 +92,9 @@ def test_update_item_enriches_stub():
     s.add_item({"title": "Engineer", "url": "https://x/1"})
     ok, msg = s.update_item(0, {"description": "Build things", "postedAt": "2026-01-02"})
     assert ok is True
-    assert s.data["jobs"][0]["description"] == "Build things"
-    assert s.data["jobs"][0]["postedAt"] == "2026-01-02"
-    assert s.data["jobs"][0]["title"] == "Engineer"
+    assert s.data["items"][0]["description"] == "Build things"
+    assert s.data["items"][0]["postedAt"] == "2026-01-02"
+    assert s.data["items"][0]["title"] == "Engineer"
 
 
 def test_update_item_bad_index_rejected():
@@ -110,21 +110,21 @@ def test_update_item_revalidates_merge():
     s.add_item({"title": "Engineer", "url": "https://x/1"})
     ok, msg = s.update_item(0, {"title": 999})
     assert ok is False
-    assert s.data["jobs"][0]["title"] == "Engineer"
+    assert s.data["items"][0]["title"] == "Engineer"
 
 
 def test_set_field_valid():
     s = _store()
-    ok, msg = s.set_field("careersPageUrl", "https://co/careers")
+    ok, msg = s.set_field("indexPageUrl", "https://co/careers")
     assert ok is True
-    assert s.data["careersPageUrl"] == "https://co/careers"
+    assert s.data["indexPageUrl"] == "https://co/careers"
 
 
 def test_set_field_wrong_type_rejected():
     s = _store()
-    ok, msg = s.set_field("careersPageUrl", {"not": "a string"})
+    ok, msg = s.set_field("indexPageUrl", {"not": "a string"})
     assert ok is False
-    assert s.data["careersPageUrl"] is None
+    assert s.data["indexPageUrl"] is None
 
 
 def test_set_field_unknown_key_rejected():
@@ -136,7 +136,7 @@ def test_set_field_unknown_key_rejected():
 
 def test_set_field_on_array_rejected():
     s = _store()
-    ok, msg = s.set_field("jobs", [])
+    ok, msg = s.set_field("items", [])
     assert ok is False
     assert "add_item" in msg
 
@@ -145,13 +145,13 @@ def test_search_output():
     s = _store()
     s.add_item({"title": "Backend Engineer", "url": "https://x/1"})
     s.add_item({"title": "Designer", "url": "https://x/2"})
-    s.set_field("careersPageUrl", "https://co/careers")
+    s.set_field("indexPageUrl", "https://co/careers")
     res = json.loads(s.search_output("engineer"))
-    assert "jobs" in res
-    assert len(res["jobs"]) == 1
-    assert res["jobs"][0]["index"] == 0
+    assert "items" in res
+    assert len(res["items"]) == 1
+    assert res["items"][0]["index"] == 0
     res2 = json.loads(s.search_output("careers"))
-    assert res2.get("careersPageUrl") == "https://co/careers"
+    assert res2.get("indexPageUrl") == "https://co/careers"
     assert json.loads(s.search_output("zzz-not-present")) == {}
 
 
@@ -161,16 +161,16 @@ def test_empty_fields_flags_missing_details():
     s.add_item({"title": "B", "url": "u2", "description": "has one"})
     flags = s.empty_fields()
     joined = " | ".join(flags)
-    assert "careersPageUrl (not set)" in flags
-    assert "description — empty on 1 of 2 jobs" in joined
-    assert "postedAt — empty on 2 of 2 jobs" in joined
+    assert "indexPageUrl (not set)" in flags
+    assert "description — empty on 1 of 2 items" in joined
+    assert "postedAt — empty on 2 of 2 items" in joined
 
 
 def test_empty_fields_empty_list():
     s = _store()
     flags = s.empty_fields()
-    assert any("jobs (list is empty)" in f for f in flags)
-    assert "careersPageUrl (not set)" in flags
+    assert any("items (list is empty)" in f for f in flags)
+    assert "indexPageUrl (not set)" in flags
 
 
 def test_item_missing_fields_tracks_per_item_gaps():
@@ -204,18 +204,18 @@ def test_single_array_no_item_model():
 
 ENUM_SCHEMA = {
     "type": "object",
-    "required": ["jobs"],
+    "required": ["items"],
     "properties": {
-        "jobs": {
+        "items": {
             "type": "array",
             "items": {
                 "type": "object",
                 "required": ["title"],
                 "properties": {
                     "title": {"type": "string"},
-                    "locationType": {
+                    "condition": {
                         "anyOf": [
-                            {"type": "string", "enum": ["ONSITE", "HYBRID", "REMOTE"]},
+                            {"type": "string", "enum": ["NEW", "USED", "REFURBISHED"]},
                             {"type": "null"},
                         ]
                     },
@@ -248,26 +248,26 @@ def _enum_store() -> OutputStore:
 
 def test_enum_case_insensitive_coercion():
     s = _enum_store()
-    ok, msg = s.add_item({"title": "A", "locationType": "Hybrid"})
+    ok, msg = s.add_item({"title": "A", "condition": "Used"})
     assert ok is True, msg
-    assert s.data["jobs"][0]["locationType"] == "HYBRID"
-    ok, _ = s.add_item({"title": "B", "locationType": " remote "})
+    assert s.data["items"][0]["condition"] == "USED"
+    ok, _ = s.add_item({"title": "B", "condition": " refurbished "})
     assert ok is True
-    assert s.data["jobs"][1]["locationType"] == "REMOTE"
+    assert s.data["items"][1]["condition"] == "REFURBISHED"
 
 
 def test_enum_coercion_rejects_genuinely_wrong_value():
     s = _enum_store()
-    ok, msg = s.add_item({"title": "A", "locationType": "Full time"})
+    ok, msg = s.add_item({"title": "A", "condition": "Brand new-ish"})
     assert ok is False
-    assert "locationType" in msg
+    assert "condition" in msg
 
 
 def test_string_whitespace_trimmed():
     s = _store()
     ok, _ = s.add_item({"title": "  Padded  ", "url": "u"})
     assert ok is True
-    assert s.data["jobs"][0]["title"] == "Padded"
+    assert s.data["items"][0]["title"] == "Padded"
 
 
 def test_set_field_enum_coercion():
@@ -276,7 +276,7 @@ def test_set_field_enum_coercion():
         "required": ["status"],
         "properties": {
             "status": {"type": "string", "enum": ["OPEN", "CLOSED"]},
-            "jobs": {"type": "array", "items": {"type": "object", "properties": {"t": {"type": "string"}}}},
+            "items": {"type": "array", "items": {"type": "object", "properties": {"t": {"type": "string"}}}},
         },
     }
     s = OutputStore(json_schema_to_pydantic(schema, "T"))
@@ -300,8 +300,8 @@ def test_update_many_applies_and_reports_failures():
     assert ok is True
     assert "Applied 2 of 4" in msg
     assert "entry 2" in msg and "entry 3" in msg
-    assert s.data["jobs"][0]["postedAt"] == "2026-01-01"
-    assert s.data["jobs"][1]["postedAt"] == "2026-01-02"
+    assert s.data["items"][0]["postedAt"] == "2026-01-01"
+    assert s.data["items"][1]["postedAt"] == "2026-01-02"
 
 
 def test_update_many_rejects_non_list():
@@ -314,7 +314,7 @@ def test_update_many_rejects_non_list():
 
 def test_mark_absent_settles_fields():
     s = _store()
-    s.set_field("careersPageUrl", "https://example.com/jobs")
+    s.set_field("indexPageUrl", "https://example.com/items")
     s.add_item({"title": "A", "url": "u1", "description": "d", "department": "Eng", "location": "L"})
     assert any("postedAt" in e for e in s.empty_fields())
     ok, msg = s.mark_absent("postedAt", "no date shown anywhere on detail pages")
@@ -334,20 +334,20 @@ def test_mark_absent_rejects_unknown_field_and_missing_reason():
 
 def test_mark_absent_accepts_top_level_field():
     s = _store()
-    ok, _ = s.mark_absent("careersPageUrl", "checked; no careers page")
+    ok, _ = s.mark_absent("indexPageUrl", "checked; no careers page")
     assert ok is True
-    assert not any("careersPageUrl" in e for e in s.empty_fields())
+    assert not any("indexPageUrl" in e for e in s.empty_fields())
 
 
 def test_coverage_summary_groups_fields():
     s = _store()
-    s.set_field("careersPageUrl", "https://example.com")
+    s.set_field("indexPageUrl", "https://example.com")
     s.add_item({"title": "A", "url": "u1", "description": "d"})
     s.add_item({"title": "B", "url": "u2"})
     s.mark_absent("location", "not shown")
     cov = s.coverage_summary()
     assert cov.startswith("Coverage — ")
-    assert "jobs: 2 item(s)" in cov
+    assert "items: 2 item(s)" in cov
     assert "title" in cov and "url" in cov
     assert "description 1/2" in cov
     assert "empty on all: department, postedAt" in cov
@@ -357,8 +357,8 @@ def test_coverage_summary_groups_fields():
 def test_coverage_summary_empty_store():
     s = _store()
     cov = s.coverage_summary()
-    assert "jobs: 0 item(s)" in cov
-    assert "top-level not set: careersPageUrl" in cov
+    assert "items: 0 item(s)" in cov
+    assert "top-level not set: indexPageUrl" in cov
 
 
 def test_extra_key_hints_spots_lookalike():
@@ -391,20 +391,20 @@ def test_extra_key_hints_quiet_when_filled_or_absent():
 
 def test_read_output_paging_windows_the_array():
     s = _store()
-    s.set_field("careersPageUrl", "https://example.com")
+    s.set_field("indexPageUrl", "https://example.com")
     for i in range(5):
         s.add_item({"title": f"Job {i}", "url": f"https://x.com/{i}"})
 
     full = json.loads(s.read_output())
-    assert len(full["jobs"]) == 5 and "_window" not in full
+    assert len(full["items"]) == 5 and "_window" not in full
 
     page = json.loads(s.read_output(offset=1, limit=2))
-    assert [j["title"] for j in page["jobs"]] == ["Job 1", "Job 2"]
-    assert "jobs[1:3] of 5" in page["_window"]
-    assert page["careersPageUrl"] == "https://example.com"
+    assert [j["title"] for j in page["items"]] == ["Job 1", "Job 2"]
+    assert "items[1:3] of 5" in page["_window"]
+    assert page["indexPageUrl"] == "https://example.com"
 
     tail = json.loads(s.read_output(offset=4, limit=10))
-    assert [j["title"] for j in tail["jobs"]] == ["Job 4"]
+    assert [j["title"] for j in tail["items"]] == ["Job 4"]
 
 
 if __name__ == "__main__":

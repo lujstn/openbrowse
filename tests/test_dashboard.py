@@ -217,9 +217,9 @@ async def test_session_log_export_scopes(client):
 
     from app.db import crud
 
-    session = await crud.create_session(task="scrape jobs")
+    session = await crud.create_session(task="scrape listings")
     sid = session["id"]
-    await crud.update_session(sid, output=json.dumps({"jobs": [{"title": "A"}]}))
+    await crud.update_session(sid, output=json.dumps({"items": [{"title": "A"}]}))
     await crud.create_message(
         session_id=sid,
         role="ai",
@@ -244,4 +244,4 @@ async def test_session_log_export_scopes(client):
     output = (
         await client.get(f"/session/{sid}/log?scope=output", headers=auth)
     ).json()
-    assert output == {"jobs": [{"title": "A"}]}
+    assert output == {"items": [{"title": "A"}]}

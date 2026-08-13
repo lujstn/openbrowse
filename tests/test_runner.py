@@ -155,7 +155,7 @@ def test_openai_subclass_captures_cache_write(monkeypatch):
     assert result.prompt_cache_creation_tokens == 50
 
 
-def _cached_state(url: str = "https://x.com/jobs"):
+def _cached_state(url: str = "https://x.com/listings"):
     from browser_use.browser.views import BrowserStateSummary
     from browser_use.dom.views import SerializedDOMState
 
@@ -189,7 +189,7 @@ async def test_lean_state_serves_stub_once_then_full(monkeypatch):
     session, calls = _fake_session(_cached_state())
 
     async def fake_eval(sess, js):
-        return "https://x.com/jobs"
+        return "https://x.com/listings"
 
     monkeypatch.setattr(runner_mod, "_eval_js", fake_eval)
     flag = {"eligible": True}
@@ -200,7 +200,7 @@ async def test_lean_state_serves_stub_once_then_full(monkeypatch):
     assert stub.state_error and "unchanged" in stub.state_error
     assert stub.screenshot is None
     assert stub.dom_state.selector_map == {7: "node"}
-    assert stub.url == "https://x.com/jobs"
+    assert stub.url == "https://x.com/listings"
     assert flag["eligible"] is False
     assert calls["full"] == 0
 
@@ -211,7 +211,7 @@ async def test_lean_state_serves_stub_once_then_full(monkeypatch):
 async def test_lean_state_falls_through_on_url_change(monkeypatch):
     import app.agent.runner as runner_mod
 
-    session, calls = _fake_session(_cached_state("https://x.com/jobs"))
+    session, calls = _fake_session(_cached_state("https://x.com/listings"))
 
     async def fake_eval(sess, js):
         return "https://x.com/other"

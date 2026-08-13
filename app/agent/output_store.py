@@ -73,7 +73,7 @@ def _literal_choices(annotation: Any) -> tuple[str, ...] | None:
 
 def _coerce_scalar(value: Any, annotation: Any) -> Any:
     """Forgiving pre-validation coercion: trim string whitespace, and map a string
-    case-insensitively onto a ``Literal`` enum choice ('Hybrid ' -> 'HYBRID') so an
+    case-insensitively onto a ``Literal`` enum choice ('Used ' -> 'USED') so an
     obviously-right value is never rejected over casing.
     """
     if not isinstance(value, str):

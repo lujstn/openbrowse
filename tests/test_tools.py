@@ -72,7 +72,7 @@ def test_item_url_field_prefers_detail_over_company() -> None:
     schema = {
         "type": "object",
         "properties": {
-            "jobs": {
+            "items": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -116,40 +116,17 @@ def test_item_url_field_falls_back_to_bare_url() -> None:
 def test_norm_url() -> None:
     from app.agent.tools import _norm_url
 
-    a = _norm_url("https://www.marshmallow.com/jobs?ashby_jid=ABC#openings")
-    b = _norm_url("https://www.marshmallow.com/jobs?ashby_jid=ABC/")
-    c = _norm_url("HTTPS://WWW.MARSHMALLOW.COM/jobs?ashby_jid=ABC")
-    assert a == b == c == "https://www.marshmallow.com/jobs?ashby_jid=abc"
+    a = _norm_url("https://www.example.com/listings?embed_id=ABC#section")
+    b = _norm_url("https://www.example.com/listings?embed_id=ABC/")
+    c = _norm_url("HTTPS://WWW.EXAMPLE.COM/listings?embed_id=ABC")
+    assert a == b == c == "https://www.example.com/listings?embed_id=abc"
     assert _norm_url("") == ""
-
-
-def _jobs_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "jobs": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    },
-                },
-            }
-        },
-    }
-    return OutputStore(json_schema_to_pydantic(schema, "T"))
 
 
 def test_bare_stub_count_counts_unopened_contentless_items() -> None:
     from app.agent.tools import _norm_url, _bare_stub_count
 
-    store = _jobs_store()
+    store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x/a"})
     store.add_item({"title": "B", "sourceUrl": "https://x/b"})
     store.add_item({"title": "C"})
@@ -162,7 +139,7 @@ def test_bare_stub_count_counts_unopened_contentless_items() -> None:
 def test_item_with_description_is_not_a_stub() -> None:
     from app.agent.tools import _bare_stub_count, _is_bare_stub
 
-    store = _jobs_store()
+    store = _items_store()
     long_desc = "We are hiring. " * 20
     filled = {"title": "A", "sourceUrl": "https://x/a", "description": long_desc}
     bare = {"title": "B", "sourceUrl": "https://x/b"}
@@ -214,14 +191,14 @@ class _FakeFileSystem:
         return _F()
 
 
-def _jobs_store():
+def _items_store():
     from app.agent.output_store import OutputStore
     from app.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
         "properties": {
-            "jobs": {
+            "items": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -242,7 +219,7 @@ def test_register_output_store_tools_actions() -> None:
     from app.agent.tools import register_output_store_tools
 
     tools = Tools()
-    register_output_store_tools(tools, _jobs_store(), {})
+    register_output_store_tools(tools, _items_store(), {})
     actions = tools.registry.registry.actions
     for name in (
         "add_item",
@@ -290,7 +267,7 @@ def test_parse_jsonld_blobs() -> None:
 def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
     from app.agent.tools import _MAX_UNVISITED_STUBS, _stub_block_msg
 
-    store = _jobs_store()
+    store = _items_store()
     clipboard: dict = {}
     for i in range(_MAX_UNVISITED_STUBS):
         assert (
@@ -314,7 +291,7 @@ def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
 async def test_store_bridge_writes_and_mirrors() -> None:
     from app.agent.tools import _store_bridge
 
-    store = _jobs_store()
+    store = _items_store()
     fs = _FakeFileSystem()
     clipboard: dict = {"_visited": {"https://x.com/1"}}
     bridge = _store_bridge(store, clipboard, fs)
@@ -338,7 +315,7 @@ async def test_store_bridge_writes_and_mirrors() -> None:
 async def test_store_bridge_respects_stub_limit() -> None:
     from app.agent.tools import _MAX_UNVISITED_STUBS, _store_bridge
 
-    store = _jobs_store()
+    store = _items_store()
     fs = _FakeFileSystem()
     bridge = _store_bridge(store, {}, fs)
     for i in range(_MAX_UNVISITED_STUBS):
@@ -383,7 +360,7 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
 
     urls = [f"https://x.com/{i}" for i in range(5)]
     clipboard: dict = {}
-    pages = await tools_mod._read_pages_impl(None, urls, "ashby", clipboard, concurrency=2)
+    pages = await tools_mod._read_pages_impl(None, urls, "embed", clipboard, concurrency=2)
 
     assert [p["url"] for p in pages] == urls
     assert all(not p.get("error") for p in pages)
@@ -421,7 +398,7 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
     monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
 
     page = await tools_mod._read_one_page(
-        None, "https://x.com/j1", "tid-1", "ashby", set(), set()
+        None, "https://x.com/j1", "tid-1", "embed", set(), set()
     )
     assert not page.get("error")
     assert len(page["text"]) >= 300
@@ -432,7 +409,7 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
 async def test_mark_absent_requires_pages_read() -> None:
     from app.agent.tools import _absence_unearned
 
-    store = _jobs_store()
+    store = _items_store()
     clipboard: dict = {}
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200})
     store.add_item({"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200})
@@ -449,8 +426,8 @@ async def test_mark_absent_earn_check_skips_top_level_and_urlless() -> None:
     from app.agent.schema import json_schema_to_pydantic
     from app.agent.tools import _absence_unearned
 
-    store = _jobs_store()
-    assert _absence_unearned(store, {}, "careersPageUrl") is None
+    store = _items_store()
+    assert _absence_unearned(store, {}, "indexPageUrl") is None
     assert _absence_unearned(store, {}, "description") is None
 
     schema = {
@@ -477,7 +454,7 @@ def _hints_store():
     schema = {
         "type": "object",
         "properties": {
-            "jobs": {
+            "items": {
                 "type": "array",
                 "items": {
                     "type": "object",

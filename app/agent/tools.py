@@ -81,7 +81,7 @@ def _fs_name_from_url(url: str, content_type: str = "", body: str = "") -> str:
 
 def _norm_url(url: str) -> str:
     """Stable key for the visited-set: lowercase, drop the fragment and trailing slash,
-    so ``…?ashby_jid=X#openings`` and the same URL without the fragment compare equal.
+    so ``…?id=X#section`` and the same URL without the fragment compare equal.
     """
     u = (url or "").strip().lower().split("#", 1)[0]
     return u.rstrip("/")
@@ -104,10 +104,21 @@ _IFRAME_SRC_JS = (
 )
 
 
+_JSONLD_BOILERPLATE_TYPES = (
+    "Organization",
+    "WebSite",
+    "WebPage",
+    "BreadcrumbList",
+    "SearchAction",
+    "SiteNavigationElement",
+)
+
+
 def _parse_jsonld_blobs(raw_list: Any) -> Any:
-    """Parse raw JSON-LD script contents and pick the best object: the first
-    JobPosting-like dict, else the first parseable object, else None. Handles the
-    common case of a top-level list wrapping the real object.
+    """Parse raw JSON-LD script contents and pick the best object: the first dict
+    whose @type is NOT site boilerplate (a JobPosting, Product, Event, Article, …
+    over the page's Organization/WebSite/BreadcrumbList chrome), else the first
+    parseable object, else None. Handles a top-level list wrapping the real object.
     """
     parsed: list[Any] = []
     if isinstance(raw_list, list):
@@ -121,7 +132,10 @@ def _parse_jsonld_blobs(raw_list: Any) -> Any:
             else:
                 parsed.append(obj)
     for obj in parsed:
-        if isinstance(obj, dict) and "JobPosting" in str(obj.get("@type", "")):
+        if not isinstance(obj, dict):
+            continue
+        obj_type = str(obj.get("@type", ""))
+        if obj_type and not any(b in obj_type for b in _JSONLD_BOILERPLATE_TYPES):
             return obj
     return parsed[0] if parsed else None
 
@@ -284,7 +298,7 @@ async def _read_one_page(
     else the main document. Rendering only counts once the text is substantial
     (embeds paint a thin loading shell first), and a page whose JSON-LD has not
     arrived with the text gets a short grace poll — that is where posted dates and
-    salary live, so reading the shell would silently null those fields.
+    other structured details live, so reading the shell would silently null those fields.
     """
     page: dict[str, Any] = {"url": url}
     frame_tid: str | None = None
@@ -470,7 +484,7 @@ class _SandboxBrowser:
         """Run JS INSIDE a cross-origin iframe whose URL contains ``url_contains``, via
         a per-target CDP session. Returns the value of the first matching frame, or
         ``[(frame_url, value), …]`` when all_matches=True. This is the only way a script
-        can read an embedded/cross-origin panel (e.g. a job description in an Ashby embed).
+        can read an embedded/cross-origin panel (e.g. a listing detail inside an embed).
         """
         needle = (url_contains or "").lower()
         all_frames = await self.frames()
@@ -506,9 +520,9 @@ class _SandboxBrowser:
 
     async def frame_jsonld(self, url_contains: str) -> Any:
         """Parsed JSON-LD structured data from the matching cross-origin iframe — where a
-        posted/published date, salary and other fields live that are not in the visible
+        posted/published date and other structured fields live that are not in the visible
         text. Returns the first JobPosting-like object, else the first parseable object,
-        else None (e.g. read ``(await browser.frame_jsonld('ashby'))['datePosted']``).
+        else None (e.g. read ``(await browser.frame_jsonld('embed'))['datePosted']``).
         """
         raw_list = await self.frame_evaluate(url_contains, _JSONLD_JS)
         return _parse_jsonld_blobs(raw_list)
@@ -935,7 +949,7 @@ def register_code_tools(
         "detail page in parallel tabs and returns [{url, title, text, jsonld, links}]; "
         "map each page to a row (a posted/published date lives in page['jsonld'] — "
         "e.g. row['postedAt'] = (page['jsonld'] or {}).get('datePosted')), then "
-        "await save_json(rows, 'jobs.json') and add_items_from_file('jobs.json'). "
+        "await save_json(rows, 'items.json') and add_items_from_file('items.json'). "
         "Also available: browser.evaluate(js) / browser.get_html(selector=None) for "
         "the MAIN page; browser.frames() / browser.frame_text(url_contains) / "
         "browser.frame_jsonld(url_contains) / browser.frame_evaluate(url_contains, js) "
@@ -1019,7 +1033,7 @@ def register_code_tools(
 
         def _sandbox_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any):
             """Resolve bare relative filenames against the agent's FileSystem dir, so
-            a script's plain ``open('jobs.json')`` finds files saved with save_json.
+            a script's plain ``open('items.json')`` finds files saved with save_json.
             """
             if isinstance(file, str) and "/" not in file and not file.startswith("."):
                 candidate = file_system.get_dir() / file
@@ -1292,13 +1306,13 @@ def register_tab_tools(
         "Read MANY pages in ONE step — the fast way to cover a whole listing. Opens "
         "the URLs in parallel background tabs, waits for each to render, reads them, "
         "closes the tabs, and saves the results to pages.json: for each page {url, "
-        "title, text, jsonld, links} (pass frame_url_contains, e.g. 'ashby', to read "
+        "title, text, jsonld, links} (pass frame_url_contains, e.g. 'embed', to read "
         "each page's embedded/cross-origin panel — same value you matched in "
         "find_links). Call with NO urls to read every link from your last find_links. "
-        "A posted/published date and salary usually live in the page's jsonld, not "
+        "A posted/published date and other structured details usually live in the page's jsonld, not "
         "its visible text. Next step after this: one run_code_file script that maps "
-        "read_json('pages.json') to rows, save_json(rows, 'jobs.json'), then "
-        "add_items_from_file('jobs.json'). Failed pages are retried once and "
+        "read_json('pages.json') to rows, save_json(rows, 'items.json'), then "
+        "add_items_from_file('items.json'). Failed pages are retried once and "
         "reported — every listed URL is covered, so no re-crawling is needed."
     )
     async def read_pages(
@@ -1348,8 +1362,8 @@ def register_tab_tools(
                 + ".\n"
                 + "\n".join(lines)
                 + "\nNext: ONE run_code_file script that maps read_json('pages.json') "
-                "to schema rows (dates/salary from page['jsonld']), save_json(rows, "
-                "'jobs.json'), then add_items_from_file('jobs.json'). Do not re-read "
+                "to schema rows (dates and structured details from page['jsonld']), save_json(rows, "
+                "'items.json'), then add_items_from_file('items.json'). Do not re-read "
                 "these pages."
             )
             return ActionResult(
@@ -1378,7 +1392,7 @@ def register_tab_tools(
             note = await tab_manager.open_tabs(urls)
             note += (
                 " Next: walk them — goto_tab(0), read the detail page, update_item that "
-                "role, then goto_tab(1), and so on. Do NOT add items from the listing alone."
+                "item, then goto_tab(1), and so on. Do NOT add items from the listing alone."
             )
             return ActionResult(extracted_content=note, long_term_memory=note)
         except Exception as e:
@@ -1433,7 +1447,7 @@ def register_tab_tools(
         "Collect links (index, text, href) from the current page using a selector "
         "(one or more REQUIRED): href_contains / href_regex match the URL; "
         "frame_url_contains returns only links inside an embedded panel/iframe whose "
-        "URL matches (e.g. 'ashby'); container_index returns only links inside that "
+        "URL matches (e.g. 'embed'); container_index returns only links inside that "
         "element (usually an embed's own index); attr returns links carrying a shared "
         "attribute, e.g. {\"class\": \"posting\"}. Multiple selectors narrow together. "
         "This is the ONLY tool that can read links inside embedded/cross-origin panels. "
@@ -1782,7 +1796,7 @@ def _stub_block_msg(
         return None
     return (
         f"Slow down — you already have {_MAX_UNVISITED_STUBS} listing stubs with no "
-        "detail. Read the roles' own pages before adding more: read_pages() covers "
+        "detail. Read the items' own pages before adding more: read_pages() covers "
         "them all in one step, then add items with the descriptions it returns. Do "
         "not batch items in from the listing."
     )
@@ -1953,8 +1967,8 @@ def register_output_store_tools(
 
     @tools.action(
         "Declare that a schema field is genuinely not published on the source site "
-        "after you have looked where it should be (e.g. no salary anywhere on the "
-        "detail pages). Give the field name and a one-line reason saying where you "
+        "after you have looked where it should be (a field no detail page shows "
+        "anywhere). Give the field name and a one-line reason saying where you "
         "looked. The field stops counting as unfinished work and done() will accept "
         "it empty. Use this instead of leaving known-absent fields to be flagged."
     )
@@ -1992,10 +2006,10 @@ def register_output_store_tools(
 
     @tools.action(
         f"Bulk-load items into the '{array}' list from a JSON array file you saved "
-        "(e.g. save_json(rows, 'jobs.json') at the end of an extraction script): "
+        "(e.g. save_json(rows, 'items.json') at the end of an extraction script): "
         "validates each element against the schema and appends them in ONE step, "
         "reporting per-index failures. The fast way to fill the output after a script "
-        "has read every role's own page. Items whose page you have not opened are "
+        "has read every item's own page. Items whose page you have not opened are "
         "skipped — open them first."
     )
     async def add_items_from_file(name: str, file_system: FileSystem) -> ActionResult:
