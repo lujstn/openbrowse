@@ -78,6 +78,20 @@ _CODE_REUSE_EXTENSION = (
     "embedded data instead."
 )
 
+_OVERLAY_EXTENSION = (
+    "A blocking overlay (cookie banner, consent prompt, modal, age gate) is only "
+    "dismissed when it STAYS gone: judge success by it not returning after your next "
+    "navigation, never by it merely disappearing — overlays can close on a missed "
+    "click without recording your choice. If it reappears, your click missed or the "
+    "site did not save the decision: find its button on the CURRENT page and click "
+    "that, never a remembered element from an earlier step. If it still returns after "
+    "two more attempts, stop fighting it and continue the task, ignoring the overlay "
+    "unless it actually covers something you must click or read. And never conclude an "
+    "on-screen control does not exist because a DOM search cannot find it — some "
+    "overlays are invisible to DOM queries yet fully clickable; what the screenshot "
+    "shows is real."
+)
+
 _CLIPBOARD_EXTENSION = (
     "You carry a clipboard: remember(key, value) keeps anything you need to remember "
     "between pages, recall(key) brings it back, and startUrl is already stored there."
@@ -466,7 +480,6 @@ async def _derive_north_star(llm: Any, task: str) -> str:
     return first.strip()[:400] or (task or "").strip()[:400]
 
 
-_CARD_FIELDS = ("what_i_see", "plan_to_goal", "next_move")
 _CARD_ORDER = (
     "thinking", "what_i_see", "plan_to_goal", "next_move",
     "evaluation_previous_goal", "memory", "next_goal",
@@ -513,8 +526,7 @@ def _patch_agent_output_cards() -> None:
                         for k, v in props.items():
                             ordered.setdefault(k, v)
                         schema["properties"] = ordered
-                        req = set(schema.get("required", [])) | set(_CARD_FIELDS)
-                        schema["required"] = [k for k in _CARD_ORDER if k in req]
+                        # @nonobvious(forced-by): cards stay optional — forcing them required under forced tool_choice made Claude bleed its XML tool-call idiom into the JSON string values.
                         return schema
 
                 CardedAgentOutput.__name__ = "AgentOutput"
@@ -851,12 +863,18 @@ async def run_agent_session(session_id: str) -> None:
             "calculate_cost": True,
             "llm_timeout": 180,
             "max_actions_per_step": 1,
+            # @nonobvious(forced-by): browser-use middle-shortens long URLs at the
+            # LLM-input layer (default 25 chars of query+fragment), which made the
+            # agent read hashed ashby_jid links as corrupt data; a limit past the
+            # longest real URL early-returns the original string, no reverse map.
+            "_url_shortening_limit": 100_000,
         }
         extension_parts = [
             system_prompt_extension,
             _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
+            _OVERLAY_EXTENSION,
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,
         ]

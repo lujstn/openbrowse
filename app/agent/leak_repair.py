@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 _ACTION_BLOCK_RE = re.compile(r"<action>.*?</action>", re.DOTALL)
 _STRAY_TAGS_RE = re.compile(r"</?(?:AgentOutput|thinking|action)>")
 
+_CARD_TAG_NAMES = (
+    "what_i_see",
+    "plan_to_goal",
+    "next_move",
+    "evaluation_previous_goal",
+    "memory",
+    "next_goal",
+    "current_plan_item",
+    "plan_update",
+    "thinking",
+)
+# @nonobvious(forced-by): the ``"?`` tolerates the malformed ``<next_move">`` stray-quote
+# form Claude emits mid-degeneration; without it those tags survive as literal text.
+_TAG_BLEED_RE = re.compile(r'<(/?)\s*(' + "|".join(_CARD_TAG_NAMES) + r')"?\s*>')
+_INVOKE_RESTART_RE = re.compile(r"<invoke\b", re.IGNORECASE)
+_TAG_JUNK_RE = re.compile(r"</?(?:invoke|parameter)\b[^>]*>", re.IGNORECASE)
+
 
 def _first_json_array(text: str) -> str | None:
     """Return the first balanced ``[...]`` substring of *text*, or None.
@@ -115,9 +132,66 @@ def hoist_leaked_action(tool_input: dict) -> bool:
     return False
 
 
+def _clean_bleed_text(text: str) -> str:
+    """Drop a restarted tool call and any leftover invoke/parameter or field tags,
+    then trim — leaving only the prose that belongs in the host field.
+    """
+    m = _INVOKE_RESTART_RE.search(text)
+    if m:
+        text = text[: m.start()]
+    text = _TAG_JUNK_RE.sub("", text)
+    text = _TAG_BLEED_RE.sub("", text)
+    return text.strip()
+
+
+def scrub_tag_bleed(tool_input: dict) -> bool:
+    """Repair Claude's trained tool-call XML idiom bleeding as literal text into the
+    forced-JSON AgentOutput fields (seen with thinking_effort=off, which uses forced
+    ``tool_choice``): truncate a restarted ``<invoke ...>`` tool call, split a field's
+    value on sibling field tags (tolerating the malformed ``<next_move">`` form), keep
+    the pre-tag text as that field's own value, and route each bled-out segment to its
+    named sibling field only when that field is still empty. Mutates *tool_input* in
+    place; returns True if it changed anything.
+    """
+    if not isinstance(tool_input, dict):
+        return False
+    changed = False
+    harvested: dict[str, str] = {}
+    for key, value in list(tool_input.items()):
+        if not isinstance(value, str):
+            continue
+        if not (
+            _TAG_BLEED_RE.search(value)
+            or _INVOKE_RESTART_RE.search(value)
+            or _TAG_JUNK_RE.search(value)
+        ):
+            continue
+        invoke_m = _INVOKE_RESTART_RE.search(value)
+        work = value[: invoke_m.start()] if invoke_m else value
+        parts = _TAG_BLEED_RE.split(work)
+        for i in range(1, len(parts) - 2, 3):
+            slash, name, following = parts[i], parts[i + 1], parts[i + 2]
+            if slash:
+                continue
+            seg = _clean_bleed_text(following)
+            if seg and name not in harvested:
+                harvested[name] = seg
+        cleaned = _clean_bleed_text(parts[0])
+        if cleaned != value:
+            tool_input[key] = cleaned
+            changed = True
+    for name, seg in harvested.items():
+        existing = tool_input.get(name)
+        if not (isinstance(existing, str) and existing.strip()):
+            tool_input[name] = seg
+            changed = True
+    return changed
+
+
 def repair_anthropic_message(response: object) -> int:
-    """Hoist leaked actions out of every ``tool_use`` block in an Anthropic
-    message. Returns the number of blocks repaired.
+    """Scrub card-field tag-bleed and hoist leaked actions out of every ``tool_use``
+    block in an Anthropic message. Returns the number of blocks whose action was
+    hoisted back into place.
 
     Operates purely via ``getattr`` so it needs no anthropic/browser-use imports.
     """
@@ -127,7 +201,10 @@ def repair_anthropic_message(response: object) -> int:
         if getattr(block, "type", None) != "tool_use":
             continue
         tool_input = getattr(block, "input", None)
-        if not isinstance(tool_input, dict) or tool_input.get("action"):
+        if not isinstance(tool_input, dict):
+            continue
+        scrub_tag_bleed(tool_input)
+        if tool_input.get("action"):
             continue
         if hoist_leaked_action(tool_input):
             repaired += 1
