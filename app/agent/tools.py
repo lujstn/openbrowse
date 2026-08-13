@@ -487,16 +487,21 @@ class _SandboxBrowser:
 
     async def read_pages(
         self,
-        urls: list[str],
+        urls: list[str] | None = None,
         frame_url_contains: str | None = None,
         concurrency: int = 4,
     ) -> list[dict[str, Any]]:
         """Read many pages in parallel background tabs and return
         ``[{url, title, text, jsonld, links, error?}, …]`` — the bulk way to read a
-        whole listing's detail pages without navigating the current tab. When
+        whole listing's detail pages without navigating the current tab. With no
+        urls, reads the links saved by the last find_links. When
         ``frame_url_contains`` is given, text/jsonld/links come from the matching
         embedded panel on each page.
         """
+        if not urls:
+            urls = list((self._clipboard or {}).get("found_links") or [])
+            if not urls:
+                raise ValueError("read_pages: no urls given and no saved found_links")
         return await _read_pages_impl(
             self._session, list(urls), frame_url_contains, self._clipboard, concurrency
         )
@@ -1866,7 +1871,8 @@ def register_output_store_tools(
         if not ok:
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
-        return ActionResult(extracted_content=msg, long_term_memory=msg)
+        note = f"{msg} {store.coverage_summary()}"
+        return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
         "Declare that a schema field is genuinely not published on the source site "
