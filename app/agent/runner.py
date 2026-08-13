@@ -61,16 +61,19 @@ _DRILL_IN_EXTENSION = (
 )
 
 _TOOLS_EASIEST_EXTENSION = (
-    "Browsing here is easiest with your own tools: find_links(...) collects links "
-    "using a selector (href_contains, href_regex, frame_url_contains, container_index, "
-    "or attr) and is the ONLY way to read links inside an embedded/cross-origin panel "
-    "— find_elements and evaluate see only the main page and cannot read anything "
-    "inside an embed. open_tabs([...]) opens many links at once, open_in_new_tab(index) "
-    "follows one, and close_tab brings you back. Reach for these before you wrestle "
-    "the DOM. The listing gives you links, not answers: after find_links, open_tabs() "
-    "to fan the whole listing out, then walk each tab — read the detail page and fill "
-    "that item with add_item/update_item before close_tab — because a record's real "
-    "detail only exists on its own page. Never batch items in from the listing alone."
+    "Browsing here is easiest with your own tools. find_links(...) collects links with "
+    "a selector (href_contains, href_regex, frame_url_contains, container_index, attr) "
+    "and is the only action that reads links inside an embedded/cross-origin panel. "
+    "find_elements and evaluate see only the MAIN page — but a script can read inside an "
+    "embed with browser.frame_text(url_part) / browser.frame_evaluate(url_part, js). "
+    "open_tabs([...]) opens many links at once, open_in_new_tab(index) follows one, "
+    "close_tab brings you back. The listing gives you links, not answers: a record's real "
+    "detail lives only on its own page, so there are two good ways to fill items — (1) "
+    "open_tabs() then walk each tab (goto_tab, read, update_item, next), or (2) write ONE "
+    "extraction script that navigates each saved link, reads the embed with frame_text, "
+    "save_json the batch, then add_items_from_file. Either way you MUST open each item's "
+    "own page: add_item refuses more than two items whose pages you have not opened. "
+    "Never batch items in from the listing alone."
 )
 
 _CODE_REUSE_EXTENSION = (
@@ -666,7 +669,7 @@ async def run_agent_session(session_id: str) -> None:
         store: OutputStore | None = None
         if output_model is not None:
             store = OutputStore(output_model)
-            register_output_store_tools(tools, store)
+            register_output_store_tools(tools, store, clipboard)
 
             async def _on_incomplete_done(empties: list[str]) -> None:
                 await crud.create_message(

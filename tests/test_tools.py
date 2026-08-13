@@ -111,3 +111,71 @@ def test_item_url_field_falls_back_to_bare_url() -> None:
     }
     store = OutputStore(json_schema_to_pydantic(schema, "T"))
     assert _item_url_field(store) == "url"
+
+
+def test_norm_url() -> None:
+    from app.agent.tools import _norm_url
+
+    a = _norm_url("https://www.marshmallow.com/jobs?ashby_jid=ABC#openings")
+    b = _norm_url("https://www.marshmallow.com/jobs?ashby_jid=ABC/")
+    c = _norm_url("HTTPS://WWW.MARSHMALLOW.COM/jobs?ashby_jid=ABC")
+    assert a == b == c == "https://www.marshmallow.com/jobs?ashby_jid=abc"
+    assert _norm_url("") == ""
+
+
+def _jobs_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "T"))
+
+
+def test_unvisited_stub_count_counts_unopened_pages() -> None:
+    from app.agent.tools import _norm_url, _unvisited_stub_count
+
+    store = _jobs_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x/b"})
+    store.add_item({"title": "C"})  # no url -> never a stub
+
+    assert _unvisited_stub_count(store, set()) == 2
+    assert _unvisited_stub_count(store, {_norm_url("https://x/a")}) == 1
+    assert _unvisited_stub_count(store, {_norm_url("https://x/a"), _norm_url("https://x/b")}) == 0
+
+
+def test_unvisited_stub_count_no_url_field() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _unvisited_stub_count
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema, "T"))
+    store.add_item({"name": "x"})
+    assert _unvisited_stub_count(store, set()) == 0
