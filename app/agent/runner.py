@@ -1063,9 +1063,9 @@ async def run_agent_session(session_id: str) -> None:
             # truncates the chain at the first page-changing action.
             "max_actions_per_step": 8,
             # @nonobvious(forced-by): browser-use middle-shortens long URLs at the
-            # LLM-input layer (default 25 chars of query+fragment), which made the
-            # agent read hashed ashby_jid links as corrupt data; a limit past the
-            # longest real URL early-returns the original string, no reverse map.
+            # LLM-input layer (default 25 chars of query+fragment), which makes the
+            # agent read links with long UUID query params as corrupt data; a limit
+            # past the longest real URL early-returns the original, no reverse map.
             "_url_shortening_limit": 100_000,
         }
         extension_parts = [
