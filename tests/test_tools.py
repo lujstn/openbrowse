@@ -265,10 +265,10 @@ def test_parse_jsonld_blobs() -> None:
     posting = _parse_jsonld_blobs(
         [
             _json.dumps({"@type": "Organization"}),
-            _json.dumps([{"@type": "JobPosting", "datePosted": "2026-08-04"}]),
+            _json.dumps([{"@type": "JobPosting", "datePublished": "2026-08-04"}]),
         ]
     )
-    assert posting["datePosted"] == "2026-08-04"
+    assert posting["datePublished"] == "2026-08-04"
 
 
 def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
@@ -420,7 +420,7 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
         reads.append(url)
         if url == dead:
             return {"url": url, "error": "no embedded panel matching 'embed' rendered"}
-        jsonld = {"datePosted": "2026-08-04"}
+        jsonld = {"datePublished": "2026-08-04"}
         if url == slow_ld and reads.count(url) < 2:
             jsonld = None
         return {"url": url, "text": "body " * 60, "jsonld": jsonld, "links": []}
@@ -437,7 +437,7 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
 
     by_url = {p["url"]: p for p in pages}
     assert by_url[dead].get("error")
-    assert by_url[slow_ld]["jsonld"] == {"datePosted": "2026-08-04"}
+    assert by_url[slow_ld]["jsonld"] == {"datePublished": "2026-08-04"}
     assert tools_mod._norm_url(dead) in clipboard["_read_failed"]
     assert tools_mod._norm_url(slow_ld) in clipboard["_visited"]
 
@@ -459,7 +459,7 @@ def _draft_store():
                         "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                         "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                         "sellerDescription": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "publishedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                         "condition": {
                             "anyOf": [
                                 {"type": "string", "enum": ["NEW", "USED"]},
@@ -501,7 +501,7 @@ def test_draft_row_maps_jsonld_deterministically() -> None:
             "@type": "Product",
             "title": "Widget One",
             "description": "<p>Great &amp; sturdy.</p><p>Second para.</p>",
-            "datePosted": "2026-08-04",
+            "datePublished": "2026-08-04",
             "employmentType": "FULL_TIME",
             "validThrough": "2026-12-01",
         },
@@ -509,7 +509,7 @@ def test_draft_row_maps_jsonld_deterministically() -> None:
     row = _draft_row(store, page)
     assert row["sourceUrl"] == "https://x.com/listings?id=abc12345"
     assert row["title"] == "Widget One"
-    assert row["postedAt"] == "2026-08-04"
+    assert row["publishedAt"] == "2026-08-04"
     assert "Great & sturdy." in row["description"]
     assert "<p>" not in row["description"]
     assert "sellerDescription" not in row
@@ -530,7 +530,7 @@ def test_draft_row_falls_back_to_page_text_and_invents_nothing() -> None:
     assert row["sourceUrl"] == "https://x.com/a"
     assert row["title"] == "Bare page"
     assert row["description"].startswith("body")
-    assert "postedAt" not in row and "condition" not in row
+    assert "publishedAt" not in row and "condition" not in row
 
 
 def test_strip_html_preserves_paragraphs() -> None:
@@ -731,7 +731,7 @@ def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
         "jsonld": {
             "@type": "Product",
             "title": "Widget One",
-            "datePosted": "2026-08-04",
+            "datePublished": "2026-08-04",
             "jobLocation": {
                 "@type": "Place",
                 "address": {"@type": "PostalAddress", "addressLocality": "London"},
@@ -745,7 +745,7 @@ def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
     }
     schema_store = store
     row = _draft_row(schema_store, page)
-    assert row["postedAt"] == "2026-08-04"
+    assert row["publishedAt"] == "2026-08-04"
     assert "condition" not in row
     extra_keys = {e["key"] for e in row.get("extra") or []}
     assert "employmentType" in extra_keys
@@ -963,7 +963,7 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
     import app.agent.tools as tools_mod
 
     texts = iter(["Loading", "Loading…", "X" * 300, "X" * 300, "X" * 400])
-    jsonlds = iter([[], [_json.dumps({"@type": "JobPosting", "datePosted": "2026-08-04"})]])
+    jsonlds = iter([[], [_json.dumps({"@type": "JobPosting", "datePublished": "2026-08-04"})]])
     last_text = {"v": ""}
 
     async def fake_eval(session, tid, js):
@@ -991,7 +991,7 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
     )
     assert not page.get("error")
     assert len(page["text"]) >= 300
-    assert page["jsonld"]["datePosted"] == "2026-08-04"
+    assert page["jsonld"]["datePublished"] == "2026-08-04"
     assert page["frame_matched"] is True
 
 
@@ -1049,7 +1049,7 @@ def _hints_store():
                     "required": ["title"],
                     "properties": {
                         "title": {"type": "string"},
-                        "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "publishedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                         "extra": {
                             "anyOf": [
                                 {
@@ -1079,7 +1079,7 @@ async def test_completeness_gate_bounces_once_with_hints() -> None:
     tools = Tools()
     store = _hints_store()
     store.add_item(
-        {"title": "A", "extra": [{"key": "datePosted", "value": "2026-08-04"}]}
+        {"title": "A", "extra": [{"key": "datePublished", "value": "2026-08-04"}]}
     )
     bounces: list[list[str]] = []
 
@@ -1094,8 +1094,8 @@ async def test_completeness_gate_bounces_once_with_hints() -> None:
     first = await entry.function(params=params, file_system=fs)
     assert first.is_done is False
     assert "mark_absent" in first.extracted_content
-    assert "datePosted" in first.extracted_content
-    assert "postedAt" in first.extracted_content
+    assert "datePublished" in first.extracted_content
+    assert "publishedAt" in first.extracted_content
     assert len(bounces) == 1
 
     second = await entry.function(params=params, file_system=fs)
@@ -1109,7 +1109,7 @@ async def test_completeness_gate_passes_when_absent_marked() -> None:
     tools = Tools()
     store = _hints_store()
     store.add_item({"title": "A"})
-    store.mark_absent("postedAt", "no dates published")
+    store.mark_absent("publishedAt", "no dates published")
     store.mark_absent("extra", "no extra attributes shown")
     register_completeness_gate(tools, store, None)
     entry = tools.registry.registry.actions["done"]
@@ -1362,6 +1362,84 @@ def test_store_rejects_ungrounded_enum_writes() -> None:
     store.evidence_check = None
     ok, msg = store.add_item({"title": "Other", "condition": "USED"})
     assert ok is True, msg
+
+
+def test_labelled_pairs_harvest_visible_specs() -> None:
+    from app.agent.tools import _labelled_pairs
+
+    text = (
+        "All Items\n"
+        "Vintage Oak Desk\n"
+        "Location\n\nBristol\n\n"
+        "Condition\n\nUsed\n\n"
+        "Category\n\nHome\nHome Office\n\n"
+        "Overview\n"
+        + "A long paragraph describing the item in detail. " * 5
+    )
+    pairs = _labelled_pairs(text)
+    assert pairs["Location"] == "Bristol"
+    assert pairs["Condition"] == "Used"
+    assert pairs["Category"] == "Home Office"
+    assert "Overview" not in pairs
+
+
+def test_draft_row_fills_fields_from_labelled_page_text() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "extra": {
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "key": {"type": "string"},
+                                            "value": {"type": "string"},
+                                        },
+                                    },
+                                },
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema))
+    page = {
+        "url": "https://x.com/listings?id=1",
+        "title": "Vintage Oak Desk",
+        "text": (
+            "Vintage Oak Desk\n"
+            "Location\n\nBristol\n\n"
+            "Category\n\nHome\nHome Office\n\n"
+            "Overview\n" + "Long descriptive prose about the item. " * 20
+        ),
+        "jsonld": {"@type": "Product", "title": "Vintage Oak Desk"},
+        "listing_text": "Vintage Oak Desk\nHome Office\n•\nBristol\n•\nCollection only",
+    }
+    row = _draft_row(store, page)
+    assert row["location"] == "Bristol"
+    assert row["category"] == "Home Office"
+    extras = {e["key"]: e["value"] for e in row.get("extra") or []}
+    assert "Collection only" in extras.get("listing_row", "")
+    assert "Bristol" not in extras.get("listing_row", "")
 
 
 def test_compact_json_text_elides_long_strings() -> None:

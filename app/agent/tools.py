@@ -126,7 +126,7 @@ _JSONLD_BOILERPLATE_TYPES = (
 
 def _parse_jsonld_blobs(raw_list: Any) -> Any:
     """Parse raw JSON-LD script contents and pick the best object: the first dict
-    whose @type is NOT site boilerplate (a JobPosting, Product, Event, Article, …
+    whose @type is NOT site boilerplate (a Product, Event, Article, …
     over the page's Organization/WebSite/BreadcrumbList chrome), else the first
     parseable object, else None. Handles a top-level list wrapping the real object.
     """
@@ -882,8 +882,8 @@ class _SandboxBrowser:
     async def frame_jsonld(self, url_contains: str) -> Any:
         """Parsed JSON-LD structured data from the matching cross-origin iframe — where a
         posted/published date and other structured fields live that are not in the visible
-        text. Returns the first JobPosting-like object, else the first parseable object,
-        else None (e.g. read ``(await browser.frame_jsonld('embed'))['datePosted']``).
+        text. Returns the first entity-describing object, else the first parseable
+        object, else None (e.g. ``(await browser.frame_jsonld('embed'))['datePublished']``).
         """
         raw_list = await self.frame_evaluate(url_contains, _JSONLD_JS)
         return _parse_jsonld_blobs(raw_list)
@@ -2406,7 +2406,7 @@ def _item_url_field(store: OutputStore) -> str | None:
     if model is None:
         return None
     names = list(model.model_fields)
-    for kw in ("sourceurl", "applyurl", "detailurl", "joburl", "posturl", "permalink"):
+    for kw in ("sourceurl", "detailurl", "itemurl", "pageurl", "permalink"):
         for name in names:
             if kw in name.lower():
                 return name
@@ -2414,12 +2414,23 @@ def _item_url_field(store: OutputStore) -> str | None:
         for name in names:
             if kw in name.lower():
                 return name
-    for name in names:
-        low = name.lower()
-        if "url" in low and not any(
-            x in low for x in ("company", "employer", "org", "logo", "image", "careers")
-        ):
+    url_fields = [
+        n
+        for n in names
+        if "url" in n.lower()
+        and not any(x in n.lower() for x in ("logo", "image", "icon"))
+    ]
+    # @nonobvious(means): a bare url field is the record's own page; a URL field
+    # whose stem prefixes sibling fields (xUrl alongside xName/xDescription) is a
+    # related entity's URL, so the first stemmed field WITHOUT such siblings wins.
+    for name in url_fields:
+        if not _name_tokens(name.lower().replace("url", " ")):
             return name
+    for name in url_fields:
+        stem_tokens = _name_tokens(name.lower().replace("url", " "))
+        if any(other != name and _name_tokens(other) & stem_tokens for other in names):
+            continue
+        return name
     return None
 
 
@@ -2555,11 +2566,40 @@ def _strong_overlap(a: set[str], b: set[str]) -> bool:
     return len(common) >= 2
 
 
+def _labelled_pairs(text: str) -> dict[str, str]:
+    """Visible label/value pairs from the top of a page's rendered text — a short
+    label line followed by a short value line, the way labelled specs render
+    ("Condition" / "Brand New"). Pages often show these to the user without
+    repeating them in JSON-LD, so the draft must harvest them from the text.
+    """
+    seq = [ln.strip() for ln in (text or "")[:4000].splitlines() if ln.strip()]
+    pairs: dict[str, str] = {}
+    for i in range(len(seq) - 1):
+        label, value = seq[i], seq[i + 1]
+        if not re.fullmatch(r"[A-Za-z][A-Za-z /&-]{1,39}", label):
+            continue
+        if not value or len(value) > 80:
+            continue
+        # @nonobvious(forced-by): grouped specs render as "Category" / "Home" /
+        # "Home Office" — the fuller next line that extends the value is the real
+        # value, the short one is its group prefix.
+        if (
+            i + 2 < len(seq)
+            and seq[i + 2].startswith(value)
+            and len(value) < len(seq[i + 2]) <= 80
+        ):
+            value = seq[i + 2]
+        if label.lower() == value.lower():
+            continue
+        pairs.setdefault(label, value)
+    return pairs
+
+
 def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     """A deterministically prefilled item row from one read page, so the model
     reviews and judges instead of writing parsing code: the page URL fills the
     item's own-URL field, JSON-LD scalars token-match onto schema fields
-    (datePosted -> postedAt), the description lands HTML-stripped, and leftover
+    (datePublished -> publishedAt), the description lands HTML-stripped, and leftover
     observables go into the extra-style field. Every value is validated against
     its field before inclusion and nothing absent from the page is invented.
     """
@@ -2631,6 +2671,22 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
                 used.add(path)
                 break
 
+    for label, value in _labelled_pairs(page.get("text") or "").items():
+        label_tokens = _name_tokens(label)
+        if not label_tokens:
+            continue
+        label_candidates = sorted(
+            (
+                (len(_name_tokens(fname) & label_tokens), fname)
+                for fname in fields
+                if _strong_overlap(_name_tokens(fname), label_tokens)
+            ),
+            key=lambda pair: -pair[0],
+        )
+        for _score, fname in label_candidates:
+            if _try_set(fname, value):
+                break
+
     title_candidates = [f for f in fields if "title" in f.lower() or f.lower() == "name"]
     if title_candidates and title_candidates[0] not in row and page.get("title"):
         _try_set(title_candidates[0], page["title"])
@@ -2662,6 +2718,17 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             and not k.startswith("@")
             and isinstance(v, (str, int, float, bool))
         }
+        listing_text = page.get("listing_text") or ""
+        if listing_text:
+            stored_blob = _norm_evidence(json.dumps(row, default=str)).replace(" ", "")
+            residue = [
+                seg.strip()
+                for seg in re.split(r"[•|·\n]+", listing_text)
+                if seg.strip()
+                and _norm_evidence(seg).replace(" ", "") not in stored_blob
+            ]
+            if residue:
+                leftovers["listing_row"] = " • ".join(residue)[:500]
         if leftovers:
             if extra_kind == "kv":
                 for key_name in ("key", "name"):
@@ -2864,7 +2931,7 @@ def register_output_store_tools(
     @tools.action(
         f"Enrich the item at integer index (0-based, as reported by add_item) in the "
         f"'{array}' list by merging in the given fields — this is how a detail-page "
-        "visit fills a stub's missing values such as description or postedAt. "
+        "visit fills a stub's missing values such as description or publish date. "
         "Re-validated against the schema. To touch several items, use update_items "
         "instead of one call per item."
     )
@@ -3130,7 +3197,7 @@ def register_completeness_gate(
                     date_hint = (
                         "\n\nA posted/published date is usually NOT in the visible text — "
                         "it is in each page's JSON-LD, which read_pages already returns "
-                        "as page['jsonld'] (e.g. its 'datePosted')."
+                        "as page['jsonld'] (e.g. its 'datePublished')."
                     )
                 return ActionResult(
                     is_done=False,

@@ -97,7 +97,7 @@ _TOKEN_STOPWORDS = {"at", "is", "the", "a", "of", "in", "on", "id", "url"}
 
 def _name_tokens(name: str) -> set[str]:
     """Meaningful lowercase tokens of a camelCase/snake_case identifier, for fuzzy
-    matching a schema field against a raw key (postedAt <-> datePosted).
+    matching a schema field against a raw key (publishedAt <-> datePublished).
     """
     parts = re.findall(r"[A-Za-z][a-z0-9]*", re.sub(r"[_\-]", " ", name))
     return {p.lower() for p in parts if len(p) > 1} - _TOKEN_STOPWORDS
@@ -460,7 +460,7 @@ class OutputStore:
 
     def extra_key_hints(self) -> list[str]:
         """Detect raw captured keys that look like they fill an empty schema field
-        (extra.datePosted vs an empty postedAt), so the gate can point at a bulk
+        (extra.datePublished vs an empty publishedAt), so the gate can point at a bulk
         promotion instead of sending the agent back to re-read pages.
         """
         if not self._array_field or self._item_model is None:

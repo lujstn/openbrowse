@@ -27,7 +27,7 @@ SCHEMA = {
                     "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "url": {"type": "string"},
                     "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "publishedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
             },
         },
@@ -61,7 +61,7 @@ def test_add_item_valid_fills_optional_fields_as_null():
         "location": None,
         "url": "https://x/1",
         "description": None,
-        "postedAt": None,
+        "publishedAt": None,
     }
     assert s.is_empty() is False
 
@@ -90,10 +90,10 @@ def test_add_item_wrong_type_rejected():
 def test_update_item_enriches_stub():
     s = _store()
     s.add_item({"title": "Engineer", "url": "https://x/1"})
-    ok, msg = s.update_item(0, {"description": "Build things", "postedAt": "2026-01-02"})
+    ok, msg = s.update_item(0, {"description": "Build things", "publishedAt": "2026-01-02"})
     assert ok is True
     assert s.data["items"][0]["description"] == "Build things"
-    assert s.data["items"][0]["postedAt"] == "2026-01-02"
+    assert s.data["items"][0]["publishedAt"] == "2026-01-02"
     assert s.data["items"][0]["title"] == "Engineer"
 
 
@@ -163,7 +163,7 @@ def test_empty_fields_flags_missing_details():
     joined = " | ".join(flags)
     assert "indexPageUrl (not set)" in flags
     assert "description — empty on 1 of 2 items" in joined
-    assert "postedAt — empty on 2 of 2 items" in joined
+    assert "publishedAt — empty on 2 of 2 items" in joined
 
 
 def test_empty_fields_empty_list():
@@ -176,8 +176,8 @@ def test_empty_fields_empty_list():
 def test_item_missing_fields_tracks_per_item_gaps():
     s = _store()
     s.add_item({"title": "A", "url": "u1"})
-    assert set(s.item_missing_fields(0)) == {"department", "location", "description", "postedAt"}
-    s.update_item(0, {"description": "d", "postedAt": "2026-01-01", "department": "Eng", "location": "London"})
+    assert set(s.item_missing_fields(0)) == {"department", "location", "description", "publishedAt"}
+    s.update_item(0, {"description": "d", "publishedAt": "2026-01-01", "department": "Eng", "location": "London"})
     assert s.item_missing_fields(0) == []
     assert s.item_count() == 1
 
@@ -234,7 +234,7 @@ ENUM_SCHEMA = {
                             {"type": "null"},
                         ]
                     },
-                    "postedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "publishedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
             },
         },
@@ -291,17 +291,17 @@ def test_update_many_applies_and_reports_failures():
     s.add_item({"title": "B", "url": "u2"})
     ok, msg = s.update_many(
         [
-            {"index": 0, "fields": {"postedAt": "2026-01-01"}},
-            {"index": 1, "fields": {"postedAt": "2026-01-02"}},
-            {"index": 9, "fields": {"postedAt": "x"}},
+            {"index": 0, "fields": {"publishedAt": "2026-01-01"}},
+            {"index": 1, "fields": {"publishedAt": "2026-01-02"}},
+            {"index": 9, "fields": {"publishedAt": "x"}},
             "not-a-dict",
         ]
     )
     assert ok is True
     assert "Applied 2 of 4" in msg
     assert "entry 2" in msg and "entry 3" in msg
-    assert s.data["items"][0]["postedAt"] == "2026-01-01"
-    assert s.data["items"][1]["postedAt"] == "2026-01-02"
+    assert s.data["items"][0]["publishedAt"] == "2026-01-01"
+    assert s.data["items"][1]["publishedAt"] == "2026-01-02"
 
 
 def test_update_many_rejects_non_list():
@@ -316,19 +316,19 @@ def test_mark_absent_settles_fields():
     s = _store()
     s.set_field("indexPageUrl", "https://example.com/items")
     s.add_item({"title": "A", "url": "u1", "description": "d", "department": "Eng", "location": "L"})
-    assert any("postedAt" in e for e in s.empty_fields())
-    ok, msg = s.mark_absent("postedAt", "no date shown anywhere on detail pages")
-    assert ok is True and "postedAt" in msg
-    assert not any("postedAt" in e for e in s.empty_fields())
-    assert "postedAt" not in s.item_missing_fields(0)
-    assert s.absent_fields == {"postedAt": "no date shown anywhere on detail pages"}
+    assert any("publishedAt" in e for e in s.empty_fields())
+    ok, msg = s.mark_absent("publishedAt", "no date shown anywhere on detail pages")
+    assert ok is True and "publishedAt" in msg
+    assert not any("publishedAt" in e for e in s.empty_fields())
+    assert "publishedAt" not in s.item_missing_fields(0)
+    assert s.absent_fields == {"publishedAt": "no date shown anywhere on detail pages"}
 
 
 def test_mark_absent_rejects_unknown_field_and_missing_reason():
     s = _store()
     ok, msg = s.mark_absent("nonsense", "because")
     assert ok is False and "not a schema field" in msg
-    ok, msg = s.mark_absent("postedAt", "  ")
+    ok, msg = s.mark_absent("publishedAt", "  ")
     assert ok is False and "reason" in msg
 
 
@@ -350,7 +350,7 @@ def test_coverage_summary_groups_fields():
     assert "items: 2 item(s)" in cov
     assert "title" in cov and "url" in cov
     assert "description 1/2" in cov
-    assert "empty on all: department, postedAt" in cov
+    assert "empty on all: department, publishedAt" in cov
     assert "marked absent: location" in cov
 
 
@@ -366,11 +366,11 @@ def test_extra_key_hints_spots_lookalike():
     s.add_item(
         {
             "title": "A",
-            "extra": [{"key": "datePosted", "value": "2026-08-04"}],
+            "extra": [{"key": "datePublished", "value": "2026-08-04"}],
         }
     )
     hints = s.extra_key_hints()
-    assert any("datePosted" in h and "postedAt" in h for h in hints)
+    assert any("datePublished" in h and "publishedAt" in h for h in hints)
 
 
 def test_extra_key_hints_quiet_when_filled_or_absent():
@@ -378,15 +378,15 @@ def test_extra_key_hints_quiet_when_filled_or_absent():
     s.add_item(
         {
             "title": "A",
-            "postedAt": "2026-08-04",
-            "extra": [{"key": "datePosted", "value": "2026-08-04"}],
+            "publishedAt": "2026-08-04",
+            "extra": [{"key": "datePublished", "value": "2026-08-04"}],
         }
     )
-    assert not any("postedAt" in h for h in s.extra_key_hints())
+    assert not any("publishedAt" in h for h in s.extra_key_hints())
     s2 = _enum_store()
-    s2.add_item({"title": "B", "extra": [{"key": "datePosted", "value": "x"}]})
-    s2.mark_absent("postedAt", "not published")
-    assert not any("postedAt" in h for h in s2.extra_key_hints())
+    s2.add_item({"title": "B", "extra": [{"key": "datePublished", "value": "x"}]})
+    s2.mark_absent("publishedAt", "not published")
+    assert not any("publishedAt" in h for h in s2.extra_key_hints())
 
 
 def test_bool_coerces_to_string_for_plain_str_fields():
