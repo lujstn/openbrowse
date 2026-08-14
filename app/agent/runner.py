@@ -200,19 +200,19 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
                     ),
                     url=cached_state.url,
                     title=(
-                        f"{cached_state.title} [PAGE FINE & UNCHANGED — DOM listing "
-                        "deliberately omitted this step to save space, NOT empty or "
-                        "stalled]"
+                        f"{cached_state.title} [CODE MODE — browser parked & healthy; "
+                        "DOM and screenshot deliberately omitted while you do "
+                        "file/store work]"
                     ),
                     tabs=cached_state.tabs,
                     screenshot=None,
                     state_error=(
-                        "The page is healthy and unchanged since your last browser "
-                        "action; its DOM listing is deliberately omitted this step "
-                        "because you only did store/file work. Do not describe the "
-                        "page as empty, stale or stuck. Element indices from the "
-                        "earlier state remain valid; any browser action refreshes "
-                        "the full view."
+                        "CODE MODE: your last step was file/store/code work, so no "
+                        "screenshot or DOM was captured — the page is parked, healthy "
+                        "and unchanged. Skip the visual check: describe your "
+                        "file/store progress instead of the page, and never call the "
+                        "page empty, stale or stuck. Element indices from the earlier "
+                        "state remain valid; any browser action returns the full view."
                     ),
                 )
         return await original(

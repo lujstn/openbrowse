@@ -1142,6 +1142,7 @@ def test_draft_row_ranked_candidates_survive_enum_rejection() -> None:
                             ]
                         },
                         "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "applyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     },
                 },
             }
@@ -1155,6 +1156,7 @@ def test_draft_row_ranked_candidates_survive_enum_rejection() -> None:
         "jsonld": {
             "@type": "JobPosting",
             "title": "Role One",
+            "directApply": True,
             "jobLocation": {
                 "@type": "Place",
                 "address": {"@type": "PostalAddress", "addressLocality": "London"},
@@ -1164,6 +1166,89 @@ def test_draft_row_ranked_candidates_survive_enum_rejection() -> None:
     row = _draft_row(store, page)
     assert row["location"] == "London"
     assert "locationType" not in row
+    assert row.get("applyUrl") != "true"
+    assert "applyUrl" not in row
+
+
+class _DirFs:
+    def __init__(self, base) -> None:
+        self._base = base
+
+    def get_dir(self):
+        return self._base
+
+    def get_file(self, name):
+        return None
+
+    async def write_file(self, name, content):
+        (self._base / name).write_text(content)
+
+
+async def _run_sandbox(tmp_path, code, session=None, monkeypatch=None):
+    import types
+
+    from app.agent.tools import register_code_tools
+
+    tools = Tools()
+    register_code_tools(tools, {}, None)
+    entry = tools.registry.registry.actions["run_code_file"]
+    params = entry.param_model(name="t", code=code)
+    return await entry.function(
+        params=params,
+        browser_session=session or types.SimpleNamespace(),
+        file_system=_DirFs(tmp_path),
+    )
+
+
+async def test_run_code_file_reports_saved_files(tmp_path) -> None:
+    result = await _run_sandbox(tmp_path, "save_json({'k': 1}, 'made.json')\nprint('ok')")
+    assert not result.error, result.error
+    assert "Files saved this run: made.json." in result.extracted_content
+
+    result = await _run_sandbox(tmp_path, "print('nothing to save')")
+    assert "No files were saved by this script" in result.extracted_content
+
+
+async def test_run_code_file_hints_on_string_indices(tmp_path) -> None:
+    result = await _run_sandbox(tmp_path, "x = '{\"a\": 1}'\nprint(x['a'])")
+    assert result.error
+    assert "parsed dicts" in result.error
+    assert "read_output()" in result.error
+
+
+async def test_run_code_file_shows_code_tab_and_restores_focus(
+    tmp_path, monkeypatch
+) -> None:
+    import types
+
+    import app.agent.tools as tools_mod
+
+    order: list[tuple[str, str]] = []
+
+    async def fake_spawn(session, url):
+        assert url.startswith("data:text/html")
+        order.append(("spawn", "code-tid"))
+        return "code-tid"
+
+    async def fake_focus(session, tid):
+        order.append(("focus", tid))
+
+    async def fake_close(session, tid):
+        order.append(("close", tid))
+
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+
+    session = types.SimpleNamespace(agent_focus_target_id="home-tid")
+    result = await _run_sandbox(tmp_path, "print('hi')", session=session)
+    assert not result.error, result.error
+    assert order == [
+        ("spawn", "code-tid"),
+        ("focus", "code-tid"),
+        ("focus", "home-tid"),
+        ("close", "code-tid"),
+    ]
 
 
 def test_compact_json_text_elides_long_strings() -> None:

@@ -1158,6 +1158,27 @@ def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> Non
         logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
 
 
+def _code_tab_url(script_name: str) -> str:
+    """A self-contained data: URL shown in a real tab while a sandbox script runs,
+    so the live view makes code work visible instead of a seemingly frozen page.
+    """
+    from urllib.parse import quote
+
+    safe = html_lib.escape(script_name)
+    page = (
+        "<!doctype html><title>Code</title>"
+        "<body style='margin:0;height:100vh;display:flex;flex-direction:column;"
+        "align-items:center;justify-content:center;background:#0d1117;color:#e6edf3;"
+        "font-family:monospace'>"
+        "<div style='width:44px;height:44px;border:4px solid #30363d;"
+        "border-top-color:#58a6ff;border-radius:50%;animation:s 1s linear infinite'>"
+        "</div><style>@keyframes s{to{transform:rotate(360deg)}}</style>"
+        f"<p style='margin-top:24px;font-size:18px'>Model is running code&hellip;</p>"
+        f"<p style='color:#8b949e'>{safe}</p></body>"
+    )
+    return "data:text/html;charset=utf-8," + quote(page)
+
+
 async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult:
     """Compile and run one script against the persistent sandbox namespace, capturing
     stdout to a small preview. Shared by ``run_code_file`` — the only executor.
@@ -1199,6 +1220,13 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
                 "\nHint: your code already runs inside a live event loop — write "
                 "top-level await directly; never use asyncio.run() or "
                 "loop.run_until_complete()."
+            )
+        elif "string indices must be integers" in err_text:
+            hint = (
+                "\nHint: you indexed a STRING with a key — you probably treated a "
+                "JSON string as data. read_json() and read_output() already return "
+                "parsed dicts/lists (never json.loads them); only raw text like "
+                "open(...).read() or fetch(...).text needs json.loads."
             )
         elif "coroutine" in err_text or "can't be used in 'await'" in err_text:
             hint = (
@@ -1297,9 +1325,12 @@ def register_code_tools(
                     error=f"navigate to {url} failed: {type(e).__name__}: {e}"
                 )
 
+        saved_files: list[str] = []
+
         def _save_json(obj: Any, name: str = "output.json") -> str:
             fn = _normalise_fs_name(name, "json")
             _write_fs_file_sync(file_system, fn, json.dumps(obj, indent=2, default=str))
+            saved_files.append(fn)
             return _AwaitableStr(fn)
 
         def _read_json(name: str) -> Any:
@@ -1386,7 +1417,47 @@ def register_code_tools(
         )
         if store is not None:
             namespace.update(_store_bridge(store, clipboard, file_system))
-        return await _exec_in_sandbox(code, namespace)
+
+        home_target = getattr(browser_session, "agent_focus_target_id", None)
+        code_tab: str | None = None
+        if browser_session is not None:
+            try:
+                code_tab = await _spawn_tab(browser_session, _code_tab_url(fname))
+                await _focus_target(browser_session, code_tab)
+            except Exception:
+                logger.debug("code tab: could not open", exc_info=True)
+                code_tab = None
+        try:
+            result = await _exec_in_sandbox(code, namespace)
+        finally:
+            if code_tab is not None:
+                # @nonobvious(forced-by): refocus BEFORE closing — closing the
+                # focused tab fires focus-detach auto-recovery that can race the
+                # close and wedge the browser connection; shielded so a step
+                # cancellation cannot orphan the tab.
+                async def _cleanup() -> None:
+                    try:
+                        if home_target:
+                            await _focus_target(browser_session, home_target)
+                        await _close_spawned_tab(browser_session, code_tab)
+                    except Exception:
+                        logger.warning("code tab: cleanup failed", exc_info=True)
+
+                await asyncio.shield(_cleanup())
+
+        unique_saves = list(dict.fromkeys(saved_files))
+        if unique_saves:
+            note = "Files saved this run: " + ", ".join(unique_saves) + "."
+        else:
+            note = (
+                "No files were saved by this script — call save_json(obj, 'name.json') "
+                "if a later action needs the data."
+            )
+        if result.error:
+            result.error = f"{result.error}\n{note}"[:10000]
+        elif result.extracted_content is not None:
+            result.extracted_content = f"{result.extracted_content}\n{note}"
+        return result
 
 
 def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
@@ -2400,6 +2471,13 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             key=lambda pair: -pair[0],
         )
         for _score, fname in candidates:
+            # @nonobvious(forced-by): a page boolean may only fill a boolean field —
+            # string coercion would happily store directApply=true as applyUrl="true",
+            # poisoning the draft with a value that looks filled but is junk.
+            if isinstance(flat[path], bool) and _peel_optional(
+                fields[fname].annotation
+            ) is not bool:
+                continue
             if _try_set(fname, flat[path]):
                 used.add(path)
                 break
