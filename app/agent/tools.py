@@ -3203,11 +3203,13 @@ def register_completeness_gate(
                     is_done=False,
                     extracted_content=(
                         "Not finished — these fields in the output are still empty:\n- "
-                        f"{listing}\n\nFor each one, either fill it (update_items in "
-                        "bulk, or go back to the page that shows it) or, if you have "
-                        "looked where it should be and the site genuinely does not "
-                        "publish it, settle it with mark_absent(field, reason). Then "
-                        "call done again." + hints + date_hint
+                        f"{listing}\n\nNo step, time or cost limit has been reached: "
+                        "you have ample budget left, so do NOT stop early or claim an "
+                        "execution limit. For each field, either fill it (update_items "
+                        "in bulk, or go back to the page that shows it) or, if you "
+                        "have looked where it should be and the site genuinely does "
+                        "not publish it, settle it with mark_absent(field, reason). "
+                        "Then call done again." + hints + date_hint
                     ),
                 )
         return await original_done(params=params, file_system=file_system)
