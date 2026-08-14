@@ -247,6 +247,21 @@ class _CacheAwareChatOpenAI(ChatOpenAI):
         return usage
 
 
+_MISSING_ACTION_CORRECTION = (
+    'Your reply was rejected: it contained no executable "action" field. The prose '
+    "fields (thinking, plan_update, next_goal and so on) describe intent but execute "
+    'NOTHING — only the "action" list runs. Respond again with the same content plus '
+    '"action": [{"<action_name>": {<parameters>}}]. Do not put action parameters at '
+    'the top level: to run code, that is '
+    '"action": [{"run_code_file": {"name": "script.py", "code": "..."}}].'
+)
+_MISSING_ACTION_FINAL = (
+    'Rejected again: still no valid "action" field. Reply now with minimal prose and '
+    'the "action" list — e.g. {"thinking": "...", "action": [{"<action_name>": '
+    "{<parameters>}}]}. Nothing you write executes without it."
+)
+
+
 class _RepairingChatAnthropic(ChatAnthropic):
     """ChatAnthropic hardened three ways: (1) recover the action list Claude
     sometimes serialises into the AgentOutput ``thinking`` field so the forced
@@ -287,17 +302,35 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 return await super().ainvoke(messages, output_format, **kwargs)
             except Exception as e:
                 if output_format is not None and is_missing_action_error(e):
-                    logger.info("Retrying LLM call once after action-leak parse failure")
-                    correction = UserMessage(
-                        content=(
-                            "Your previous response placed the action inside the "
-                            "'thinking' field. Respond again with the action in the "
-                            "structured 'action' field of the tool call, not as text."
+                    logger.info("Retrying LLM call after missing/malformed action")
+                    correction = UserMessage(content=_MISSING_ACTION_CORRECTION)
+                    try:
+                        return await super().ainvoke(
+                            list(messages) + [correction], output_format, **kwargs
                         )
-                    )
-                    return await super().ainvoke(
-                        list(messages) + [correction], output_format, **kwargs
-                    )
+                    except Exception as e2:
+                        if not is_missing_action_error(e2):
+                            raise
+                        logger.info("Second corrective retry after missing action")
+                        insist = UserMessage(content=_MISSING_ACTION_FINAL)
+                        try:
+                            return await super().ainvoke(
+                                list(messages) + [correction, insist],
+                                output_format,
+                                **kwargs,
+                            )
+                        except Exception as e3:
+                            if is_missing_action_error(e3):
+                                # @nonobvious(forced-by): the raw pydantic dump would
+                                # be replayed into every later step's context; a short
+                                # instructive error keeps the failure cheap.
+                                raise ValueError(
+                                    "Your reply omitted the executable 'action' field "
+                                    "three times, so this step was abandoned. Nothing "
+                                    "runs without \"action\": [{\"<action_name>\": "
+                                    "{...params}}] — include it in your next reply."
+                                ) from e3
+                            raise
                 if isinstance(e, ModelOutputTruncatedError):
                     logger.info("Output truncated; retrying with streaming + max_tokens=64000")
                     prev_mt, prev_to = self.max_tokens, self.timeout

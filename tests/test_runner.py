@@ -265,3 +265,53 @@ def test_card_order_puts_action_directly_after_thinking():
 
     assert _CARD_ORDER[0] == "thinking"
     assert _CARD_ORDER[1] == "action"
+
+
+def _missing_action_exc():
+    return ValueError(
+        "1 validation error for CardedAgentOutput\naction\n  Field required "
+        "[type=missing, input_value={'thinking': 'x'}, input_type=dict]"
+    )
+
+
+async def test_missing_action_retries_twice_then_succeeds(monkeypatch):
+    from browser_use import ChatAnthropic
+
+    from app.agent.runner import _RepairingChatAnthropic
+
+    calls: list[list] = []
+
+    async def fake_ainvoke(self, messages, output_format=None, **kwargs):
+        calls.append(list(messages))
+        if len(calls) < 3:
+            raise _missing_action_exc()
+        return "ok"
+
+    monkeypatch.setattr(ChatAnthropic, "ainvoke", fake_ainvoke)
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    result = await llm.ainvoke(["msg"], output_format=dict)
+    assert result == "ok"
+    assert len(calls) == 3
+    assert len(calls[1]) == 2 and len(calls[2]) == 3
+    assert "no executable" in calls[1][1].content
+    assert "minimal prose" in calls[2][2].content
+
+
+async def test_missing_action_three_failures_raises_short_error(monkeypatch):
+    import pytest as _pytest
+
+    from browser_use import ChatAnthropic
+
+    from app.agent.runner import _RepairingChatAnthropic
+
+    async def fake_ainvoke(self, messages, output_format=None, **kwargs):
+        raise _missing_action_exc()
+
+    monkeypatch.setattr(ChatAnthropic, "ainvoke", fake_ainvoke)
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    with _pytest.raises(ValueError) as exc:
+        await llm.ainvoke(["msg"], output_format=dict)
+    text = str(exc.value)
+    assert "abandoned" in text
+    assert "validation error" not in text
+    assert len(text) < 400
