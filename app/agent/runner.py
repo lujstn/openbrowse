@@ -1161,6 +1161,29 @@ async def run_agent_session(session_id: str) -> None:
             total_cost_usd=total_cost,
         )
 
+        judgement = None
+        try:
+            judgement = getattr(history.history[-1].result[-1], "judgement", None)
+        except (IndexError, AttributeError):
+            pass
+        if judgement is not None and bool(judgement.verdict) != bool(is_successful):
+            judge_word = "PASS" if judgement.verdict else "FAIL"
+            own_word = "success" if is_successful else "failure"
+            reason = " ".join(
+                (judgement.failure_reason or judgement.reasoning or "").split()
+            )[:400]
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                summary=(
+                    f"Judge dissent: verdict {judge_word} vs recorded {own_word}"
+                    + (f" — {reason}" if reason else "")
+                ),
+                data=json.dumps({"category": "judge", "action": "verdict"}),
+                count_step=False,
+            )
+
         if is_successful:
             completion_summary = "Task completed successfully"
             if recovered_errors:

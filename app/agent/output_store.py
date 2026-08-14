@@ -163,6 +163,7 @@ class OutputStore:
             for name, field in output_model.model_fields.items()
         }
         self._absent: dict[str, str] = {}
+        self.evidence_check: Any = None
 
     @property
     def output_model(self) -> type[BaseModel]:
@@ -243,7 +244,7 @@ class OutputStore:
             return False, "This output has no list to add items to; use set_field."
         if not isinstance(item, dict):
             return False, "add_item expects an object of field/value pairs."
-        clean, err = self._validate_item(item)
+        clean, err = self._validate_item(item, check_keys=set(item))
         if err:
             return False, err
         arr = self._data[self._array_field]
@@ -288,7 +289,7 @@ class OutputStore:
         if not isinstance(fields, dict):
             return False, "update_item expects an object of field/value pairs to merge."
         base = arr[index] if isinstance(arr[index], dict) else {}
-        clean, err = self._validate_item({**base, **fields})
+        clean, err = self._validate_item({**base, **fields}, check_keys=set(fields))
         if err:
             return False, err
         arr[index] = clean
@@ -302,8 +303,12 @@ class OutputStore:
             return False, f"'{key}' is a list; use add_item/update_item instead."
         annotation = self._model.model_fields[key].annotation
         adapter = TypeAdapter(annotation)
+        coerced = _coerce_scalar(value, annotation)
+        enum_err = self._ungrounded_enum_error(key, coerced, annotation)
+        if enum_err:
+            return False, enum_err
         try:
-            validated = adapter.validate_python(_coerce_scalar(value, annotation))
+            validated = adapter.validate_python(coerced)
         except ValidationError as exc:
             return False, f"'{key}' rejected: {_first_error(exc)}"
         self._data[key] = adapter.dump_python(validated, mode="json")
@@ -510,7 +515,26 @@ class OutputStore:
                     break
         return hints
 
-    def _validate_item(self, item: dict) -> tuple[dict | None, str | None]:
+    def _ungrounded_enum_error(self, key: str, value: Any, annotation: Any) -> str | None:
+        if self.evidence_check is None or not isinstance(value, str) or not value:
+            return None
+        if get_origin(_peel_optional(annotation)) is not Literal:
+            return None
+        try:
+            grounded = bool(self.evidence_check(value))
+        except Exception:
+            return None
+        if grounded:
+            return None
+        return (
+            f"'{key}' = '{value}' rejected: no read page states it. Enum values "
+            "must be observed on a page, never inferred or defaulted — leave the "
+            "field null when the page does not state it."
+        )
+
+    def _validate_item(
+        self, item: dict, check_keys: set[str] | None = None
+    ) -> tuple[dict | None, str | None]:
         if self._item_model is None:
             return item, None
         coerced = {
@@ -521,6 +545,13 @@ class OutputStore:
             )
             for name, value in item.items()
         }
+        for name in check_keys if check_keys is not None else set(coerced):
+            if name in self._item_model.model_fields:
+                err = self._ungrounded_enum_error(
+                    name, coerced.get(name), self._item_model.model_fields[name].annotation
+                )
+                if err:
+                    return None, err
         try:
             validated = self._item_model.model_validate(coerced)
         except ValidationError as exc:

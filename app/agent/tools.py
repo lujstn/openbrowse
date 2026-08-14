@@ -650,6 +650,14 @@ async def _read_pages_impl(
     finally:
         await _focus_target(browser_session, home_target)
 
+    shell_flagged = await _flag_shell_reads(browser_session, results)
+    if shell_flagged:
+        await _emit_progress(
+            progress,
+            f"read_pages: {shell_flagged} page(s) returned the embedding shell, "
+            "not real content — flagged as failed; re-run with frame_url_contains",
+        )
+
     if clipboard is not None:
         visited = clipboard.setdefault("_visited", set())
         failed = clipboard.setdefault("_read_failed", set())
@@ -661,7 +669,86 @@ async def _read_pages_impl(
                 failed.add(_norm_url(u))
             else:
                 visited.add(_norm_url(u))
+        _extend_evidence_corpus(clipboard, results)
     return [results[u] for u in urls if u in results]
+
+
+async def _flag_shell_reads(
+    browser_session: BrowserSession, results: dict[str, dict[str, Any]]
+) -> int:
+    """Turn silent shell reads into loud failures: when several pages came back
+    with near-identical text, none matched an embedded panel, and cross-origin
+    embeds exist, the reads captured the embedding page rather than each page's
+    real content — reporting them "ok" would let the whole downstream pipeline
+    run on marketing boilerplate. Returns how many pages were flagged.
+    """
+    ok_pages = [p for p in results.values() if not p.get("error")]
+    if len(ok_pages) < 3 or any(p.get("frame_matched") for p in ok_pages):
+        return 0
+
+    def _sig(page: dict[str, Any]) -> str:
+        return " ".join((page.get("text") or "").split())[:1500]
+
+    top_sig, top_n = Counter(_sig(p) for p in ok_pages).most_common(1)[0]
+    if not top_sig or top_n < 3:
+        return 0
+    try:
+        embed_hosts = sorted(
+            {
+                urlparse(t.get("url") or "").netloc
+                for t in await _iframe_targets(browser_session)
+                if urlparse(t.get("url") or "").netloc
+            }
+        )
+    except Exception:
+        embed_hosts = []
+    if not embed_hosts:
+        return 0
+    flagged = 0
+    for p in ok_pages:
+        if _sig(p) == top_sig:
+            p["error"] = (
+                "read the embedding shell, not this page's real content — "
+                f"{top_n} pages returned identical text and no embedded panel was "
+                "matched. The content lives inside a cross-origin embed; re-run "
+                "read_pages with frame_url_contains matching one of: "
+                + ", ".join(embed_hosts)
+            )
+            flagged += 1
+    return flagged
+
+
+def _norm_evidence(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _evidence_contains(corpus: str, value: str) -> bool:
+    """True when a value's letters appear somewhere in the gathered page text.
+    An empty corpus always passes — with nothing read there is nothing to judge.
+    Errs toward allowing (substring match over collapsed text), because the goal
+    is blocking values NO page plausibly states, not spelling enforcement.
+    """
+    if not corpus:
+        return True
+    needle = re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+    if not needle:
+        return True
+    return needle in corpus.replace(" ", "")
+
+
+def _extend_evidence_corpus(
+    clipboard: dict[str, Any], results: dict[str, dict[str, Any]]
+) -> None:
+    parts = [clipboard.get("_evidence_corpus", "")]
+    for page in results.values():
+        if page.get("error"):
+            continue
+        parts.append(_norm_evidence(page.get("text") or ""))
+        if page.get("jsonld"):
+            parts.append(_norm_evidence(json.dumps(page["jsonld"], default=str)))
+    for txt in (clipboard.get("found_links_meta") or {}).values():
+        parts.append(_norm_evidence(txt))
+    clipboard["_evidence_corpus"] = " ".join(p for p in parts if p)[-2_000_000:]
 
 
 class _SandboxBrowser:
@@ -2071,6 +2158,25 @@ def register_tab_tools(
                 f" Reuse the SAME frame_url_contains='{frame_url_contains}' you "
                 "matched here; do not look up the iframe's exact src."
             )
+        else:
+            try:
+                embed_hosts = sorted(
+                    {
+                        urlparse(t.get("url") or "").netloc
+                        for t in await _iframe_targets(browser_session)
+                        if urlparse(t.get("url") or "").netloc
+                    }
+                )
+            except Exception:
+                embed_hosts = []
+            if embed_hosts:
+                frame_hint = (
+                    " Note: this page embeds cross-origin panel(s) "
+                    f"({', '.join(embed_hosts)}) that a frameless find_links does "
+                    "NOT search — if the listing lives inside one, re-run "
+                    "find_links with frame_url_contains matching that host, and "
+                    "keep the same frame for read_pages."
+                )
         offhost_hint = ""
         if offhost_count:
             offhost_hint = (
@@ -2689,6 +2795,10 @@ def register_output_store_tools(
     batched in as the finished answer.
     """
     array = store.array_field or "output"
+    if clipboard is not None:
+        store.evidence_check = lambda value: _evidence_contains(
+            clipboard.get("_evidence_corpus", ""), value
+        )
 
     @tools.action(
         f"Append one item to the '{array}' list — the primary answer array. "

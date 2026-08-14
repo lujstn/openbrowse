@@ -1251,6 +1251,73 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
     ]
 
 
+async def test_shell_reads_flagged_as_failures(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    shell = "Join our team. We are a great company. " * 20
+
+    async def fake_iframe_targets(session):
+        return [{"targetId": "t1", "url": "https://embed.example.com/board"}]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    results = {
+        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": False}
+        for i in range(4)
+    }
+    flagged = await tools_mod._flag_shell_reads(None, results)
+    assert flagged == 4
+    assert all("embedding shell" in p["error"] for p in results.values())
+    assert "embed.example.com" in results["https://x.com/0"]["error"]
+
+    distinct = {
+        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": f"unique body {i} " * 40, "frame_matched": False}
+        for i in range(4)
+    }
+    assert await tools_mod._flag_shell_reads(None, distinct) == 0
+
+    framed = {
+        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": True}
+        for i in range(4)
+    }
+    assert await tools_mod._flag_shell_reads(None, framed) == 0
+
+
+def test_evidence_contains_normalises_and_allows_empty() -> None:
+    from app.agent.tools import _evidence_contains, _norm_evidence
+
+    corpus = _norm_evidence("Location Type: Hybrid • London • Full time")
+    assert _evidence_contains(corpus, "HYBRID") is True
+    assert _evidence_contains(corpus, "ONSITE") is False
+    assert _evidence_contains(_norm_evidence("works fully on-site daily"), "ONSITE") is True
+    assert _evidence_contains("", "ONSITE") is True
+
+
+def test_store_rejects_ungrounded_enum_writes() -> None:
+    from app.agent.tools import _evidence_contains, _norm_evidence
+
+    store = _draft_store()
+    corpus = {"c": _norm_evidence("This lovely widget is brand new in box")}
+    store.evidence_check = lambda v: _evidence_contains(corpus["c"], v)
+
+    ok, msg = store.add_item({"title": "Widget", "condition": "USED"})
+    assert ok is False
+    assert "no read page states it" in msg
+
+    ok, msg = store.add_item({"title": "Widget", "condition": "NEW"})
+    assert ok is True, msg
+
+    ok, msg = store.update_item(0, {"condition": "USED"})
+    assert ok is False
+    assert "never inferred or defaulted" in msg
+
+    ok, msg = store.update_item(0, {"title": "Widget v2"})
+    assert ok is True, msg
+
+    store.evidence_check = None
+    ok, msg = store.add_item({"title": "Other", "condition": "USED"})
+    assert ok is True, msg
+
+
 def test_compact_json_text_elides_long_strings() -> None:
     import json as _json
 
