@@ -591,10 +591,14 @@ async def _derive_north_star(llm: Any, task: str) -> str:
     return first.strip()[:400] or (task or "").strip()[:400]
 
 
+# @nonobvious(forced-by): "action" sits directly after "thinking" because models
+# emit JSON in schema property order and drop trailing properties under output
+# pressure — with action last, runs lost whole steps to "action Field required"
+# validation errors; the prose cards are optional, so they are the safe tail.
 _CARD_ORDER = (
-    "thinking", "what_i_see", "plan_to_goal", "next_move",
+    "thinking", "action", "what_i_see", "plan_to_goal", "next_move",
     "evaluation_previous_goal", "memory", "next_goal",
-    "current_plan_item", "plan_update", "action",
+    "current_plan_item", "plan_update",
 )
 _cards_patched = False
 

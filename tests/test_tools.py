@@ -319,7 +319,11 @@ async def test_store_bridge_writes_and_mirrors() -> None:
     assert "Applied 1 of 1" in msg
     msg = await bridge["mark_absent"]("description", "not published")
     assert "already settled" in msg
-    assert "A2" in bridge["read_output"]()
+    out = bridge["read_output"]()
+    assert isinstance(out, dict)
+    assert out["items"][0]["title"] == "A2"
+    awaited = await bridge["read_output"]()
+    assert awaited["items"][0]["title"] == "A2"
     assert bridge["coverage"]().startswith("Coverage — ")
 
 
@@ -1113,6 +1117,53 @@ async def test_completeness_gate_passes_when_absent_marked() -> None:
 
     result = await entry.function(params=params, file_system=_FakeFileSystem())
     assert result.is_done is True
+
+
+def test_draft_row_ranked_candidates_survive_enum_rejection() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "locationType": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["ONSITE", "HYBRID", "REMOTE"]},
+                                {"type": "null"},
+                            ]
+                        },
+                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema))
+    page = {
+        "url": "https://x.com/jobs?id=1",
+        "title": "Role One",
+        "text": "t" * 500,
+        "jsonld": {
+            "@type": "JobPosting",
+            "title": "Role One",
+            "jobLocation": {
+                "@type": "Place",
+                "address": {"@type": "PostalAddress", "addressLocality": "London"},
+            },
+        },
+    }
+    row = _draft_row(store, page)
+    assert row["location"] == "London"
+    assert "locationType" not in row
 
 
 def test_compact_json_text_elides_long_strings() -> None:

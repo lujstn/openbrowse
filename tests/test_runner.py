@@ -258,3 +258,10 @@ def test_action_detail_and_category_for_new_actions():
     assert _category_for("read_pages") == "read"
     assert _category_for("update_items") == "schema"
     assert _category_for("mark_absent") == "schema"
+
+
+def test_card_order_puts_action_directly_after_thinking():
+    from app.agent.runner import _CARD_ORDER
+
+    assert _CARD_ORDER[0] == "thinking"
+    assert _CARD_ORDER[1] == "action"

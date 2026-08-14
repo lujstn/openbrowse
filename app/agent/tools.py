@@ -1264,7 +1264,8 @@ def register_code_tools(
         "recall; and, when a schema output exists, await add_item(item) / await "
         "update_item(index, fields) / await update_items([{index, fields}, ...]) / "
         "await set_field(key, value) / await mark_absent(field, reason) / "
-        "read_output() / coverage() write straight to the validated output. STDOUT "
+        "read_output() (returns the output as a plain dict, like read_json) / "
+        "coverage() write straight to the validated output. STDOUT "
         "is truncated to a small preview — print only counts/keys, never whole blobs. "
         "Variables persist across runs."
     )
@@ -2386,16 +2387,22 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         key_tokens = _name_tokens(path.replace(".", " "))
         if not key_tokens:
             continue
-        best: tuple[int, str] | None = None
-        for fname in fields:
-            ftokens = _name_tokens(fname)
-            if not _strong_overlap(ftokens, key_tokens):
-                continue
-            score = len(ftokens & key_tokens)
-            if best is None or score > best[0]:
-                best = (score, fname)
-        if best and _try_set(best[1], flat[path]):
-            used.add(path)
+        # @nonobvious(forced-by): try every matching field best-first rather than
+        # only the single best — a tie like locationType/location is broken by
+        # schema order, and if that winner rejects the value (enum vs free text)
+        # the runner-up must still get its chance or the value is silently lost.
+        candidates = sorted(
+            (
+                (len(_name_tokens(fname) & key_tokens), fname)
+                for fname in fields
+                if _strong_overlap(_name_tokens(fname), key_tokens)
+            ),
+            key=lambda pair: -pair[0],
+        )
+        for _score, fname in candidates:
+            if _try_set(fname, flat[path]):
+                used.add(path)
+                break
 
     title_candidates = [f for f in fields if "title" in f.lower() or f.lower() == "name"]
     if title_candidates and title_candidates[0] not in row and page.get("title"):
@@ -2584,7 +2591,10 @@ def _store_bridge(
         "update_items": update_items,
         "set_field": set_field,
         "mark_absent": mark_absent,
-        "read_output": lambda *a, **kw: _AwaitableStr(store.read_output(*a, **kw)),
+        # @nonobvious(forced-by): read_output must hand scripts a dict, not a JSON
+        # string — models write output['items'] and hit "string indices must be
+        # integers" when given text, while read_json already returns parsed data.
+        "read_output": lambda: _awaitable(json.loads(store.read_output())),
         "coverage": lambda: _AwaitableStr(store.coverage_summary()),
     }
 
