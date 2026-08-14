@@ -650,12 +650,41 @@ async def _read_pages_impl(
     finally:
         await _focus_target(browser_session, home_target)
 
-    shell_flagged = await _flag_shell_reads(browser_session, results)
+    shell_flagged, embed_hosts = await _flag_shell_reads(browser_session, results)
     if shell_flagged:
         await _emit_progress(
             progress,
             f"read_pages: {shell_flagged} page(s) returned the embedding shell, "
-            "not real content — flagged as failed; re-run with frame_url_contains",
+            "not real content — retrying inside the embedded panel",
+        )
+    if shell_flagged and embed_hosts:
+        # @nonobvious(forced-by): the platform retries inside the embed itself
+        # rather than instructing the model to — models route around a failed
+        # read using stale files instead of re-reading, so an instruction-based
+        # retry never happens in practice.
+        url_contains = embed_hosts[0]
+        flagged_urls = [
+            u
+            for u in urls
+            if "embedding shell" in (results.get(u, {}).get("error") or "")
+        ]
+        try:
+            for i in range(0, len(flagged_urls), concurrency):
+                if _out_of_budget(flagged_urls[i:]):
+                    break
+                await _run_wave(flagged_urls[i : i + concurrency])
+        finally:
+            await _focus_target(browser_session, home_target)
+        await _flag_shell_reads(browser_session, results)
+        recovered = sum(
+            1 for u in flagged_urls if not results.get(u, {}).get("error")
+        )
+        if recovered and clipboard is not None and not clipboard.get("found_links_frame"):
+            clipboard["found_links_frame"] = url_contains
+        await _emit_progress(
+            progress,
+            f"read_pages: retry inside '{url_contains}' recovered "
+            f"{recovered} of {len(flagged_urls)} page(s)",
         )
 
     if clipboard is not None:
@@ -675,23 +704,24 @@ async def _read_pages_impl(
 
 async def _flag_shell_reads(
     browser_session: BrowserSession, results: dict[str, dict[str, Any]]
-) -> int:
+) -> tuple[int, list[str]]:
     """Turn silent shell reads into loud failures: when several pages came back
     with near-identical text, none matched an embedded panel, and cross-origin
     embeds exist, the reads captured the embedding page rather than each page's
     real content — reporting them "ok" would let the whole downstream pipeline
-    run on marketing boilerplate. Returns how many pages were flagged.
+    run on marketing boilerplate. Returns how many pages were flagged and the
+    embed hosts a retry should target.
     """
     ok_pages = [p for p in results.values() if not p.get("error")]
     if len(ok_pages) < 3 or any(p.get("frame_matched") for p in ok_pages):
-        return 0
+        return 0, []
 
     def _sig(page: dict[str, Any]) -> str:
         return " ".join((page.get("text") or "").split())[:1500]
 
     top_sig, top_n = Counter(_sig(p) for p in ok_pages).most_common(1)[0]
     if not top_sig or top_n < 3:
-        return 0
+        return 0, []
     try:
         embed_hosts = sorted(
             {
@@ -703,7 +733,7 @@ async def _flag_shell_reads(
     except Exception:
         embed_hosts = []
     if not embed_hosts:
-        return 0
+        return 0, []
     flagged = 0
     for p in ok_pages:
         if _sig(p) == top_sig:
@@ -715,7 +745,17 @@ async def _flag_shell_reads(
                 + ", ".join(embed_hosts)
             )
             flagged += 1
-    return flagged
+    return flagged, embed_hosts
+
+
+def _pages_for_save(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Failed pages persist as {url, error} only — keeping a failed read's text
+    on disk invites scripts to reuse the very content the failure disowned.
+    """
+    return [
+        {"url": p.get("url"), "error": p["error"]} if p.get("error") else p
+        for p in pages
+    ]
 
 
 def _norm_evidence(text: str) -> str:
@@ -1828,7 +1868,9 @@ def register_tab_tools(
             )
             saved: str | None = "pages.json"
             try:
-                await file_system.write_file(saved, json.dumps(pages, indent=2, default=str))
+                await file_system.write_file(
+                    saved, json.dumps(_pages_for_save(pages), indent=2, default=str)
+                )
             except Exception:
                 logger.warning("read_pages: failed to save pages.json", exc_info=True)
                 saved = None

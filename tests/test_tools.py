@@ -1264,8 +1264,9 @@ async def test_shell_reads_flagged_as_failures(monkeypatch) -> None:
         f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": False}
         for i in range(4)
     }
-    flagged = await tools_mod._flag_shell_reads(None, results)
+    flagged, hosts = await tools_mod._flag_shell_reads(None, results)
     assert flagged == 4
+    assert hosts == ["embed.example.com"]
     assert all("embedding shell" in p["error"] for p in results.values())
     assert "embed.example.com" in results["https://x.com/0"]["error"]
 
@@ -1273,13 +1274,58 @@ async def test_shell_reads_flagged_as_failures(monkeypatch) -> None:
         f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": f"unique body {i} " * 40, "frame_matched": False}
         for i in range(4)
     }
-    assert await tools_mod._flag_shell_reads(None, distinct) == 0
+    assert (await tools_mod._flag_shell_reads(None, distinct))[0] == 0
 
     framed = {
         f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": True}
         for i in range(4)
     }
-    assert await tools_mod._flag_shell_reads(None, framed) == 0
+    assert (await tools_mod._flag_shell_reads(None, framed))[0] == 0
+
+
+async def test_shell_reads_auto_retry_inside_embed(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    shell = "Join our team. We are a great company. " * 20
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        if url_contains:
+            return {
+                "url": url,
+                "text": f"real role content for {url} " * 20,
+                "jsonld": {"@type": "Thing", "title": url},
+                "links": [],
+                "frame_matched": True,
+            }
+        return {"url": url, "text": shell, "jsonld": None, "links": [], "frame_matched": False}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+
+    async def fake_iframe_targets(_session):
+        return [{"targetId": "t1", "url": "https://embed.example.com/board"}]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
+    clipboard: dict = {}
+    urls = [f"https://x.com/{i}" for i in range(4)]
+    pages = await tools_mod._read_pages_impl(session, urls, None, clipboard, concurrency=4)
+    assert all(not p.get("error") for p in pages)
+    assert all(p.get("frame_matched") for p in pages)
+    assert clipboard["found_links_frame"] == "embed.example.com"
+    assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_visited"]
+
+
+def test_pages_for_save_strips_failed_page_content() -> None:
+    from app.agent.tools import _pages_for_save
+
+    pages = [
+        {"url": "https://x.com/ok", "text": "real", "jsonld": {"a": 1}},
+        {"url": "https://x.com/bad", "text": "shell junk", "error": "read the embedding shell"},
+    ]
+    out = _pages_for_save(pages)
+    assert out[0]["text"] == "real"
+    assert out[1] == {"url": "https://x.com/bad", "error": "read the embedding shell"}
 
 
 def test_evidence_contains_normalises_and_allows_empty() -> None:
