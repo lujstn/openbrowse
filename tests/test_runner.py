@@ -267,6 +267,22 @@ def test_card_order_puts_action_directly_after_thinking():
     assert _CARD_ORDER[1] == "action"
 
 
+def test_openai_llm_uses_prompt_schema_not_strict_response_format(monkeypatch):
+    import types
+
+    from app.agent import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod, "settings", types.SimpleNamespace(openai_api_key="test-key")
+    )
+    provider, model_id, llm = runner_mod._build_llm("gpt-5.6-terra", "off")
+    assert provider == "openai"
+    assert model_id == "gpt-5.6-terra"
+    assert llm.add_schema_to_system_prompt is True
+    assert llm.dont_force_structured_output is True
+    assert llm.reasoning_effort == "none"
+
+
 def _missing_action_exc():
     return ValueError(
         "1 validation error for CardedAgentOutput\naction\n  Field required "

@@ -424,6 +424,13 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
             reasoning_effort=_OPENAI_REASONING.get(thinking_effort, "low"),
             timeout=90,
             max_retries=3,
+            # @nonobvious(forced-by): OpenAI strict structured output requires every
+            # object to list all properties as required and forbids free-form dicts,
+            # which our action registry cannot satisfy (e.g. add_item's item param);
+            # the schema goes into the system prompt and the reply is parsed
+            # tolerantly instead — the same trust model as the Anthropic path.
+            add_schema_to_system_prompt=True,
+            dont_force_structured_output=True,
         )
         return provider, model_id, llm
 
