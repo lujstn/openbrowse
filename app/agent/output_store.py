@@ -114,6 +114,38 @@ def _first_error(exc: ValidationError) -> str:
     return "; ".join(parts)
 
 
+_ELIDE_CHARS = 200
+
+
+def elide_long_values(
+    value: Any, keep: set[str] | None = None, _key: str | None = None
+) -> tuple[Any, int]:
+    """Copy ``value`` with every string longer than ``_ELIDE_CHARS`` replaced by a
+    ``"<N chars>"`` size marker, except under keys named in ``keep``. Returns the
+    copy and the number of elisions. Display-only: callers keep the real data.
+    """
+    keep = keep or set()
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        count = 0
+        for k, v in value.items():
+            new, n = elide_long_values(v, keep, k)
+            out[k] = new
+            count += n
+        return out, count
+    if isinstance(value, list):
+        items = []
+        count = 0
+        for v in value:
+            new, n = elide_long_values(v, keep, _key)
+            items.append(new)
+            count += n
+        return items, count
+    if isinstance(value, str) and len(value) > _ELIDE_CHARS and (_key or "") not in keep:
+        return f"<{len(value)} chars>", 1
+    return value, 0
+
+
 class OutputStore:
     """Holds the answer the agent is building, validated against the output schema."""
 
@@ -151,26 +183,60 @@ class OutputStore:
     def is_empty(self) -> bool:
         return all(_is_empty_value(v) for v in self._data.values())
 
-    def read_output(self, offset: int = 0, limit: int | None = None) -> str:
-        """The output as JSON; ``offset``/``limit`` window the item array so a read
+    def read_output(
+        self,
+        offset: int = 0,
+        limit: int | None = None,
+        *,
+        compact: bool = False,
+        index: int | None = None,
+        fields: list[str] | None = None,
+    ) -> str:
+        """The output as JSON. ``offset``/``limit`` window the item array so a read
         of a large store never depends on a full dump (upstream layers truncate
-        long tool results, silently hiding the tail).
+        long tool results, silently hiding the tail). With ``compact=True`` long
+        string values render as size markers instead of full text — the store keeps
+        the real data; only this rendering is elided. ``index`` shows one item in
+        full; ``fields`` names fields exempt from elision.
         """
-        if limit is None and not offset:
-            return json.dumps(self._data, indent=2, default=str)
-        if not self._array_field:
-            return json.dumps(self._data, indent=2, default=str)
-        arr = self._data.get(self._array_field) or []
-        total = len(arr)
-        offset = max(0, int(offset))
-        end = total if limit is None else min(total, offset + max(0, int(limit)))
-        windowed = dict(self._data)
-        windowed[self._array_field] = arr[offset:end]
-        windowed["_window"] = (
-            f"showing {self._array_field}[{offset}:{end}] of {total}; "
-            "call read_output with offset/limit for the rest"
-        )
-        return json.dumps(windowed, indent=2, default=str)
+        if index is not None and self._array_field:
+            arr = self._data.get(self._array_field) or []
+            total = len(arr)
+            i = int(index)
+            if not 0 <= i < total:
+                return json.dumps(
+                    {"_window": f"index {i} out of range; {self._array_field} has {total} item(s)"}
+                )
+            return json.dumps(
+                {
+                    self._array_field: [arr[i]],
+                    "_window": f"showing {self._array_field}[{i}] of {total} in full",
+                },
+                indent=2,
+                default=str,
+            )
+        if (limit is None and not offset) or not self._array_field:
+            shown = dict(self._data)
+        else:
+            arr = self._data.get(self._array_field) or []
+            total = len(arr)
+            offset = max(0, int(offset))
+            end = total if limit is None else min(total, offset + max(0, int(limit)))
+            shown = dict(self._data)
+            shown[self._array_field] = arr[offset:end]
+            shown["_window"] = (
+                f"showing {self._array_field}[{offset}:{end}] of {total}; "
+                "call read_output with offset/limit for the rest"
+            )
+        if compact:
+            keep = {f for f in (fields or []) if isinstance(f, str)}
+            shown, elided = elide_long_values(shown, keep)
+            if elided:
+                shown["_elided"] = (
+                    f"{elided} long value(s) shown as \"<N chars>\" size markers — the "
+                    "stored data is complete; expand with index=<item> or fields=['name']"
+                )
+        return json.dumps(shown, indent=2, default=str)
 
     def add_item(self, item: Any) -> tuple[bool, str]:
         if not self._array_field:

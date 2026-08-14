@@ -417,5 +417,32 @@ def test_read_output_paging_windows_the_array():
     assert [j["title"] for j in tail["items"]] == ["Job 4"]
 
 
+def test_read_output_compact_elides_long_values() -> None:
+    s = _store()
+    long_desc = ("role details " * 50).strip()
+    s.add_item({"title": "Job 0", "url": "https://x.com/0", "description": long_desc})
+    s.add_item({"title": "Job 1", "url": "https://x.com/1", "description": long_desc})
+
+    compact = json.loads(s.read_output(compact=True))
+    assert compact["items"][0]["description"] == f"<{len(long_desc)} chars>"
+    assert compact["items"][0]["title"] == "Job 0"
+    assert "2 long value(s)" in compact["_elided"]
+
+    full = json.loads(s.read_output())
+    assert full["items"][0]["description"] == long_desc
+    assert "_elided" not in full
+
+    kept = json.loads(s.read_output(compact=True, fields=["description"]))
+    assert kept["items"][1]["description"] == long_desc
+
+    one = json.loads(s.read_output(compact=True, index=1))
+    assert [j["title"] for j in one["items"]] == ["Job 1"]
+    assert one["items"][0]["description"] == long_desc
+    assert "items[1] of 2 in full" in one["_window"]
+
+    oob = json.loads(s.read_output(compact=True, index=9))
+    assert "out of range" in oob["_window"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

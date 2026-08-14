@@ -110,8 +110,10 @@ async def test_stop_chrome_terminates():
     slot = DisplaySlot(display_num=10, vnc_port=5910, novnc_port=6080, cdp_port=9222)
     slot.chrome_proc = mock_proc
 
-    with patch("app.browser.factory.asyncio.wait_for", new_callable=AsyncMock) as mock_wait:
-        mock_wait.return_value = None
+    async def _await_it(awaitable, timeout=None):
+        return await awaitable
+
+    with patch("app.browser.factory.asyncio.wait_for", side_effect=_await_it):
         await stop_chrome(slot)
 
     mock_proc.terminate.assert_called_once()

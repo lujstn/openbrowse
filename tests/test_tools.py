@@ -1113,3 +1113,92 @@ async def test_completeness_gate_passes_when_absent_marked() -> None:
 
     result = await entry.function(params=params, file_system=_FakeFileSystem())
     assert result.is_done is True
+
+
+def test_compact_json_text_elides_long_strings() -> None:
+    import json as _json
+
+    from app.agent.tools import _compact_json_text
+
+    long_text = "x" * 500
+    text = "Read from file pages.json:\n" + _json.dumps(
+        [{"url": "https://x.com/a", "text": long_text}]
+    )
+    out = _compact_json_text(text)
+    assert out is not None
+    assert "<500 chars>" in out
+    assert "https://x.com/a" in out
+    assert out.startswith("Read from file pages.json:")
+    assert "1 long value(s) elided" in out
+
+    assert _compact_json_text("plain prose with no json at all " * 40) is None
+    assert _compact_json_text(_json.dumps({"a": "short"})) is None
+
+
+async def test_output_guard_compacts_oversized_json_instead_of_truncating() -> None:
+    import json as _json
+
+    from browser_use import ActionResult
+
+    from app.agent.tools import register_output_guard_overrides
+
+    tools = Tools()
+    big_json = _json.dumps([{"i": i, "text": "y" * 600} for i in range(30)])
+    big_prose = "z" * 20_000
+
+    @tools.action("fake dump")
+    async def run_code_file(code: str) -> ActionResult:
+        return ActionResult(extracted_content=big_json)
+
+    @tools.action("fake prose dump")
+    async def evaluate(js: str) -> ActionResult:
+        return ActionResult(extracted_content=big_prose)
+
+    register_output_guard_overrides(tools)
+
+    entry = tools.registry.registry.actions["run_code_file"]
+    result = await entry.function(params=entry.param_model(code="x"))
+    assert "<600 chars>" in result.extracted_content
+    assert "30 long value(s) elided" in result.extracted_content
+    assert "truncated" not in result.extracted_content
+    assert len(result.extracted_content) < len(big_json)
+
+    entry = tools.registry.registry.actions["evaluate"]
+    result = await entry.function(params=entry.param_model(js="x"))
+    assert "[truncated:" in result.extracted_content
+
+
+def test_saved_links_skip_offhost_for_no_args_reads() -> None:
+    from app.agent.tools import _saved_links_sans_offhost
+
+    clipboard = {
+        "found_links": ["https://x.com/a", "https://other.com/brand", "https://x.com/b"],
+        "found_links_offhost": {"https://other.com/brand"},
+    }
+    kept, skipped = _saved_links_sans_offhost(clipboard)
+    assert kept == ["https://x.com/a", "https://x.com/b"]
+    assert skipped == 1
+
+    kept, skipped = _saved_links_sans_offhost({"found_links": ["https://x.com/a"]})
+    assert kept == ["https://x.com/a"] and skipped == 0
+    assert _saved_links_sans_offhost(None) == ([], 0)
+
+
+async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    events: list[str] = []
+
+    async def progress(msg: str) -> None:
+        events.append(msg)
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+    ):
+        return {"url": url, "text": "t" * 300, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    urls = [f"https://x.com/{i}" for i in range(16)]
+    await tools_mod._read_pages_impl(session, urls, None, {}, progress=progress)
+    assert any("3 wave(s) of up to 6 tabs" in e for e in events)
+    assert any("(" in e and "s)" in e for e in events if "wave 1/3" in e)

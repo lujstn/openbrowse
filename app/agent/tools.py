@@ -27,6 +27,7 @@ from app.agent.output_store import (
     _coerce_scalar,
     _name_tokens,
     _peel_optional,
+    elide_long_values,
 )
 from app.agent.textguard import guard_key
 from app.config import settings
@@ -518,12 +519,24 @@ async def _emit_progress(progress: Any, message: str) -> None:
         logger.debug("_emit_progress failed", exc_info=True)
 
 
+def _saved_links_sans_offhost(clipboard: dict[str, Any] | None) -> tuple[list[str], int]:
+    """The last find_links result minus links flagged as pointing off-site, plus
+    how many were skipped — so a no-args bulk read covers the listing without
+    dragging in navigation/branding pages.
+    """
+    cb = clipboard or {}
+    urls = list(cb.get("found_links") or [])
+    off = cb.get("found_links_offhost") or set()
+    kept = [u for u in urls if u not in off]
+    return kept, len(urls) - len(kept)
+
+
 async def _read_pages_impl(
     browser_session: BrowserSession,
     urls: list[str],
     url_contains: str | None,
     clipboard: dict[str, Any] | None,
-    concurrency: int = 4,
+    concurrency: int = 6,
     progress: Any = None,
 ) -> list[dict[str, Any]]:
     """Read many pages concurrently: open a wave of tabs so they load in parallel,
@@ -534,7 +547,7 @@ async def _read_pages_impl(
     longer stare. Focus returns to the starting tab at the end; read URLs are
     marked visited and dead ones recorded as read-failures.
     """
-    concurrency = max(1, min(int(concurrency or 4), 8))
+    concurrency = max(1, min(int(concurrency or 6), 8))
     baseline = {t["targetId"] for t in await _iframe_targets(browser_session)}
     home_target = getattr(browser_session, "agent_focus_target_id", None)
     results: dict[str, dict[str, Any]] = {}
@@ -596,13 +609,15 @@ async def _read_pages_impl(
             if _out_of_budget(urls[i:]):
                 await _emit_progress(progress, "read_pages: time budget reached, stopping early")
                 break
+            wave_started = loop.time()
             await _run_wave(urls[i : i + concurrency])
             done = [results.get(u, {}) for u in urls[: i + concurrency] if u in results]
             ok = sum(1 for p in done if not p.get("error"))
             await _emit_progress(
                 progress,
                 f"read_pages wave {wave_no}/{total_waves}: {ok} of {len(done)} pages ok, "
-                f"{sum(1 for p in done if p.get('frame_matched'))} frames matched",
+                f"{sum(1 for p in done if p.get('frame_matched'))} frames matched "
+                f"({loop.time() - wave_started:.0f}s)",
             )
 
         retry = [u for u in urls if results.get(u, {}).get("error")]
@@ -761,7 +776,7 @@ class _SandboxBrowser:
         self,
         urls: list[str] | None = None,
         frame_url_contains: str | None = None,
-        concurrency: int = 4,
+        concurrency: int = 6,
     ) -> list[dict[str, Any]]:
         """Read many pages in parallel background tabs and return
         ``[{url, title, text, jsonld, links, error?}, …]`` — the bulk way to read a
@@ -771,7 +786,7 @@ class _SandboxBrowser:
         embedded panel on each page.
         """
         if not urls:
-            urls = list((self._clipboard or {}).get("found_links") or [])
+            urls, _ = _saved_links_sans_offhost(self._clipboard)
             if not urls:
                 raise ValueError("read_pages: no urls given and no saved found_links")
         if frame_url_contains is None:
@@ -1638,8 +1653,9 @@ def register_tab_tools(
         frame_url_contains: str | None = None,
     ) -> ActionResult:
         try:
+            offhost_skipped = 0
             if not urls:
-                urls = list(clipboard.get("found_links") or [])
+                urls, offhost_skipped = _saved_links_sans_offhost(clipboard)
                 if not urls:
                     return ActionResult(
                         error="No urls given and no saved found_links — run find_links first."
@@ -1730,6 +1746,12 @@ def register_tab_tools(
                 f"Read {ok_count} of {len(pages)} pages"
                 + (f"; full content saved to '{saved}'" if saved else "")
                 + (
+                    f"; skipped {offhost_skipped} off-site link(s) flagged by "
+                    "find_links (pass urls explicitly to include them)"
+                    if offhost_skipped
+                    else ""
+                )
+                + (
                     f". NOTE: {dropped} URL(s) beyond the {_READ_PAGES_MAX}-page cap "
                     "were NOT read — call read_pages again with the remainder"
                     if dropped
@@ -1765,7 +1787,7 @@ def register_tab_tools(
     async def open_tabs(urls: list[str] | None = None) -> ActionResult:
         try:
             if not urls:
-                urls = list(clipboard.get("found_links") or [])
+                urls, _ = _saved_links_sans_offhost(clipboard)
                 if not urls:
                     return ActionResult(
                         error="No urls given and no saved found_links — run find_links first."
@@ -1959,6 +1981,9 @@ def register_tab_tools(
                         offhost_count += 1
 
         clipboard["found_links"] = [link["href"] for link in links]
+        clipboard["found_links_offhost"] = {
+            link["href"] for link in links if link.get("offhost")
+        }
         clipboard["found_links_frame"] = frame_url_contains
         clipboard["found_links_meta"] = {link["href"]: link["text"] for link in links}
         saved: str | None = "found_links.json"
@@ -1977,8 +2002,9 @@ def register_tab_tools(
         if offhost_count:
             offhost_hint = (
                 f" {offhost_count} link(s) point at a different site than the rest "
-                "(marked offhost — probably navigation/branding); they are included, "
-                "so pass explicit urls to read_pages if you want to skip them."
+                "(marked offhost — probably navigation/branding); no-args read_pages "
+                "skips them automatically, so still call it with no args. Pass "
+                "explicit urls only if you DO want an offhost page."
             )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
@@ -2004,6 +2030,39 @@ _GUARDED_DUMP_ACTIONS = (
     "run_code_file",
 )
 _GUARDED_DEDUP_ACTIONS = ("read_output", "search_output")
+
+
+def _compact_json_text(text: str) -> str | None:
+    """Render an oversized JSON tool result with long string values elided as
+    ``"<N chars>"`` size markers, keeping the structure whole — honest about what
+    was hidden, unlike a head-truncation that silently drops the tail. Tolerates a
+    non-JSON prefix/suffix (e.g. a "Read from file x:" header). Returns None when
+    the text is not JSON or elision would not shrink it.
+    """
+    prefix, body, suffix = "", text, ""
+    try:
+        data = json.loads(text)
+    except Exception:
+        starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+        end = max(text.rfind("}"), text.rfind("]"))
+        if not starts or end <= min(starts):
+            return None
+        start = min(starts)
+        prefix, body, suffix = text[:start], text[start : end + 1], text[end + 1 :]
+        try:
+            data = json.loads(body)
+        except Exception:
+            return None
+    compacted, elided = elide_long_values(data)
+    if not elided:
+        return None
+    rendered = json.dumps(compacted, indent=2, default=str)
+    return (
+        prefix
+        + rendered
+        + suffix
+        + f'\n[{elided} long value(s) elided as "<N chars>" — the underlying data is intact]'
+    )
 
 
 def register_output_guard_overrides(tools: Tools) -> None:
@@ -2047,6 +2106,14 @@ def register_output_guard_overrides(tools: Tools) -> None:
                         tail = f"saved to '{readout_name}' — read specific parts instead"
                     except Exception:
                         logger.warning("output guard: failed to save readout", exc_info=True)
+                compacted = _compact_json_text(text)
+                if compacted is not None and len(compacted) <= 2 * _CAPPED_READ_PREVIEW_CHARS:
+                    setattr(
+                        result,
+                        attr,
+                        compacted + f"\n[full data: {total} chars, {tail}] (output #{seen[key]})",
+                    )
+                    continue
                 setattr(
                     result,
                     attr,
@@ -2628,15 +2695,22 @@ def register_output_store_tools(
 
     @tools.action(
         "Read the output you are building so far — a coverage summary plus the "
-        "schema with everything you have filled in. On a large output pass offset= "
-        "and limit= to window the item array (a full dump gets truncated upstream "
-        "at 60k chars, silently hiding the tail — page through instead). Every "
-        "empty field is either unfinished work or should be mark_absent'ed."
+        "schema with everything you have filled in. Long values render as "
+        '"<N chars>" size markers (the stored data is complete); expand one item '
+        "in full with index=, or named fields with fields=['name']. On a large "
+        "output pass offset=/limit= to window the item array. Every empty field "
+        "is either unfinished work or should be mark_absent'ed."
     )
-    async def read_output(offset: int = 0, limit: int | None = None) -> ActionResult:
+    async def read_output(
+        offset: int = 0,
+        limit: int | None = None,
+        index: int | None = None,
+        fields: list[str] | None = None,
+    ) -> ActionResult:
         return ActionResult(
             extracted_content=(
-                f"{store.coverage_summary()}\n\n{store.read_output(offset, limit)}"
+                f"{store.coverage_summary()}\n\n"
+                f"{store.read_output(offset, limit, compact=True, index=index, fields=fields)}"
             )
         )
 
