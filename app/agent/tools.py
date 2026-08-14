@@ -1793,10 +1793,11 @@ def register_tab_tools(
                                 if unfilled
                                 else ""
                             )
-                            + " Next: add_items_from_file('rows_draft.json') — no need "
-                            "to read the draft first — then ONE update_items call for "
-                            "the rest, mark_absent what no page publishes, and done. "
-                            "No mapping script is needed."
+                            + " Sample (row #0): "
+                            + json.dumps(elide_long_values(drafts[0])[0], default=str)
+                            + " Next: add_items_from_file('rows_draft.json'), then ONE "
+                            "update_items call for the rest, mark_absent what no page "
+                            "publishes, and done. No mapping script is needed."
                         )
                     except Exception:
                         logger.warning("read_pages: failed to save rows_draft.json", exc_info=True)

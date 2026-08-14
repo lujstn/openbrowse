@@ -125,6 +125,11 @@ _VERIFY_EXTENSION = (
     "settle it with mark_absent(field, reason)."
 )
 
+_ACTION_CONTRACT_EXTENSION = (
+    "Every reply must include the 'action' field — prose fields like plan_update "
+    "and next_goal describe intent but execute nothing."
+)
+
 _BEGIN_EXTENSION = (
     "Begin your browsing by recalling startUrl and opening that page in a new tab."
 )
@@ -1065,6 +1070,7 @@ async def run_agent_session(session_id: str) -> None:
         }
         extension_parts = [
             system_prompt_extension,
+            _ACTION_CONTRACT_EXTENSION,
             _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
