@@ -15,6 +15,7 @@ from browser_use.llm import UserMessage
 from browser_use.llm.exceptions import ModelOutputTruncatedError
 
 from app.agent import cost
+from app.agent.code_stream import CodeStreamObserver
 from app.agent.activity import clear_activity, set_activity
 from app.agent.leak_repair import is_missing_action_error, repair_anthropic_message
 from app.agent.output_store import OutputStore
@@ -233,7 +234,22 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
 
 
 class _CacheAwareChatOpenAI(ChatOpenAI):
-    """ChatOpenAI that also records OpenAI cache-write tokens, which browser-use drops."""
+    """ChatOpenAI that also records OpenAI cache-write tokens, which browser-use drops,
+    and streams completions through the code observer when one is attached."""
+
+    def get_client(self) -> Any:
+        client = super().get_client()
+        observer = getattr(self, "stream_observer", None)
+        if observer is not None:
+            from app.agent.code_stream import StreamingCompletionsShim
+
+            try:
+                client.chat.completions = StreamingCompletionsShim(
+                    client.chat.completions, observer
+                )
+            except Exception:
+                logger.debug("streaming shim attach failed", exc_info=True)
+        return client
 
     def _get_usage(self, response: Any):
         usage = super()._get_usage(response)
@@ -277,7 +293,11 @@ class _RepairingChatAnthropic(ChatAnthropic):
     """
 
     async def _create_message(self, **params: Any) -> Any:
-        if getattr(self, "_force_stream", False) or (params.get("max_tokens") or 0) > 16384:
+        if (
+            getattr(self, "_force_stream", False)
+            or getattr(self, "stream_observer", None) is not None
+            or (params.get("max_tokens") or 0) > 16384
+        ):
             response = await self._stream_message(**params)
         else:
             response = await super()._create_message(**params)
@@ -292,9 +312,22 @@ class _RepairingChatAnthropic(ChatAnthropic):
         client = self.get_client()
         if betas is not None:
             async with client.beta.messages.stream(**params, betas=betas) as stream:
-                return await stream.get_final_message()
+                return await self._drain_stream(stream)
         async with client.messages.stream(**params) as stream:
-            return await stream.get_final_message()
+            return await self._drain_stream(stream)
+
+    async def _drain_stream(self, stream: Any) -> Any:
+        observer = getattr(self, "stream_observer", None)
+        parts: list[str] = []
+        async for event in stream:
+            if observer is None:
+                continue
+            if getattr(event, "type", "") == "input_json" and getattr(
+                event, "partial_json", ""
+            ):
+                parts.append(event.partial_json)
+                await observer.on_partial("".join(parts))
+        return await stream.get_final_message()
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
         sid = getattr(self, "_activity_session", None)
@@ -852,6 +885,9 @@ async def run_agent_session(session_id: str) -> None:
                 summary=label[:200],
                 count_step=False,
             )
+
+        code_observer = CodeStreamObserver(browser_session, clipboard, _code_progress)
+        object.__setattr__(llm, "stream_observer", code_observer)
 
         register_fetch_tool(tools)
         register_code_tools(tools, clipboard, store, _code_progress)

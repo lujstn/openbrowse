@@ -517,6 +517,43 @@ async def sse_session_messages(request: Request, session_id: str):
     return EventSourceResponse(event_generator())
 
 
+_CODEVIEW_HTML = """<!doctype html>
+<title>Code</title>
+<body style="margin:0;min-height:100vh;background:#0d1117;color:#e6edf3;font-family:ui-monospace,monospace">
+<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;background:#161b22;border-bottom:1px solid #30363d">
+  <span id="fn" style="color:#8b949e">script.py</span>
+  <span id="st" style="margin-left:auto;padding:3px 12px;border-radius:12px;background:#1f6feb;color:#fff;font-size:13px">Writing&hellip;</span>
+  <span id="sp" style="display:none;width:16px;height:16px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:s .8s linear infinite"></span>
+</div>
+<style>@keyframes s{to{transform:rotate(360deg)}} .caret{display:inline-block;width:8px;background:#58a6ff;animation:b 1s steps(1) infinite} @keyframes b{50%{opacity:0}}</style>
+<pre style="margin:0;padding:20px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word"><span id="c"></span><span id="caret" class="caret">&nbsp;</span></pre>
+<script>
+window.__setCode = function(name, code, status){
+  document.getElementById('fn').textContent = name;
+  document.getElementById('c').textContent = code;
+  var st = document.getElementById('st');
+  var running = status === 'Running';
+  st.textContent = running ? 'Running\\u2026' : 'Writing\\u2026';
+  st.style.background = running ? '#238636' : '#1f6feb';
+  document.getElementById('sp').style.display = running ? 'inline-block' : 'none';
+  document.getElementById('caret').style.display = running ? 'none' : 'inline-block';
+  window.scrollTo(0, document.body.scrollHeight);
+};
+</script>
+</body>"""
+
+
+@vnc_router.get("/codeview")
+async def codeview() -> HTMLResponse:
+    """The IDE shell shown in the code tab.
+
+    @nonobvious(deliberately-missing): no auth dependency — the shell is static
+    and contentless; script text only ever arrives via CDP pushes from the
+    platform, so there is nothing here to protect.
+    """
+    return HTMLResponse(_CODEVIEW_HTML)
+
+
 _VNC_VIEW_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>live view</title>
 <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}div#screen{position:fixed;inset:0;cursor:default;pointer-events:none}div#screen canvas{display:block;cursor:default!important}.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#8a8a8a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}.overlay.hidden{display:none}.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:#60a5fa;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.ended-icon{opacity:.85}</style></head>

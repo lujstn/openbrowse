@@ -95,3 +95,10 @@ async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
         assert resp.status_code == 303
         resp = await c.post("/setup", data={"api_key": "x"}, follow_redirects=False)
         assert resp.status_code == 303
+
+
+async def test_codeview_shell_served_without_auth(client):
+    c, _ = client
+    resp = await c.get("/codeview")
+    assert resp.status_code == 200
+    assert "__setCode" in resp.text

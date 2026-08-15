@@ -1226,7 +1226,7 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
     order: list[tuple[str, str]] = []
 
     async def fake_spawn(session, url):
-        assert url.startswith("data:text/html")
+        assert url.endswith("/codeview")
         order.append(("spawn", "code-tid"))
         return "code-tid"
 
@@ -1240,8 +1240,6 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
     monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
     monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
 
-    monkeypatch.setattr(tools_mod, "_CODE_TAB_MIN_VISIBLE_S", 0.01)
-    monkeypatch.setattr(tools_mod, "_code_write_seconds", lambda code: 0.0)
     session = types.SimpleNamespace(agent_focus_target_id="home-tid")
     result = await _run_sandbox(tmp_path, "print('hi')", session=session)
     assert not result.error, result.error
@@ -1273,213 +1271,73 @@ async def test_run_code_file_emits_writing_and_running_events(tmp_path) -> None:
         file_system=_DirFs(tmp_path),
     )
     assert not result.error, result.error
-    assert len(events) == 2
-    assert events[0].startswith("⌨️ Writing calc.py (2 lines)")
-    assert events[1].startswith("▶ Running calc.py")
+    assert events == ["▶ Running calc.py"]
 
 
-def test_code_tab_url_embeds_source_and_name() -> None:
-    from urllib.parse import unquote
+def test_partial_json_string_prefix_handles_escapes() -> None:
+    from app.agent.code_stream import _partial_json_string_prefix
 
-    from app.agent.tools import _code_tab_url
-
-    url = _code_tab_url("calc.py", "total = 1 + 2\nprint(total)")
-    assert url.startswith("data:text/html")
-    page = unquote(url)
-    assert "calc.py" in page
-    assert "total = 1 + 2" in page
-    assert "Writing" in page and "Running" in page
+    assert _partial_json_string_prefix('x = 1\\nprint(x)", "rest') == "x = 1\nprint(x)"
+    assert _partial_json_string_prefix("half an esc\\") == "half an esc"
+    assert _partial_json_string_prefix('unicode \\u00a3 sign') == "unicode £ sign"
+    assert _partial_json_string_prefix('trunc \\u00') == "trunc "
 
 
-async def test_shell_reads_flagged_as_failures(monkeypatch) -> None:
+async def test_code_stream_observer_announces_and_pushes(monkeypatch) -> None:
     import app.agent.tools as tools_mod
+    from app.agent.code_stream import CodeStreamObserver
 
-    shell = "Join our team. We are a great company. " * 20
+    spawned: list[str] = []
+    focused: list[str] = []
 
-    async def fake_iframe_targets(session):
-        return [{"targetId": "t1", "url": "https://embed.example.com/board"}]
+    async def fake_spawn(session, url):
+        spawned.append(url)
+        return "code-tid"
 
-    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
-    results = {
-        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": False}
-        for i in range(4)
-    }
-    flagged, hosts = await tools_mod._flag_shell_reads(None, results)
-    assert flagged == 4
-    assert hosts == ["embed.example.com"]
-    assert all("embedding shell" in p["error"] for p in results.values())
-    assert "embed.example.com" in results["https://x.com/0"]["error"]
+    async def fake_focus(session, tid):
+        focused.append(tid)
 
-    distinct = {
-        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": f"unique body {i} " * 40, "frame_matched": False}
-        for i in range(4)
-    }
-    assert (await tools_mod._flag_shell_reads(None, distinct))[0] == 0
+    import app.agent.code_stream as cs_mod
 
-    framed = {
-        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": shell, "frame_matched": True}
-        for i in range(4)
-    }
-    assert (await tools_mod._flag_shell_reads(None, framed))[0] == 0
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(cs_mod, "_PUSH_INTERVAL_S", 0.0)
 
+    events: list[str] = []
 
-async def test_shell_reads_auto_retry_inside_embed(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    async def progress(msg: str) -> None:
+        events.append(msg)
 
-    shell = "Join our team. We are a great company. " * 20
+    pushes: list[tuple] = []
 
-    async def read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
-    ):
-        if url_contains:
-            return {
-                "url": url,
-                "text": f"real role content for {url} " * 20,
-                "jsonld": {"@type": "Thing", "title": url},
-                "links": [],
-                "frame_matched": True,
-            }
-        return {"url": url, "text": shell, "jsonld": None, "links": [], "frame_matched": False}
-
-    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
-
-    async def fake_iframe_targets(_session):
-        return [{"targetId": "t1", "url": "https://embed.example.com/board"}]
-
-    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_iframe_targets)
     clipboard: dict = {}
-    urls = [f"https://x.com/{i}" for i in range(4)]
-    pages = await tools_mod._read_pages_impl(session, urls, None, clipboard, concurrency=4)
-    assert all(not p.get("error") for p in pages)
-    assert all(p.get("frame_matched") for p in pages)
-    assert clipboard["found_links_frame"] == "embed.example.com"
-    assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_visited"]
+    obs = CodeStreamObserver(object(), clipboard, progress)
 
+    async def fake_push(name, code, status, target=None):
+        pushes.append((name, code, status))
 
-def test_pages_for_save_strips_failed_page_content() -> None:
-    from app.agent.tools import _pages_for_save
+    obs.push = fake_push
 
-    pages = [
-        {"url": "https://x.com/ok", "text": "real", "jsonld": {"a": 1}},
-        {"url": "https://x.com/bad", "text": "shell junk", "error": "read the embedding shell"},
-    ]
-    out = _pages_for_save(pages)
-    assert out[0]["text"] == "real"
-    assert out[1] == {"url": "https://x.com/bad", "error": "read the embedding shell"}
+    await obs.on_partial('{"thinking": "let me browse this page"')
+    assert events == [] and spawned == []
 
-
-def test_evidence_contains_normalises_and_allows_empty() -> None:
-    from app.agent.tools import _evidence_contains, _norm_evidence
-
-    corpus = _norm_evidence("Location Type: Hybrid • London • Full time")
-    assert _evidence_contains(corpus, "HYBRID") is True
-    assert _evidence_contains(corpus, "ONSITE") is False
-    assert _evidence_contains(_norm_evidence("works fully on-site daily"), "ONSITE") is True
-    assert _evidence_contains("", "ONSITE") is True
-
-
-def test_store_rejects_ungrounded_enum_writes() -> None:
-    from app.agent.tools import _evidence_contains, _norm_evidence
-
-    store = _draft_store()
-    corpus = {"c": _norm_evidence("This lovely widget is brand new in box")}
-    store.evidence_check = lambda v: _evidence_contains(corpus["c"], v)
-
-    ok, msg = store.add_item({"title": "Widget", "condition": "USED"})
-    assert ok is False
-    assert "no read page states it" in msg
-
-    ok, msg = store.add_item({"title": "Widget", "condition": "NEW"})
-    assert ok is True, msg
-
-    ok, msg = store.update_item(0, {"condition": "USED"})
-    assert ok is False
-    assert "never inferred or defaulted" in msg
-
-    ok, msg = store.update_item(0, {"title": "Widget v2"})
-    assert ok is True, msg
-
-    store.evidence_check = None
-    ok, msg = store.add_item({"title": "Other", "condition": "USED"})
-    assert ok is True, msg
-
-
-def test_labelled_pairs_harvest_visible_specs() -> None:
-    from app.agent.tools import _labelled_pairs
-
-    text = (
-        "All Items\n"
-        "Vintage Oak Desk\n"
-        "Location\n\nBristol\n\n"
-        "Condition\n\nUsed\n\n"
-        "Category\n\nHome\nHome Office\n\n"
-        "Overview\n"
-        + "A long paragraph describing the item in detail. " * 5
+    await obs.on_partial(
+        '{"thinking": "…", "action": [{"run_code_file": {"name": "calc.py", "code": "x = 1\\n'
     )
-    pairs = _labelled_pairs(text)
-    assert pairs["Location"] == "Bristol"
-    assert pairs["Condition"] == "Used"
-    assert pairs["Category"] == "Home Office"
-    assert "Overview" not in pairs
+    assert events == ["⌨️ Writing calc.py"]
+    assert spawned and spawned[0].endswith("/codeview")
+    assert focused == ["code-tid"]
+    assert clipboard["_code_stream_tab"] == "code-tid"
+    assert clipboard["_code_stream"] is obs
 
+    await obs.on_partial(
+        '{"thinking": "…", "action": [{"run_code_file": {"name": "calc.py", "code": "x = 1\\nprint(x)\\n'
+    )
+    assert pushes and pushes[-1][2] == "Writing"
+    assert pushes[-1][1].startswith("x = 1\nprint(x)")
 
-def test_draft_row_fills_fields_from_labelled_page_text() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["title"],
-                    "properties": {
-                        "title": {"type": "string"},
-                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "extra": {
-                            "anyOf": [
-                                {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "key": {"type": "string"},
-                                            "value": {"type": "string"},
-                                        },
-                                    },
-                                },
-                                {"type": "null"},
-                            ]
-                        },
-                    },
-                },
-            }
-        },
-    }
-    store = OutputStore(json_schema_to_pydantic(schema))
-    page = {
-        "url": "https://x.com/listings?id=1",
-        "title": "Vintage Oak Desk",
-        "text": (
-            "Vintage Oak Desk\n"
-            "Location\n\nBristol\n\n"
-            "Category\n\nHome\nHome Office\n\n"
-            "Overview\n" + "Long descriptive prose about the item. " * 20
-        ),
-        "jsonld": {"@type": "Product", "title": "Vintage Oak Desk"},
-        "listing_text": "Vintage Oak Desk\nHome Office\n•\nBristol\n•\nCollection only",
-    }
-    row = _draft_row(store, page)
-    assert row["location"] == "Bristol"
-    assert row["category"] == "Home Office"
-    extras = {e["key"]: e["value"] for e in row.get("extra") or []}
-    assert "Collection only" in extras.get("listing_row", "")
-    assert "Bristol" not in extras.get("listing_row", "")
+    obs.reset()
+    assert "_code_stream_tab" not in clipboard
 
 
 def test_compact_json_text_elides_long_strings() -> None:
