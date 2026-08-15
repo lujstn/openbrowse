@@ -52,8 +52,12 @@ def _p(inp: float, cache_read: float, cw5m: float, cw1h: float, out: float) -> P
 
 _PRICING: dict[str, ModelPricing] = {
     "claude-fable-5": ModelPricing(_p(10, 1, 12.5, 20, 50)),
+    "claude-mythos-5": ModelPricing(_p(10, 1, 12.5, 20, 50)),
     "claude-opus-5": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
     "claude-opus-4-8": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
+    "claude-opus-4-7": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
+    "claude-opus-4-6": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
+    "claude-sonnet-4-6": ModelPricing(_p(3, 0.3, 3.75, 6, 15)),
     "gpt-5.6-sol": ModelPricing(
         standard=_p(5, 0.5, 6.25, 0, 30),
         long=_p(10, 1.0, 12.5, 0, 45),

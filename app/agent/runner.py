@@ -414,6 +414,8 @@ class _RepairingChatAnthropic(ChatAnthropic):
 
 
 _ANTHROPIC_MODELS: dict[str, str] = {
+    "claude-fable-5": "claude-fable-5",
+    "claude-mythos-5": "claude-mythos-5",
     "claude-sonnet-5": "claude-sonnet-5",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
@@ -437,7 +439,21 @@ _OPENAI_MODELS: dict[str, str] = {
     "bu-max": "gpt-5.6-sol",
 }
 
+_ALWAYS_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5"}
+
+_ALWAYS_THINKING_NOTE = (
+    "thinking cannot be turned off on this model — the API rejects a disabled "
+    "thinking config, so a thinking effort of 'off' still reasons, at the "
+    "model's own default depth. Expect higher token costs than the effort "
+    "setting suggests."
+)
+
 _MODEL_WARNINGS: dict[str, str] = {
+    "claude-fable-5": _ALWAYS_THINKING_NOTE,
+    "claude-mythos-5": (
+        f"{_ALWAYS_THINKING_NOTE} Access is limited to Project Glasswing "
+        "organisations; other API keys will be rejected."
+    ),
     "gpt-5.6-luna": (
         "expect poor performance — this model often narrates answers instead of "
         "driving the browser and invents nonexistent limits to avoid completing "
@@ -467,6 +483,12 @@ _OPENAI_REASONING: dict[str, str] = {
 }
 
 
+def _normalise_effort(effort: str | None) -> str:
+    """Anything we do not recognise means no thinking, never a silent budget."""
+    key = (effort or "").strip().lower()
+    return key if key in _OPENAI_REASONING else "off"
+
+
 def _resolve_model(model: str) -> tuple[str, str]:
     key = (model or "").strip()
     if key.endswith("[1m]"):
@@ -480,6 +502,7 @@ def _resolve_model(model: str) -> tuple[str, str]:
 
 def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
     want_1m = (model or "").strip().endswith("[1m]")
+    thinking_effort = _normalise_effort(thinking_effort)
     provider, model_id = _resolve_model(model)
     if provider == "openai":
         if not settings.openai_api_key:
@@ -487,7 +510,7 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
         llm = _CacheAwareChatOpenAI(
             model=model_id,
             api_key=settings.openai_api_key,
-            reasoning_effort=_OPENAI_REASONING.get(thinking_effort, "low"),
+            reasoning_effort=_OPENAI_REASONING[thinking_effort],
             timeout=90,
             max_retries=3,
             # @nonobvious(forced-by): OpenAI strict structured output requires every
@@ -511,12 +534,15 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
     }
     if want_1m:
         kwargs["betas"] = [ONE_M_BETA]
+    # @nonobvious(forced-by): "off" omits the thinking key rather than sending
+    # {"type": "disabled"} because Fable and Mythos reject an explicit disable
+    # with a 400; omitting it is the only spelling every model accepts.
     if thinking_effort != "off":
         if model_id in _ADAPTIVE_THINKING_MODELS:
             kwargs["thinking"] = {"type": "adaptive"}
             kwargs["output_config"] = {"effort": thinking_effort}
         else:
-            budget = _THINKING_BUDGETS.get(thinking_effort, 8192)
+            budget = _THINKING_BUDGETS[thinking_effort]
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["max_tokens"] = max(budget + 8192, 16384)
     return provider, model_id, _RepairingChatAnthropic(**kwargs)

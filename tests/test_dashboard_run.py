@@ -23,6 +23,8 @@ def test_model_options_curated_list():
         "gpt-5.6-terra",
         "gpt-5.6-sol",
         "claude-opus-5",
+        "claude-fable-5",
+        "claude-mythos-5",
         "claude-opus-4-8",
         "claude-opus-4-8[1m]",
         "claude-opus-4-7",

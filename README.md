@@ -45,6 +45,8 @@ Both OpenBrowse rows matched the reference output field for field, and were prod
 
 | Model | Benchmark observations |
 |---|---|
+| `claude-fable-5` | Not benchmarked. The most capable model available, and the most expensive at $10/$50 per million tokens. Thinking cannot be disabled on this model, so a thinking effort of `off` still reasons at the model's own default depth. Requires an organisation on 30-day data retention. |
+| `claude-mythos-5` | Not benchmarked. Identical to Fable 5 in capability, pricing and behaviour, including the always-on thinking. Only reachable by organisations in Project Glasswing; every other API key is rejected. |
 | `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not benchmarked |
 | `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not benchmarked |
 | `claude-opus-4.6`, `claude-opus-4.6[1m]` | Not benchmarked |

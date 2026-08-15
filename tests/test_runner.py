@@ -1,6 +1,7 @@
 """Agent runner tests — model registry, provider routing, thinking, LLM builder."""
 
 import types
+from datetime import datetime, timezone
 
 import pytest
 
@@ -109,6 +110,69 @@ def test_build_llm_openai_reasoning_effort(monkeypatch):
     provider, model_id, llm = runner._build_llm("gpt-5.6-terra", "medium")
     assert (provider, model_id) == ("openai", "gpt-5.6-terra")
     assert llm.reasoning_effort == "medium"
+
+
+def test_resolve_fable_and_mythos():
+    assert _resolve_model("claude-fable-5") == ("anthropic", "claude-fable-5")
+    assert _resolve_model("claude-mythos-5") == ("anthropic", "claude-mythos-5")
+
+
+def test_build_llm_always_thinking_models_never_send_disabled(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    for model in ("claude-fable-5", "claude-mythos-5"):
+        _, _, llm = runner._build_llm(model, "off")
+        assert getattr(llm, "thinking", None) is None
+        _, _, thinking = runner._build_llm(model, "high")
+        assert thinking.thinking == {"type": "adaptive"}
+        assert thinking.output_config == {"effort": "high"}
+
+
+def test_always_thinking_models_are_adaptive_and_warned():
+    import app.agent.runner as runner
+
+    for model in runner._ALWAYS_THINKING_MODELS:
+        assert model in runner._ANTHROPIC_MODELS.values()
+        assert model in runner._ADAPTIVE_THINKING_MODELS
+        assert "thinking cannot be turned off" in runner._MODEL_WARNINGS[model]
+
+
+def test_every_anthropic_model_is_priced():
+    import app.agent.runner as runner
+    from app.agent import cost
+
+    now = datetime(2026, 8, 15, tzinfo=timezone.utc)
+    for model_id in set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values()):
+        assert cost._lookup(model_id, now) is not None, model_id
+
+
+def test_normalise_effort_unknown_values_fall_back_to_off():
+    import app.agent.runner as runner
+
+    assert runner._normalise_effort("HIGH") == "high"
+    assert runner._normalise_effort(" low ") == "low"
+    for bad in (None, "", "none", "minimal", "xhigh", "true"):
+        assert runner._normalise_effort(bad) == "off"
+
+
+def test_build_llm_openai_unknown_effort_disables_reasoning(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
+    _, _, llm = runner._build_llm("bu-mini", "minimal")
+    assert llm.reasoning_effort == "none"
+
+
+def test_build_llm_anthropic_unknown_effort_disables_thinking(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    _, _, adaptive = runner._build_llm("claude-sonnet-5", "minimal")
+    assert getattr(adaptive, "thinking", None) is None
+    assert getattr(adaptive, "output_config", None) is None
+    _, _, budgeted = runner._build_llm("claude-sonnet-4-6", "minimal")
+    assert getattr(budgeted, "thinking", None) is None
 
 
 def test_resolve_opus_1m_suffix_strips_to_base():
