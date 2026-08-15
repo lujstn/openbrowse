@@ -378,11 +378,6 @@ _OPENAI_MODELS: dict[str, str] = {
     "bu-max": "gpt-5.6-sol",
 }
 
-# @nonobvious(deliberately-missing): bare "gpt-5.6" is not a model — requests
-# must name a variant, else the prefix passthrough would send an invalid id to
-# the API mid-run instead of failing at creation.
-_UNSUPPORTED_MODELS = {"gpt-5.6"}
-
 _MODEL_WARNINGS: dict[str, str] = {
     "gpt-5.6-luna": (
         "expect poor performance — this model often narrates answers instead of "
@@ -417,19 +412,11 @@ def _resolve_model(model: str) -> tuple[str, str]:
     key = (model or "").strip()
     if key.endswith("[1m]"):
         key = key[:-4]
-    if key in _UNSUPPORTED_MODELS:
-        raise ValueError(
-            f"'{key}' is not a valid model — name a specific variant. "
-            "Recommended: bu-latest / bu (claude-sonnet-5), bu-mini "
-            "(gpt-5.6-terra), bu-max (gpt-5.6-sol), bu-ultra (claude-opus-5)."
-        )
     if key in _ANTHROPIC_MODELS:
         return "anthropic", _ANTHROPIC_MODELS[key]
     if key in _OPENAI_MODELS:
         return "openai", _OPENAI_MODELS[key]
-    if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
-        return "openai", key
-    return "anthropic", key
+    raise ValueError(f"'{key}' is not a valid model.")
 
 
 def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
@@ -792,7 +779,6 @@ async def run_agent_session(session_id: str) -> None:
     slot = None
     browser_session = None
     try:
-        # Allocate virtual display and launch Chrome
         slot = await display_manager.allocate()
         await wait_for_novnc(slot.novnc_port)
         cdp_url = await launch_chrome(slot)
@@ -822,14 +808,12 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
-        # Connect BrowserSession to Chrome via CDP
         browser_session = BrowserSession(
             cdp_url=cdp_url,
             storage_state=storage_state_path,
             cross_origin_iframes=True,
         )
 
-        # Create tools and register custom actions
         clipboard: dict[str, Any] = {}
         tab_manager = TabManager(browser_session)
         tools = Tools()
@@ -927,7 +911,6 @@ async def run_agent_session(session_id: str) -> None:
         lean_flag: dict[str, bool] = {"eligible": False}
         _install_lean_state(browser_session, lean_flag)
 
-        # Step callback for real-time dashboard streaming
         step_count = 0
         step_started_at: dict[str, Any] = {"t": None}
         logged_history_len = {"n": 0}
@@ -1083,7 +1066,6 @@ async def run_agent_session(session_id: str) -> None:
                     f"Cost ${total_cost:.4f} exceeded budget ${max_cost:.2f}"
                 )
 
-        # Build and run agent
         agent_kwargs: dict[str, Any] = {
             "task": full_task,
             "llm": llm,
@@ -1131,7 +1113,6 @@ async def run_agent_session(session_id: str) -> None:
                 logger.debug("initial output.json mirror failed", exc_info=True)
         history = await agent.run(on_step_start=on_step_start, on_step_end=on_step_end)
 
-        # Extract results
         file_output = ""
         try:
             result_file = agent.file_system.get_file("result.json") if agent.file_system else None

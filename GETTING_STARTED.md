@@ -60,7 +60,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
 | `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
-| `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 5)                  |
+| `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 5); budget ~2GB RAM and one CPU core per session |
 
 Generate a secure `API_KEY`:
 

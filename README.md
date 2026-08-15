@@ -24,11 +24,11 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | Runtime | Model | Steps | Time | Tokens | LLM cost | Records |
 |---|---|---|---:|---:|---:|---|
 | BU Cloud | claude-sonnet-5 | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
-| **OpenBrowse** | claude-sonnet-5 | 10 | 3m 42s | 225k | **$0.45** | 16/16 |
-| **OpenBrowse** | gpt-5.6-terra | 6 | 2m 30s | 129k | **$0.23** | 16/16 |
+| **OpenBrowse** | claude-sonnet-5 | **10** | **3m 42s** | **225k** | **$0.45** | 16/16 |
+| **OpenBrowse** | gpt-5.6-terra | **6** | **2m 30s** | **129k** | **$0.23** | 16/16 |
 | **OpenBrowse** | claude-opus-5 | | | | | benchmark coming |
 
-Both OpenBrowse rows matched the reference output field for field, and were produced *concurrently* on one Raspberry Pi. The concurrent-session limit is per device and yours to configure during setup.
+Both OpenBrowse rows matched the reference output field for field, and were produced *concurrently* on one Raspberry Pi. The concurrent-session limit is per device and yours to configure during setup. All benchmarks were run on 14 August 2026; the exact task and output schema are in [benchmark.json](benchmark.json) if you want to repeat them.
 
 ## Supported models
 

@@ -20,13 +20,23 @@ def test_model_options_curated_list():
     assert values[0] == "claude-sonnet-5"
     assert values == [
         "claude-sonnet-5",
-        "claude-opus-4-8",
-        "claude-opus-4-8[1m]",
-        "claude-opus-5",
-        "gpt-5.6-luna",
         "gpt-5.6-terra",
         "gpt-5.6-sol",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-8[1m]",
+        "claude-opus-4-7",
+        "claude-opus-4-7[1m]",
+        "claude-opus-4-6",
+        "claude-opus-4-6[1m]",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6[1m]",
+        "gpt-5.6-luna",
     ]
+    from app.agent.runner import _resolve_model
+
+    for value in values:
+        assert _resolve_model(value)[1]
 
 
 def test_thinking_options_off_default_first():

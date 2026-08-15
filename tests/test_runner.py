@@ -43,17 +43,12 @@ def test_resolve_openai_gpt56():
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
     assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
-    with pytest.raises(ValueError, match="not a valid model"):
-        _resolve_model("gpt-5.6")
 
 
-def test_resolve_openai_prefix_inference():
-    assert _resolve_model("gpt-4o")[0] == "openai"
-    assert _resolve_model("o3-mini")[0] == "openai"
-
-
-def test_resolve_unknown_defaults_anthropic():
-    assert _resolve_model("some-future-claude")[0] == "anthropic"
+def test_resolve_unknown_models_rejected():
+    for bad in ("gpt-4o", "o3-mini", "some-future-claude", "gpt-5.6", ""):
+        with pytest.raises(ValueError, match="not a valid model"):
+            _resolve_model(bad)
 
 
 def test_thinking_budget_and_reasoning_maps():

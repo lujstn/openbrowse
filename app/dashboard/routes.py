@@ -118,12 +118,18 @@ vnc_router = APIRouter(tags=["dashboard-vnc"])
 
 MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-5", "Claude Sonnet 5"),
-    ("claude-opus-4-8", "Claude Opus 4.8"),
-    ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
-    ("claude-opus-5", "Claude Opus 5"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna"),
     ("gpt-5.6-terra", "GPT-5.6 Terra"),
     ("gpt-5.6-sol", "GPT-5.6 Sol"),
+    ("claude-opus-5", "Claude Opus 5"),
+    ("claude-opus-4-8", "Claude Opus 4.8"),
+    ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
+    ("claude-opus-4-7", "Claude Opus 4.7"),
+    ("claude-opus-4-7[1m]", "Claude Opus 4.7 (1M)"),
+    ("claude-opus-4-6", "Claude Opus 4.6"),
+    ("claude-opus-4-6[1m]", "Claude Opus 4.6 (1M)"),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+    ("claude-sonnet-4-6[1m]", "Claude Sonnet 4.6 (1M)"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna (not recommended)"),
 ]
 
 THINKING_OPTIONS: list[tuple[str, str]] = [
