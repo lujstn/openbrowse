@@ -34,11 +34,11 @@ def test_resolve_sonnet5_and_opus48():
 def test_resolve_aliases():
     assert _resolve_model("bu-max") == ("anthropic", "claude-sonnet-5")
     assert _resolve_model("bu-ultra") == ("anthropic", "claude-opus-4-8")
-    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-luna")
+    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
 
 
 def test_resolve_openai_gpt56():
-    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
+    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
     assert _resolve_model("gpt-5.6") == ("openai", "gpt-5.6-sol")
@@ -109,7 +109,7 @@ def test_build_llm_openai_reasoning_effort(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     provider, model_id, llm = runner._build_llm("gpt-5.6-luna", "medium")
-    assert (provider, model_id) == ("openai", "gpt-5.6-luna")
+    assert (provider, model_id) == ("openai", "gpt-5.6-terra")
     assert llm.reasoning_effort == "medium"
 
 
@@ -258,6 +258,14 @@ def test_action_detail_and_category_for_new_actions():
     assert _category_for("read_pages") == "read"
     assert _category_for("update_items") == "schema"
     assert _category_for("mark_absent") == "schema"
+
+
+def test_luna_requests_resolve_to_terra():
+    from app.agent.runner import _resolve_model
+
+    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-terra")
+    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
+    assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
 
 
 def test_card_order_puts_action_directly_after_thinking():

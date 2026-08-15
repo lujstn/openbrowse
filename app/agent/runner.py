@@ -373,8 +373,12 @@ _OPENAI_MODELS: dict[str, str] = {
     "gpt-5.6": "gpt-5.6-sol",
     "gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
-    "gpt-5.6-luna": "gpt-5.6-luna",
-    "bu-mini": "gpt-5.6-luna",
+    # @nonobvious(deliberately-missing): luna requests upgrade to terra — with
+    # reasoning off, luna narrates the answer instead of driving the action loop
+    # (hallucinated execution limits, raw-JSON replies, no tool use); revisit
+    # with thinking enabled before reinstating it.
+    "gpt-5.6-luna": "gpt-5.6-terra",
+    "bu-mini": "gpt-5.6-terra",
 }
 
 _THINKING_BUDGETS: dict[str, int] = {
