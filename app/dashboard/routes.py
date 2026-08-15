@@ -121,6 +121,8 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("gpt-5.6-terra", "GPT-5.6 Terra"),
     ("gpt-5.6-sol", "GPT-5.6 Sol"),
     ("claude-opus-5", "Claude Opus 5"),
+    ("claude-fable-5", "Claude Fable 5"),
+    ("claude-mythos-5", "Claude Mythos 5 (Project Glasswing only)"),
     ("claude-opus-4-8", "Claude Opus 4.8"),
     ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
     ("claude-opus-4-7", "Claude Opus 4.7"),
