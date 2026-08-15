@@ -1,6 +1,6 @@
-# Getting Started — Browser Use Raspberry Pi
+# Getting Started with OpenBrowse
 
-A self-hosted replacement for Browser Use Cloud, running on a Raspberry Pi 5. Exposes a v3-compatible REST API that the `browser-use-sdk` TypeScript client can call without modification — just swap the `baseUrl` and `apiKey`.
+OpenBrowse is a self-hosted replacement for Browser Use Cloud, built for a Raspberry Pi 5 but happy on any Linux VPS or server. Exposes a v3-compatible REST API that the `browser-use-sdk` TypeScript client can call without modification — just swap the `baseUrl` and `apiKey`.
 
 ---
 

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Set up OpenBrowse{% endblock %}
+{% block content %}
+{% if done %}
+  <h1>OpenBrowse is configured</h1>
+  <p>Your <code>.env</code> has been written. Copy your API key now; it is shown only once:</p>
+  <p><code style="font-size:1.1em; user-select: all;">{{ api_key }}</code></p>
+  <p>Restart the server to apply the configuration:</p>
+  <pre>sudo systemctl restart browser-use.service
+# or, if you run it manually, stop and re-run uvicorn</pre>
+  <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>
+{% else %}
+  <h1>Welcome to OpenBrowse</h1>
+  <p>This instance has no authentication configured yet. This screen writes your <code>.env</code> once; after a restart it disappears.</p>
+  <form method="post" action="/setup">
+    <label>API key (generated for you; this is what SDK clients send)
+      <input name="api_key" value="{{ generated_key }}" required spellcheck="false" />
+    </label>
+    <label>Anthropic API key (for claude-* models, recommended)
+      <input name="anthropic_api_key" placeholder="sk-ant-..." spellcheck="false" />
+    </label>
+    <label>OpenAI API key (for gpt-* models, optional)
+      <input name="openai_api_key" placeholder="sk-proj-..." spellcheck="false" />
+    </label>
+    <label>CapSolver API key (CAPTCHA solving, optional)
+      <input name="capsolver_api_key" placeholder="CAP-..." spellcheck="false" />
+    </label>
+    <label>Dashboard password (optional; defaults to the API key)
+      <input name="dashboard_password" type="password" />
+    </label>
+    <button type="submit">Save configuration</button>
+  </form>
+{% endif %}
+{% endblock %}

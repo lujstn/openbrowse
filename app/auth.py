@@ -79,7 +79,13 @@ async def require_dashboard_auth(
     if not _expected_dashboard_password():
         if settings.allow_insecure_no_auth:
             return "dev"
-        raise HTTPException(status_code=503, detail="Dashboard authentication is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Dashboard authentication is not configured — open /setup in "
+                "your browser to configure this instance."
+            ),
+        )
     if not check_dashboard_credentials(credentials.username, credentials.password):
         raise HTTPException(
             status_code=401,
