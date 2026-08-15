@@ -1340,6 +1340,57 @@ async def test_code_stream_observer_announces_and_pushes(monkeypatch) -> None:
     assert "_code_stream_tab" not in clipboard
 
 
+async def test_code_stream_ignores_prose_mentions(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from app.agent.code_stream import CodeStreamObserver
+
+    async def fake_spawn(session, url):
+        raise AssertionError("must not open a tab for prose mentions")
+
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    obs = CodeStreamObserver(object(), {}, None)
+    await obs.on_partial(
+        '{"thinking": "I could use run_code_file here, or maybe update_items instead"'
+    )
+    assert obs._announced is False
+
+
+async def test_code_stream_settle_restores_focus_and_closes_orphans(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from app.agent.code_stream import CodeStreamObserver
+
+    focused: list[str] = []
+    closed: list[str] = []
+
+    async def fake_spawn(session, url):
+        return "code-tid"
+
+    async def fake_focus(session, tid):
+        focused.append(tid)
+
+    async def fake_close(session, tid):
+        closed.append(tid)
+
+    monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
+    monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
+    monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
+
+    clipboard: dict = {}
+    session = __import__("types").SimpleNamespace(agent_focus_target_id="page-tid")
+    obs = CodeStreamObserver(session, clipboard, None)
+    await obs.on_partial('{"action": [{"run_code_file": {"name": "calc.py", "code": "x')
+    assert clipboard["_code_stream_tab"] == "code-tid"
+
+    await obs.settle(has_run_code_file=True)
+    assert focused[-1] == "page-tid"
+    assert closed == []
+    assert clipboard["_code_stream_tab"] == "code-tid"
+
+    await obs.settle(has_run_code_file=False)
+    assert closed == ["code-tid"]
+    assert "_code_stream_tab" not in clipboard
+
+
 def test_compact_json_text_elides_long_strings() -> None:
     import json as _json
 

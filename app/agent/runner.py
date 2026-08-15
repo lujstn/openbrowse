@@ -233,6 +233,20 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
     object.__setattr__(browser_session, "get_browser_state_summary", lean_get)
 
 
+async def _settle_code_stream(llm: Any, result: Any, output_format: Any) -> None:
+    observer = getattr(llm, "stream_observer", None)
+    if observer is None or output_format is None:
+        return
+    from app.agent.code_stream import completion_has_run_code_file
+
+    try:
+        await observer.settle(
+            completion_has_run_code_file(getattr(result, "completion", None))
+        )
+    except Exception:
+        logger.debug("code stream settle failed", exc_info=True)
+
+
 class _CacheAwareChatOpenAI(ChatOpenAI):
     """ChatOpenAI that also records OpenAI cache-write tokens, which browser-use drops,
     and streams completions through the code observer when one is attached."""
@@ -250,6 +264,11 @@ class _CacheAwareChatOpenAI(ChatOpenAI):
             except Exception:
                 logger.debug("streaming shim attach failed", exc_info=True)
         return client
+
+    async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
+        result = await super().ainvoke(messages, output_format, **kwargs)
+        await _settle_code_stream(self, result, output_format)
+        return result
 
     def _get_usage(self, response: Any):
         usage = super()._get_usage(response)
@@ -330,6 +349,13 @@ class _RepairingChatAnthropic(ChatAnthropic):
         return await stream.get_final_message()
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
+        result = await self._ainvoke_inner(messages, output_format, **kwargs)
+        await _settle_code_stream(self, result, output_format)
+        return result
+
+    async def _ainvoke_inner(
+        self, messages: Any, output_format: Any = None, **kwargs: Any
+    ) -> Any:
         sid = getattr(self, "_activity_session", None)
         if sid:
             last = getattr(self, "_last_action", None)

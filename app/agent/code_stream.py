@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _CODE_KEY_RE = re.compile(r'"code"\s*:\s*"')
 _NAME_RE = re.compile(r'"name"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_ACTION_KEY_RE = re.compile(r'"run_code_file"\s*:\s*\{')
 
 _PUSH_INTERVAL_S = 0.35
 
@@ -86,6 +87,7 @@ class CodeStreamObserver:
         self._clipboard = clipboard
         self._progress = progress
         self._tab: str | None = None
+        self._prev_focus: str | None = None
         self._announced = False
         self._last_push = 0.0
         self._last_len = 0
@@ -95,12 +97,33 @@ class CodeStreamObserver:
 
     def reset(self) -> None:
         self._tab = None
+        self._prev_focus = None
         self._announced = False
         self._last_push = 0.0
         self._last_len = 0
         self._seen_len = 0
         if self._clipboard is not None:
             self._clipboard.pop("_code_stream_tab", None)
+
+    async def settle(self, has_run_code_file: bool) -> None:
+        """Called when a generation finishes, BEFORE any action executes: give
+        focus back to the page so actions never land on the code tab. When the
+        reply contains no run_code_file after all, the tab closes and state
+        resets — no orphans, no stolen focus.
+        """
+        if self._tab is None:
+            return
+        try:
+            from app.agent.tools import _close_spawned_tab, _focus_target
+
+            if self._prev_focus:
+                await _focus_target(self._session, self._prev_focus)
+            if not has_run_code_file:
+                tab = self._tab
+                await _close_spawned_tab(self._session, tab)
+                self.reset()
+        except Exception:
+            logger.warning("code stream settle failed", exc_info=True)
 
     async def on_partial(self, text: str) -> None:
         try:
@@ -112,9 +135,10 @@ class CodeStreamObserver:
         if len(text) < self._seen_len // 2:
             self.reset()
         self._seen_len = len(text)
-        idx = text.find("run_code_file")
-        if idx < 0:
+        key = _ACTION_KEY_RE.search(text)
+        if key is None:
             return
+        idx = key.start()
         name_match = _NAME_RE.search(text, idx)
         name = name_match.group(1) if name_match else None
         code_match = _CODE_KEY_RE.search(text, idx)
@@ -143,6 +167,7 @@ class CodeStreamObserver:
 
         if self._session is None:
             return
+        self._prev_focus = getattr(self._session, "agent_focus_target_id", None)
         self._tab = await _spawn_tab(self._session, codeview_url())
         if self._tab is None:
             logger.warning("code stream: could not open the code tab")
@@ -231,3 +256,15 @@ class StreamingCompletionsShim:
             ],
             usage=usage,
         )
+
+
+def completion_has_run_code_file(completion: Any) -> bool:
+    try:
+        actions = getattr(completion, "action", None) or []
+        for entry in actions:
+            dump = entry.model_dump(exclude_none=True) if hasattr(entry, "model_dump") else {}
+            if "run_code_file" in dump:
+                return True
+    except Exception:
+        logger.debug("completion inspection failed", exc_info=True)
+    return False

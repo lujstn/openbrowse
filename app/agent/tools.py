@@ -1535,6 +1535,8 @@ def register_code_tools(
         home_target = getattr(browser_session, "agent_focus_target_id", None)
         observer = (clipboard or {}).get("_code_stream")
         code_tab: str | None = (clipboard or {}).pop("_code_stream_tab", None)
+        if code_tab is not None and browser_session is not None:
+            await _focus_target(browser_session, code_tab)
         if code_tab is None and browser_session is not None:
             from app.agent.code_stream import codeview_url
 
