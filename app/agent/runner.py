@@ -371,18 +371,25 @@ _ANTHROPIC_MODELS: dict[str, str] = {
 }
 
 _OPENAI_MODELS: dict[str, str] = {
-    "gpt-5.6": "gpt-5.6-sol",
     "gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-luna": "gpt-5.6-luna",
     "bu-mini": "gpt-5.6-terra",
     "bu-max": "gpt-5.6-sol",
 }
 
-# @nonobvious(deliberately-missing): gpt-5.6-luna is refused outright — with
-# reasoning off it narrates the answer instead of driving the action loop
-# (hallucinated execution limits, raw-JSON replies, no tool use); revisit with
-# thinking enabled before supporting it.
-_UNSUPPORTED_MODELS = {"gpt-5.6-luna"}
+# @nonobvious(deliberately-missing): bare "gpt-5.6" is not a model — requests
+# must name a variant, else the prefix passthrough would send an invalid id to
+# the API mid-run instead of failing at creation.
+_UNSUPPORTED_MODELS = {"gpt-5.6"}
+
+_MODEL_WARNINGS: dict[str, str] = {
+    "gpt-5.6-luna": (
+        "expect poor performance — this model often narrates answers instead of "
+        "driving the browser and invents nonexistent limits to avoid completing "
+        "tasks."
+    ),
+}
 
 _THINKING_BUDGETS: dict[str, int] = {
     "low": 2048,
@@ -412,9 +419,9 @@ def _resolve_model(model: str) -> tuple[str, str]:
         key = key[:-4]
     if key in _UNSUPPORTED_MODELS:
         raise ValueError(
-            f"Model '{key}' is not supported. Recommended models: bu-latest / bu "
-            "(claude-sonnet-5), bu-mini (gpt-5.6-terra), bu-max (gpt-5.6-sol), "
-            "bu-ultra (claude-opus-5)."
+            f"'{key}' is not a valid model — name a specific variant. "
+            "Recommended: bu-latest / bu (claude-sonnet-5), bu-mini "
+            "(gpt-5.6-terra), bu-max (gpt-5.6-sol), bu-ultra (claude-opus-5)."
         )
     if key in _ANTHROPIC_MODELS:
         return "anthropic", _ANTHROPIC_MODELS[key]
@@ -804,6 +811,16 @@ async def run_agent_session(session_id: str) -> None:
             msg_type="planning",
             summary=f"Session started with model {model}",
         )
+        warned_model = _resolve_model(model)[1]
+        if warned_model in _MODEL_WARNINGS:
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                summary=f"⚠️ {warned_model}: {_MODEL_WARNINGS[warned_model]}",
+                data=json.dumps({"category": "memory", "action": "modelWarning"}),
+                count_step=False,
+            )
 
         # Connect BrowserSession to Chrome via CDP
         browser_session = BrowserSession(

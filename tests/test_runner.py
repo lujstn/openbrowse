@@ -40,11 +40,11 @@ def test_resolve_aliases():
 
 
 def test_resolve_openai_gpt56():
-    with pytest.raises(ValueError, match="not supported"):
-        _resolve_model("gpt-5.6-luna")
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
-    assert _resolve_model("gpt-5.6") == ("openai", "gpt-5.6-sol")
+    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
+    with pytest.raises(ValueError, match="not a valid model"):
+        _resolve_model("gpt-5.6")
 
 
 def test_resolve_openai_prefix_inference():
@@ -263,11 +263,11 @@ def test_action_detail_and_category_for_new_actions():
     assert _category_for("mark_absent") == "schema"
 
 
-def test_luna_is_refused_outright():
-    from app.agent.runner import _resolve_model
+def test_luna_allowed_with_warning_registered():
+    from app.agent.runner import _MODEL_WARNINGS, _resolve_model
 
-    with pytest.raises(ValueError, match="not supported"):
-        _resolve_model("gpt-5.6-luna")
+    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
+    assert "poor performance" in _MODEL_WARNINGS["gpt-5.6-luna"]
     assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
 
 

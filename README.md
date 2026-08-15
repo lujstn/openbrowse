@@ -30,16 +30,28 @@ The same real-world extraction task (a careers page with 16 records behind an em
 
 Both OpenBrowse rows matched the reference output field for field, and were produced *concurrently* on one Raspberry Pi. The concurrent-session limit is per device and yours to configure during setup.
 
-## Recommended models
+## Supported models
 
-| Alias | Resolves to | Use it for |
+### Recommended models
+
+| Model | Aliases | Description |
 |---|---|---|
-| `bu` / `bu-latest` | claude-sonnet-5 | The default: reference-quality extraction |
-| `bu-mini` | gpt-5.6-terra | Fastest and cheapest, benchmark-clean |
-| `bu-max` | gpt-5.6-sol | Flagship OpenAI reasoning tier |
-| `bu-ultra` | claude-opus-5 | Hardest tasks |
+| claude-sonnet-5 | `bu`, `bu-latest` | The default: reference-quality extraction |
+| gpt-5.6-terra | `bu-mini` | Fastest and cheapest; benchmark-clean |
+| gpt-5.6-sol | `bu-max` | Flagship OpenAI reasoning tier |
+| claude-opus-5 | `bu-ultra` | Hardest tasks |
 
-Any `claude-*` or `gpt-*` model id also works directly. `gpt-5.6-luna` is deliberately unsupported: in our testing it narrates answers instead of driving the browser.
+### Other supported models
+
+| Model | Benchmark observations |
+|---|---|
+| `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not benchmarked |
+| `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not benchmarked |
+| `claude-opus-4.6`, `claude-opus-4.6[1m]` | Not benchmarked |
+| `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not benchmarked |
+| `gpt-5.6-luna` | ⚠️ **Accessible, but we strongly advise against use.** Often narrates answers instead of driving the browser and invents nonexistent "limits" to avoid completing tasks. [Whilst this is the model BU Cloud recommends](https://docs.browser-use.com/cloud/agent/models), it was repeatedly unable to complete our benchmark across multiple runs. |
+
+Other `claude-*` and `gpt-*` model ids pass straight through to their provider, untested by us. Bare `gpt-5.6` is rejected: name a specific variant.
 
 ## Quick start
 
