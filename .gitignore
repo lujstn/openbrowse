@@ -32,3 +32,6 @@ Thumbs.db
 .claude
 .playwright-mcp/
 uv.lock
+
+# Internal planning notes, never tracked
+docs/

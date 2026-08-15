@@ -6,10 +6,10 @@ OpenBrowse is a self-hosted replacement for Browser Use Cloud, built for a Raspb
 
 ## 1. Prerequisites
 
-- Raspberry Pi 5 with 16GB RAM running Debian Trixie (64-bit)
-- SSH access to the Pi
-- An [Anthropic API key](https://console.anthropic.com/)
-- [Tailscale](https://tailscale.com/) installed and authenticated on the Pi
+- A Linux machine: built and benchmarked on a Raspberry Pi 5 (16GB, Debian 64-bit), but any Debian/Ubuntu VPS or home server works
+- SSH access to the machine
+- An [Anthropic API key](https://console.anthropic.com/) and/or an [OpenAI API key](https://platform.openai.com/api-keys)
+- _(Optional)_ [Tailscale](https://tailscale.com/) installed and authenticated, for private access or public exposure
 
 ---
 
@@ -49,34 +49,23 @@ pip install -e ".[dev]"
 
 ## 4. Configure Environment
 
-Copy the example file and fill in your credentials:
+The easiest way: start the server once (next section) and open it in a browser. An unconfigured instance serves a one-time **setup screen** at `/setup` that generates your API bearer key, collects your provider keys, dashboard password and concurrency limit, and writes `.env` for you.
 
-```bash
-cp .env.example .env
-```
+To configure by hand instead, create `.env` in the repo root with:
 
-Open `.env` and set the following variables:
-
-| Variable            | Description                                                                   |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Your Anthropic API key (`sk-ant-...`)                                         |
-| `API_KEY`           | A secret bearer token used to authenticate API requests                       |
-| `CAPSOLVER_API_KEY` | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving |
+| Variable                  | Description                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| `API_KEY`                 | A secret bearer token used to authenticate API requests                        |
+| `ANTHROPIC_API_KEY`       | Your Anthropic API key (`sk-ant-...`), for `claude-*` models                   |
+| `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
+| `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
+| `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
+| `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 5)                  |
 
 Generate a secure `API_KEY`:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-Your `.env` should look like:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-API_KEY=<your-generated-token>
-
-# Optional
-CAPSOLVER_API_KEY=CAP-...
 ```
 
 ---
@@ -215,45 +204,20 @@ journalctl -u browser-use -f
 
 ---
 
-## 8. Point buildinlondon to the Pi
+## 8. Point Your App at OpenBrowse
 
-### Environment variables
-
-In your `buildinlondon` repo, add to `.env.local`:
-
-```
-PI_BROWSER_USE_URL=https://llmpi.tail12345.ts.net
-PI_BROWSER_USE_API_KEY=<your-API_KEY-from-the-pi>
-```
-
-### Update pool.ts
-
-In `src/scripts/test-browser-use/lib/pool.ts`, the `BrowserUse` client is initialised lazily:
+Any client of the official `browser-use-sdk` works unchanged: pass your OpenBrowse base URL and API key when constructing the client.
 
 ```ts
-get client(): BrowserUse {
-  if (!this._client) {
-    this._client = new BrowserUse();
-  }
-  return this._client;
-}
+import { BrowserUse } from "browser-use-sdk";
+
+const client = new BrowserUse({
+  baseUrl: "https://<your-host>/v3",
+  apiKey: process.env.OPENBROWSE_API_KEY,
+});
 ```
 
-Change this to pass your Pi's base URL and API key:
-
-```ts
-get client(): BrowserUse {
-  if (!this._client) {
-    this._client = new BrowserUse({
-      baseUrl: process.env.PI_BROWSER_USE_URL,
-      apiKey: process.env.PI_BROWSER_USE_API_KEY,
-    });
-  }
-  return this._client;
-}
-```
-
-Everything else in pool.ts — retry logic, stall detection, profile IDs — stays the same.
+Everything else in your integration, such as retry logic, polling and profile ids, stays the same.
 
 ---
 
@@ -288,7 +252,7 @@ Cloud Browser Use profiles are cookie/localStorage jars. Export a profile's stor
 ```bash
 # on the Pi, from the repo root, under the venv
 .venv/bin/python -m scripts.import_profiles personal_profile.storage_state.json \
-  --profile-id 0bee43b4-d8c4-4741-8f1e-6576749a81b0 --name "Personal Profile"
+  --profile-id <cloud-profile-id> --name "Personal Profile"
 ```
 
 A bundle (a JSON list, or `{"profiles": [...]}`) carries an id per entry, so a single command imports many:

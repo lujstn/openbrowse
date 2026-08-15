@@ -9,6 +9,13 @@
   <pre>sudo systemctl restart browser-use.service
 # or, if you run it manually, stop and re-run uvicorn</pre>
   <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>
+  <h2>Reach it from anywhere (optional)</h2>
+  <p>To use OpenBrowse from outside this machine without opening ports, install <a href="https://tailscale.com/">Tailscale</a>:</p>
+  <pre># private access from your own devices
+tailscale up
+
+# or expose the API publicly over TLS with Tailscale Funnel
+sudo tailscale funnel --bg 8420</pre>
 {% else %}
   <h1>Welcome to OpenBrowse</h1>
   <p>This instance has no authentication configured yet. This screen writes your <code>.env</code> once; after a restart it disappears.</p>
@@ -27,6 +34,10 @@
     </label>
     <label>Dashboard password (optional; defaults to the API key)
       <input name="dashboard_password" type="password" />
+    </label>
+    <label>Max concurrent sessions on this device
+      <input name="max_concurrent_sessions" value="5" inputmode="numeric" pattern="[0-9]*" />
+      <small>Suggested: 3 for a Raspberry Pi 4 or small VPS, 5 for a Raspberry Pi 5 (16GB), more on bigger hardware.</small>
     </label>
     <button type="submit">Save configuration</button>
   </form>

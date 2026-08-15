@@ -21,14 +21,14 @@
 
 The same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, full schema output) run against BU Cloud and against OpenBrowse on a Raspberry Pi 5:
 
-| Runtime | Model | Steps | Time | Tokens | LLM cost | Records | Quality |
-|---|---|---|---:|---:|---:|---|---|
-| BU Cloud | claude-sonnet-5 | 18 | 4m 30s | 1.4M | $0.86 | 16/16 | reference |
-| **OpenBrowse** | claude-sonnet-5 (`bu-latest`) | 10 | 3.7m | 225k | **$0.45** | 16/16 | matches reference |
-| **OpenBrowse** | gpt-5.6-terra (`bu-mini`) | 6 | 2.5m | 129k | **$0.23** | 16/16 | matches reference |
-| **OpenBrowse** | claude-opus-5 (`bu-ultra`) | | | | | | benchmark coming |
+| Runtime | Model | Steps | Time | Tokens | LLM cost | Records |
+|---|---|---|---:|---:|---:|---|
+| BU Cloud | claude-sonnet-5 | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
+| **OpenBrowse** | claude-sonnet-5 | 10 | 3m 42s | 225k | **$0.45** | 16/16 |
+| **OpenBrowse** | gpt-5.6-terra | 6 | 2m 30s | 129k | **$0.23** | 16/16 |
+| **OpenBrowse** | claude-opus-5 | | | | | benchmark coming |
 
-The two OpenBrowse rows above were produced *concurrently* on one Pi. OpenBrowse supports up to five simultaneous sessions per device.
+Both OpenBrowse rows matched the reference output field for field, and were produced *concurrently* on one Raspberry Pi. The concurrent-session limit is per device and yours to configure during setup.
 
 ## Recommended models
 
@@ -47,11 +47,10 @@ Any `claude-*` or `gpt-*` model id also works directly. `gpt-5.6-luna` is delibe
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse
 uv sync
-cp .env.example .env   # or skip this and use the setup screen below
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8420
 ```
 
-Open `http://<your-host>:8420` in a browser. On a fresh install with no `API_KEY` configured, OpenBrowse serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, and writes `.env` for you.
+Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
 
 Then from any `browser-use-sdk` client:
 
@@ -72,16 +71,16 @@ const task = await client.tasks.create({
 
 Full installation (Raspberry Pi system packages, Xvfb + VNC live view, systemd service): see [GETTING_STARTED.md](GETTING_STARTED.md).
 
-## Runs on a Raspberry Pi. Or anything else.
+## Exposing it to the web
 
-OpenBrowse was built and benchmarked on a Raspberry Pi 5 (16GB), but it is plain Python + Chromium: any Linux VPS or home server works. For safe access from anywhere without opening ports, put it behind [Tailscale](https://tailscale.com/):
+OpenBrowse was built and benchmarked on a Raspberry Pi 5 (16GB), but it is plain Python + Chromium: any Linux VPS or home server works. To reach it from outside that box without opening ports, put it behind [Tailscale](https://tailscale.com/):
 
 ```bash
 # private access from your own devices
 tailscale up
 
 # or expose the API publicly over TLS with Tailscale Funnel
-tailscale funnel 8420
+sudo tailscale funnel --bg 8420
 ```
 
 ## Features
@@ -94,15 +93,6 @@ tailscale funnel 8420
 - **Dashboard**: live session feed with model thinking, per-step costs, JSON export (full / steps / output-only), profile management.
 - **CAPTCHA solving**: optional CapSolver integration.
 - **Multi-provider**: Anthropic and OpenAI models behind one alias set, with per-provider repair layers for each family's failure modes.
-
-## Development
-
-```bash
-uv sync --extra dev
-uv run --extra dev pytest -q
-```
-
-The platform is strictly generic: no site-specific or task-specific logic anywhere, including tests. Extraction behaviour is driven entirely by your task text and output schema.
 
 ## Licence
 

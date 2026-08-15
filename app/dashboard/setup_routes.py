@@ -44,6 +44,7 @@ async def setup_save(
     openai_api_key: str = Form(""),
     capsolver_api_key: str = Form(""),
     dashboard_password: str = Form(""),
+    max_concurrent_sessions: str = Form(""),
 ):
     if _configured():
         return RedirectResponse("/", status_code=303)
@@ -64,6 +65,8 @@ async def setup_save(
     ):
         if value.strip():
             lines.append(f"{name}={value.strip()}")
+    if max_concurrent_sessions.strip().isdigit():
+        lines.append(f"MAX_CONCURRENT_SESSIONS={max_concurrent_sessions.strip()}")
     _env_path.write_text("\n".join(lines) + "\n")
     return templates.TemplateResponse(
         request,
