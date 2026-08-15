@@ -11,6 +11,7 @@ from pydantic import BaseModel, model_validator
 from app.agent.pool import pool
 from app.agent.runner import resolve_default_effort, validate_effort
 from app.auth import require_api_key
+from app.config import settings
 from app.db import crud
 
 router = APIRouter(prefix="/v3/sessions", tags=["sessions"])
@@ -186,6 +187,12 @@ def _to_message_response(row: dict[str, Any]) -> MessageResponseModel:
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 
+def _local_budget(cloud_max: float | None) -> float | None:
+    if cloud_max is None:
+        return None
+    return cloud_max * settings.cloud_max_cost_factor
+
+
 @router.post("", response_model=SessionResponse)
 async def create_session(
     body: RunTaskRequest | None = None,
@@ -219,7 +226,7 @@ async def create_session(
             output_schema=json.dumps(body.outputSchema) if body.outputSchema else None,
             sensitive_data=json.dumps(body.sensitiveData) if body.sensitiveData else None,
             system_prompt_extension=body.systemPromptExtension,
-            max_cost_usd=body.maxCostUsd,
+            max_cost_usd=_local_budget(body.maxCostUsd),
             keep_alive=int(body.keepAlive),
             reasoning_effort=effort,
         )
@@ -233,7 +240,7 @@ async def create_session(
         output_schema=body.outputSchema,
         sensitive_data=body.sensitiveData,
         system_prompt_extension=body.systemPromptExtension,
-        max_cost_usd=body.maxCostUsd,
+        max_cost_usd=_local_budget(body.maxCostUsd),
         keep_alive=body.keepAlive,
         reasoning_effort=effort,
     )

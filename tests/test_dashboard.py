@@ -377,3 +377,66 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
         data={"task": "x"},
     )
     assert resp.status_code == 409
+
+
+async def test_api_scales_incoming_max_cost(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post(
+        "/v3/sessions",
+        json={"maxCostUsd": 6},
+        headers={"Authorization": "Bearer secret-key"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "3.0"
+
+
+async def test_api_does_not_scale_when_factor_one(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=1.0)
+    )
+    resp = await client.post(
+        "/v3/sessions",
+        json={"maxCostUsd": 6},
+        headers={"Authorization": "Bearer secret-key"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "6.0"
+
+
+async def test_api_none_budget_stays_none(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post(
+        "/v3/sessions",
+        json={},
+        headers={"Authorization": "Bearer secret-key"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] is None
+
+
+@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+async def test_dashboard_run_budget_not_scaled(mock_submit, client):
+    import asyncio
+
+    from app.db import crud
+    from app.dashboard import routes
+
+    resp = await client.post(
+        "/run",
+        data={
+            "task": "Go to example.com",
+            "model": "claude-sonnet-5",
+            "max_cost_usd": "3",
+        },
+        headers=_basic("admin", "secret-key"),
+    )
+    assert resp.status_code == 303
+    sid = resp.headers["location"].rsplit("/", 1)[-1]
+    stored = await crud.get_session(sid)
+    assert stored["max_cost_usd"] == 3.0
+    if routes._dispatched_tasks:
+        await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)

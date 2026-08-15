@@ -13,6 +13,13 @@ load_dotenv()
 _BASE = Path(__file__).resolve().parent.parent
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     api_key: str = field(default_factory=lambda: os.environ.get("API_KEY", ""))
@@ -43,6 +50,9 @@ class Settings:
     )
     max_concurrent_sessions: int = field(
         default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_SESSIONS", "1"))
+    )
+    cloud_max_cost_factor: float = field(
+        default_factory=lambda: _env_float("CLOUD_MAX_COST_FACTOR", 1.0)
     )
     default_model: str = "claude-sonnet-5"
     stale_session_minutes: int = 15
