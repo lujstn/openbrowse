@@ -1240,6 +1240,7 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
     monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
     monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
 
+    monkeypatch.setattr(tools_mod, "_CODE_TAB_MIN_VISIBLE_S", 0.01)
     session = types.SimpleNamespace(agent_focus_target_id="home-tid")
     result = await _run_sandbox(tmp_path, "print('hi')", session=session)
     assert not result.error, result.error

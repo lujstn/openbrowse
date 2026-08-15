@@ -1285,6 +1285,9 @@ def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> Non
         logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
 
 
+_CODE_TAB_MIN_VISIBLE_S = 2.0
+
+
 def _code_tab_url(script_name: str) -> str:
     """A self-contained data: URL shown in a real tab while a sandbox script runs,
     so the live view makes code work visible instead of a seemingly frozen page.
@@ -1547,15 +1550,26 @@ def register_code_tools(
 
         home_target = getattr(browser_session, "agent_focus_target_id", None)
         code_tab: str | None = None
+        opened_at = 0.0
         if browser_session is not None:
             try:
                 code_tab = await _spawn_tab(browser_session, _code_tab_url(fname))
                 await _focus_target(browser_session, code_tab)
+                opened_at = asyncio.get_running_loop().time()
+                logger.info("code tab opened for %s (target %s)", fname, code_tab)
             except Exception:
-                logger.debug("code tab: could not open", exc_info=True)
+                logger.warning("code tab: could not open", exc_info=True)
                 code_tab = None
         try:
             result = await _exec_in_sandbox(code, namespace)
+            if code_tab is not None:
+                # @nonobvious(means): a fast script would show the code tab for a
+                # blink; hold it briefly so the live view registers code work.
+                dwell = _CODE_TAB_MIN_VISIBLE_S - (
+                    asyncio.get_running_loop().time() - opened_at
+                )
+                if dwell > 0:
+                    await asyncio.sleep(dwell)
         finally:
             if code_tab is not None:
                 # @nonobvious(forced-by): refocus BEFORE closing — closing the
