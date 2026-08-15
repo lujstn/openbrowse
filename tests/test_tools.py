@@ -1241,6 +1241,7 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
     monkeypatch.setattr(tools_mod, "_close_spawned_tab", fake_close)
 
     monkeypatch.setattr(tools_mod, "_CODE_TAB_MIN_VISIBLE_S", 0.01)
+    monkeypatch.setattr(tools_mod, "_code_write_seconds", lambda code: 0.0)
     session = types.SimpleNamespace(agent_focus_target_id="home-tid")
     result = await _run_sandbox(tmp_path, "print('hi')", session=session)
     assert not result.error, result.error
@@ -1250,6 +1251,44 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
         ("focus", "home-tid"),
         ("close", "code-tid"),
     ]
+
+
+async def test_run_code_file_emits_writing_and_running_events(tmp_path) -> None:
+    from app.agent.tools import register_code_tools
+
+    events: list[str] = []
+
+    async def progress(msg: str) -> None:
+        events.append(msg)
+
+    tools = Tools()
+    register_code_tools(tools, {}, None, progress)
+    entry = tools.registry.registry.actions["run_code_file"]
+    params = entry.param_model(name="calc", code="x = 1\nprint(x)")
+    import types as _types
+
+    result = await entry.function(
+        params=params,
+        browser_session=_types.SimpleNamespace(),
+        file_system=_DirFs(tmp_path),
+    )
+    assert not result.error, result.error
+    assert len(events) == 2
+    assert events[0].startswith("⌨️ Writing calc.py (2 lines)")
+    assert events[1].startswith("▶ Running calc.py")
+
+
+def test_code_tab_url_embeds_source_and_name() -> None:
+    from urllib.parse import unquote
+
+    from app.agent.tools import _code_tab_url
+
+    url = _code_tab_url("calc.py", "total = 1 + 2\nprint(total)")
+    assert url.startswith("data:text/html")
+    page = unquote(url)
+    assert "calc.py" in page
+    assert "total = 1 + 2" in page
+    assert "Writing" in page and "Running" in page
 
 
 async def test_shell_reads_flagged_as_failures(monkeypatch) -> None:

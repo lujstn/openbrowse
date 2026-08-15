@@ -1286,25 +1286,52 @@ def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> Non
 
 
 _CODE_TAB_MIN_VISIBLE_S = 2.0
+_CODE_WRITE_BASE_S = 1.0
+_CODE_WRITE_PER_LINE_S = 0.12
+_CODE_WRITE_MAX_S = 4.0
+_CODE_TAB_SHOWN_CHARS = 4000
 
 
-def _code_tab_url(script_name: str) -> str:
-    """A self-contained data: URL shown in a real tab while a sandbox script runs,
-    so the live view makes code work visible instead of a seemingly frozen page.
+def _code_write_seconds(code: str) -> float:
+    lines = max(1, (code or "").count("\n") + 1)
+    return min(_CODE_WRITE_BASE_S + lines * _CODE_WRITE_PER_LINE_S, _CODE_WRITE_MAX_S)
+
+
+def _code_tab_url(script_name: str, code: str = "") -> str:
+    """A self-contained IDE-style data: URL shown in a real tab while a sandbox
+    script runs: the script source types itself out over the writing window, then
+    the status pill flips to Running. The live view sees code work as two phases
+    even though the model spends a single step.
     """
     from urllib.parse import quote
 
-    safe = html_lib.escape(script_name)
+    safe_name = html_lib.escape(script_name)
+    shown = (code or "")[:_CODE_TAB_SHOWN_CHARS]
+    write_ms = int(_code_write_seconds(code) * 1000)
     page = (
         "<!doctype html><title>Code</title>"
-        "<body style='margin:0;height:100vh;display:flex;flex-direction:column;"
-        "align-items:center;justify-content:center;background:#0d1117;color:#e6edf3;"
-        "font-family:monospace'>"
-        "<div style='width:44px;height:44px;border:4px solid #30363d;"
-        "border-top-color:#58a6ff;border-radius:50%;animation:s 1s linear infinite'>"
-        "</div><style>@keyframes s{to{transform:rotate(360deg)}}</style>"
-        f"<p style='margin-top:24px;font-size:18px'>Model is running code&hellip;</p>"
-        f"<p style='color:#8b949e'>{safe}</p></body>"
+        "<body style='margin:0;min-height:100vh;background:#0d1117;color:#e6edf3;"
+        "font-family:ui-monospace,monospace'>"
+        "<div style='display:flex;align-items:center;gap:12px;padding:14px 20px;"
+        "background:#161b22;border-bottom:1px solid #30363d'>"
+        f"<span style='color:#8b949e'>{safe_name}</span>"
+        "<span id='st' style='margin-left:auto;padding:3px 12px;border-radius:12px;"
+        "background:#1f6feb;color:#fff;font-size:13px'>Writing&hellip;</span>"
+        "<span id='sp' style='display:none;width:16px;height:16px;border:3px solid "
+        "#30363d;border-top-color:#58a6ff;border-radius:50%;"
+        "animation:s .8s linear infinite'></span></div>"
+        "<style>@keyframes s{to{transform:rotate(360deg)}}</style>"
+        "<pre id='c' style='margin:0;padding:20px;font-size:14px;line-height:1.5;"
+        "white-space:pre-wrap;word-break:break-word'></pre>"
+        f"<script>var t={json.dumps(shown)},n=0,el=document.getElementById('c'),"
+        f"step=Math.max(1,Math.ceil(t.length/({write_ms}/30)));"
+        "var iv=setInterval(function(){n+=step;el.textContent=t.slice(0,n);"
+        "window.scrollTo(0,document.body.scrollHeight);"
+        "if(n>=t.length){clearInterval(iv);"
+        "document.getElementById('st').textContent='Running\\u2026';"
+        "document.getElementById('st').style.background='#238636';"
+        "document.getElementById('sp').style.display='inline-block';}},30);"
+        "</script></body>"
     )
     return "data:text/html;charset=utf-8," + quote(page)
 
@@ -1384,6 +1411,7 @@ def register_code_tools(
     tools: Tools,
     clipboard: dict[str, Any] | None = None,
     store: "OutputStore | None" = None,
+    progress: Any = None,
 ) -> None:
     """Register the browser-connected code sandbox. ``run_code_file`` saves and runs a
     script in one step against the live page, with a namespace that persists across
@@ -1551,20 +1579,34 @@ def register_code_tools(
         home_target = getattr(browser_session, "agent_focus_target_id", None)
         code_tab: str | None = None
         opened_at = 0.0
+        line_count = (code or "").count("\n") + 1
         if browser_session is not None:
             try:
-                code_tab = await _spawn_tab(browser_session, _code_tab_url(fname))
+                code_tab = await _spawn_tab(browser_session, _code_tab_url(fname, code))
                 await _focus_target(browser_session, code_tab)
                 opened_at = asyncio.get_running_loop().time()
                 logger.info("code tab opened for %s (target %s)", fname, code_tab)
             except Exception:
                 logger.warning("code tab: could not open", exc_info=True)
                 code_tab = None
+        if progress is not None:
+            try:
+                await progress(f"⌨️ Writing {fname} ({line_count} lines)")
+            except Exception:
+                logger.debug("code progress emit failed", exc_info=True)
+        if code_tab is not None:
+            # @nonobvious(means): execution waits out the tab's typing animation so
+            # the live view shows a writing phase before a running phase; the model
+            # still spends a single step.
+            await asyncio.sleep(_code_write_seconds(code))
+        if progress is not None:
+            try:
+                await progress(f"▶ Running {fname}")
+            except Exception:
+                logger.debug("code progress emit failed", exc_info=True)
         try:
             result = await _exec_in_sandbox(code, namespace)
             if code_tab is not None:
-                # @nonobvious(means): a fast script would show the code tab for a
-                # blink; hold it briefly so the live view registers code work.
                 dwell = _CODE_TAB_MIN_VISIBLE_S - (
                     asyncio.get_running_loop().time() - opened_at
                 )

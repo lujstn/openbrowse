@@ -842,8 +842,19 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
+        async def _code_progress(label: str) -> None:
+            set_activity(session_id, label, spin=True)
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "code", "action": "script"}),
+                summary=label[:200],
+                count_step=False,
+            )
+
         register_fetch_tool(tools)
-        register_code_tools(tools, clipboard, store)
+        register_code_tools(tools, clipboard, store, _code_progress)
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
