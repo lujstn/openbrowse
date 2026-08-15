@@ -51,7 +51,6 @@ Both OpenBrowse rows matched the reference output field for field, and were prod
 | `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not benchmarked |
 | `gpt-5.6-luna` | ⚠️ **Accessible, but we strongly advise against use.** Often narrates answers instead of driving the browser and invents nonexistent "limits" to avoid completing tasks. [Whilst this is the model BU Cloud recommends](https://docs.browser-use.com/cloud/agent/models), it was repeatedly unable to complete our benchmark across multiple runs. |
 
-Other `claude-*` and `gpt-*` model ids pass straight through to their provider, untested by us. Bare `gpt-5.6` is rejected: name a specific variant.
 
 ## Quick start
 
