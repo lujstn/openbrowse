@@ -32,13 +32,16 @@ def test_resolve_sonnet5_and_opus48():
 
 
 def test_resolve_aliases():
-    assert _resolve_model("bu-max") == ("anthropic", "claude-sonnet-5")
-    assert _resolve_model("bu-ultra") == ("anthropic", "claude-opus-4-8")
+    assert _resolve_model("bu") == ("anthropic", "claude-sonnet-5")
+    assert _resolve_model("bu-latest") == ("anthropic", "claude-sonnet-5")
+    assert _resolve_model("bu-ultra") == ("anthropic", "claude-opus-5")
     assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
+    assert _resolve_model("bu-max") == ("openai", "gpt-5.6-sol")
 
 
 def test_resolve_openai_gpt56():
-    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-terra")
+    with pytest.raises(ValueError, match="not supported"):
+        _resolve_model("gpt-5.6-luna")
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
     assert _resolve_model("gpt-5.6") == ("openai", "gpt-5.6-sol")
@@ -64,7 +67,7 @@ def test_build_llm_openai_missing_key(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai=""))
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        runner._build_llm("gpt-5.6-luna", "off")
+        runner._build_llm("gpt-5.6-terra", "off")
 
 
 def test_build_llm_anthropic_missing_key(monkeypatch):
@@ -108,7 +111,7 @@ def test_build_llm_openai_reasoning_effort(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
-    provider, model_id, llm = runner._build_llm("gpt-5.6-luna", "medium")
+    provider, model_id, llm = runner._build_llm("gpt-5.6-terra", "medium")
     assert (provider, model_id) == ("openai", "gpt-5.6-terra")
     assert llm.reasoning_effort == "medium"
 
@@ -142,7 +145,7 @@ def test_openai_subclass_captures_cache_write(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
-    _, _, llm = runner._build_llm("gpt-5.6-luna", "off")
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "off")
     details = types.SimpleNamespace(cached_tokens=100, cache_write_tokens=50)
     usage = types.SimpleNamespace(
         prompt_tokens=1000,
@@ -260,12 +263,12 @@ def test_action_detail_and_category_for_new_actions():
     assert _category_for("mark_absent") == "schema"
 
 
-def test_luna_requests_resolve_to_terra():
+def test_luna_is_refused_outright():
     from app.agent.runner import _resolve_model
 
-    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-terra")
+    with pytest.raises(ValueError, match="not supported"):
+        _resolve_model("gpt-5.6-luna")
     assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
-    assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
 
 
 def test_card_order_puts_action_directly_after_thinking():

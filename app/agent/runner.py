@@ -365,21 +365,24 @@ _ANTHROPIC_MODELS: dict[str, str] = {
     "claude-opus-4-7": "claude-opus-4-7",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6": "claude-opus-4-6",
-    "bu-max": "claude-sonnet-5",
-    "bu-ultra": "claude-opus-4-8",
+    "bu": "claude-sonnet-5",
+    "bu-latest": "claude-sonnet-5",
+    "bu-ultra": "claude-opus-5",
 }
 
 _OPENAI_MODELS: dict[str, str] = {
     "gpt-5.6": "gpt-5.6-sol",
     "gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
-    # @nonobvious(deliberately-missing): luna requests upgrade to terra — with
-    # reasoning off, luna narrates the answer instead of driving the action loop
-    # (hallucinated execution limits, raw-JSON replies, no tool use); revisit
-    # with thinking enabled before reinstating it.
-    "gpt-5.6-luna": "gpt-5.6-terra",
     "bu-mini": "gpt-5.6-terra",
+    "bu-max": "gpt-5.6-sol",
 }
+
+# @nonobvious(deliberately-missing): gpt-5.6-luna is refused outright — with
+# reasoning off it narrates the answer instead of driving the action loop
+# (hallucinated execution limits, raw-JSON replies, no tool use); revisit with
+# thinking enabled before supporting it.
+_UNSUPPORTED_MODELS = {"gpt-5.6-luna"}
 
 _THINKING_BUDGETS: dict[str, int] = {
     "low": 2048,
@@ -407,6 +410,12 @@ def _resolve_model(model: str) -> tuple[str, str]:
     key = (model or "").strip()
     if key.endswith("[1m]"):
         key = key[:-4]
+    if key in _UNSUPPORTED_MODELS:
+        raise ValueError(
+            f"Model '{key}' is not supported. Recommended models: bu-latest / bu "
+            "(claude-sonnet-5), bu-mini (gpt-5.6-terra), bu-max (gpt-5.6-sol), "
+            "bu-ultra (claude-opus-5)."
+        )
     if key in _ANTHROPIC_MODELS:
         return "anthropic", _ANTHROPIC_MODELS[key]
     if key in _OPENAI_MODELS:
