@@ -474,6 +474,13 @@ _THINKING_BUDGETS: dict[str, int] = {
     "high": 16384,
 }
 
+_OPENAI_REASONING_HEADROOM: dict[str, int] = {
+    "low": 4096,
+    "medium": 8192,
+    "high": 12288,
+    "xhigh": 20480,
+}
+
 _FULL_LADDER = ("low", "medium", "high", "xhigh", "max")
 
 
@@ -570,10 +577,15 @@ def _build_llm(model: str, thinking_effort: str | None) -> tuple[str, str, Any]:
             reasoning = NOT_GIVEN
         else:
             reasoning = effort
+        # @nonobvious(forced-by): OpenAI counts reasoning tokens inside
+        # max_completion_tokens, so at higher efforts the default 4096 budget
+        # is spent on thinking and the structured output truncates mid-JSON.
+        completion_budget = 4096 + _OPENAI_REASONING_HEADROOM.get(effort, 0)
         llm = _CacheAwareChatOpenAI(
             model=model_id,
             api_key=settings.openai_api_key,
             reasoning_effort=reasoning,
+            max_completion_tokens=completion_budget,
             timeout=90,
             max_retries=3,
             # @nonobvious(forced-by): OpenAI strict structured output requires every

@@ -211,6 +211,22 @@ def test_build_llm_wire_shapes(monkeypatch):
     assert llm.reasoning_effort == "xhigh"
 
 
+def test_build_llm_openai_completion_budget_scales_with_effort(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
+    for effort, budget in (
+        ("off", 4096),
+        ("default", 4096),
+        ("low", 8192),
+        ("medium", 12288),
+        ("high", 16384),
+        ("xhigh", 24576),
+    ):
+        _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
+        assert llm.max_completion_tokens == budget, effort
+
+
 def test_resolve_opus_1m_suffix_strips_to_base():
     assert _resolve_model("claude-opus-4-8[1m]") == ("anthropic", "claude-opus-4-8")
     assert _resolve_model("claude-opus-5") == ("anthropic", "claude-opus-5")
