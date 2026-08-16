@@ -200,64 +200,6 @@ class CodeStreamObserver:
             logger.debug("code stream push failed", exc_info=True)
 
 
-class StreamingCompletionsShim:
-    """Wraps an AsyncOpenAI ``chat.completions`` resource: turns a blocking
-    ``create`` into a streamed one, feeding the accumulating content to the
-    observer, and reassembles the final completion object for the caller.
-    """
-
-    def __init__(self, inner: Any, observer: CodeStreamObserver) -> None:
-        self._inner = inner
-        self._observer = observer
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._inner, item)
-
-    async def create(self, **kwargs: Any) -> Any:
-        if kwargs.get("stream") or kwargs.get("response_format") is not None:
-            return await self._inner.create(**kwargs)
-        stream = await self._inner.create(
-            **kwargs, stream=True, stream_options={"include_usage": True}
-        )
-        parts: list[str] = []
-        finish_reason = None
-        usage = None
-        model = rid = None
-        created = 0
-        async for chunk in stream:
-            rid = getattr(chunk, "id", None) or rid
-            model = getattr(chunk, "model", None) or model
-            created = getattr(chunk, "created", None) or created
-            if getattr(chunk, "usage", None):
-                usage = chunk.usage
-            for choice in getattr(chunk, "choices", None) or []:
-                delta = getattr(choice, "delta", None)
-                if delta is not None and getattr(delta, "content", None):
-                    parts.append(delta.content)
-                    await self._observer.on_partial("".join(parts))
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason
-        from openai.types.chat import ChatCompletion, ChatCompletionMessage
-        from openai.types.chat.chat_completion import Choice
-
-        return ChatCompletion(
-            id=rid or "streamed",
-            object="chat.completion",
-            created=created or 0,
-            model=model or str(kwargs.get("model", "")),
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatCompletionMessage(
-                        role="assistant", content="".join(parts)
-                    ),
-                    finish_reason=finish_reason or "stop",
-                )
-            ],
-            usage=usage,
-        )
-
-
 def completion_has_run_code_file(completion: Any) -> bool:
     try:
         actions = getattr(completion, "action", None) or []

@@ -2,7 +2,7 @@
 
 from app.dashboard.routes import (
     MODEL_OPTIONS,
-    thinking_options_map,
+    reasoning_options_map,
     _live_sessions,
     _novnc_port_for_display,
     model_provider,
@@ -41,33 +41,35 @@ def test_model_options_curated_list():
         assert _resolve_model(value)[1]
 
 
-def test_thinking_options_map_covers_all_models_with_defaults():
-    options_map = thinking_options_map()
+def test_reasoning_options_map_covers_all_models_with_defaults():
+    options_map = reasoning_options_map()
     assert set(options_map) == {v for v, _ in MODEL_OPTIONS}
     for value, spec in options_map.items():
         values = [v for v, _ in spec["options"]]
         assert spec["default"] in values, value
         labels = dict(spec["options"])
-        assert "(Default)" in labels[spec["default"]] or labels[spec["default"]] == "Model Default"
+        assert "(Default)" in labels[spec["default"]]
 
 
-def test_thinking_options_per_generation():
-    options_map = thinking_options_map()
+def test_reasoning_options_per_generation():
+    options_map = reasoning_options_map()
     sonnet5 = options_map["claude-sonnet-5"]
     assert sonnet5["default"] == "high"
     assert dict(sonnet5["options"])["high"] == "High (Default)"
-    assert dict(sonnet5["options"])["off"] == "Off"
+    assert dict(sonnet5["options"])["none"] == "None"
+    assert "off" not in dict(sonnet5["options"])
     opus48 = options_map["claude-opus-4-8[1m]"]
-    assert opus48["default"] == "off"
-    assert dict(opus48["options"])["off"] == "None (Default)"
+    assert opus48["default"] == "none"
+    assert dict(opus48["options"])["none"] == "None (Default)"
     assert "xhigh" in dict(opus48["options"])
     fable = options_map["claude-fable-5"]
-    assert "off" not in dict(fable["options"])
+    assert "none" not in dict(fable["options"])
     assert fable["default"] == "high"
     terra = options_map["gpt-5.6-terra"]
-    assert terra["default"] == "default"
-    assert dict(terra["options"])["default"] == "Model Default"
-    assert "max" not in dict(terra["options"])
+    assert terra["default"] == "medium"
+    assert dict(terra["options"])["medium"] == "Medium (Default)"
+    assert dict(terra["options"])["max"] == "Max"
+    assert "none" in dict(terra["options"])
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
 
@@ -91,7 +93,7 @@ def test_live_sessions_filters_running_with_url_and_caps():
     assert [s["id"] for s in live] == ["a", "e"]
 
 
-def test_message_display_includes_model_thinking_card():
+def test_message_display_includes_model_reasoning_card():
     import json
 
     from app.dashboard.routes import message_display
@@ -100,21 +102,24 @@ def test_message_display_includes_model_thinking_card():
         "type": "result",
         "summary": "click 12",
         "data": json.dumps(
-            {"action": "click", "thinking": "step reasoning", "model_thinking": "native reasoning"}
+            {"action": "click", "thinking": "step reasoning", "model_reasoning": "native reasoning"}
         ),
     }
     md = message_display(row)
     assert md["thinking"] == "step reasoning"
-    assert md["model_thinking"] == "native reasoning"
+    assert md["model_reasoning"] == "native reasoning"
 
 
-def test_strip_thinking_removes_both_thinking_keys():
+def test_strip_thinking_removes_reasoning_keys_including_legacy():
     import json
 
     from app.dashboard.routes import _strip_thinking
 
-    data = json.dumps({"see": "a", "thinking": "b", "model_thinking": "c"})
+    data = json.dumps(
+        {"see": "a", "thinking": "b", "model_reasoning": "c", "model_thinking": "d"}
+    )
     stripped = json.loads(_strip_thinking(data))
     assert "thinking" not in stripped
+    assert "model_reasoning" not in stripped
     assert "model_thinking" not in stripped
     assert stripped["see"] == "a"

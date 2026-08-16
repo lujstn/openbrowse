@@ -7,65 +7,64 @@
 ## Why OpenBrowse over BU Cloud?
 
 | | BU Cloud | OpenBrowse |
-|---|---|---|
+| --- | --- | --- |
 | Hosting | Managed, per-task pricing | Your hardware, you pay only LLM tokens |
 | How it works | Code-first: the agent scripts its way through pages | Visual-first: the agent opens real tabs you can watch live, like a human working |
 | Bulk page reads | One page at a time | `read_pages` opens whole listings in parallel tab waves, one step |
 | Structured output | Schema-validated | Schema-validated, plus a live answer store with a completeness gate the agent must pass before finishing |
 | Anti-fabrication | Prompt rules | Enforced: enum values with no on-page evidence are refused at the store boundary |
 | Profiles | Cloud profiles | Import your BU Cloud profiles (cookies and localStorage) with one command |
-| Live view | Replay | Real-time VNC of the actual browser, plus a step feed with the model's thinking |
+| Live view | Replay | Real-time VNC of the actual browser, a step feed with the model's reasoning, and an IDE-style code tab that streams the agent's sandbox scripts live as they're written |
 | API | v3 REST | The same v3 REST surface: point `browser-use-sdk` at your box and change nothing but `baseUrl` and `apiKey` |
 
-## Benchmark
-
-The same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, full schema output) run against BU Cloud and against OpenBrowse on a Raspberry Pi 5:
-
-| Runtime | Model | Steps | Time | Tokens | LLM cost | Records |
-|---|---|---|---:|---:|---:|---|
-| BU Cloud | claude-sonnet-5 | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
-| **OpenBrowse** | claude-sonnet-5 | **10** | **3m 42s** | **225k** | **$0.45** | 16/16 |
-| **OpenBrowse** | gpt-5.6-terra | **6** | **2m 30s** | **129k** | **$0.23** | 16/16 |
-| **OpenBrowse** | claude-opus-5 | | | | | benchmark coming |
-
-Both OpenBrowse rows matched the reference output field for field, and were produced *concurrently* on one Raspberry Pi. The concurrent-session limit is per device and yours to configure during setup. All benchmarks were run on 14 August 2026; the exact task and output schema are in [benchmark.json](benchmark.json) if you want to repeat them.
-
-## Supported models
+## Models
 
 ### Recommended models
 
-| Model | Aliases | Description |
-|---|---|---|
-| claude-sonnet-5 | `bu`, `bu-latest` | The default: reference-quality extraction |
-| gpt-5.6-terra | `bu-mini` | Fastest and cheapest; benchmark-clean |
-| gpt-5.6-sol | `bu-max` | Flagship OpenAI reasoning tier |
-| claude-opus-5 | `bu-ultra` | Hardest tasks |
+1. **For most use cases**, `gpt-5.6-terra { "reasoningEffort": "none" }` and `claude-sonnet-5 { "reasoningEffort": "high" }` both strike a great balance of reliablity, accuracy, and cost.
 
-### Other supported models
+2. **For intense workflows**, using either `claude-opus-5` or `gpt-5.6-sol` with `{ "reasoningEffort": "none" }` are great options, but watch out for token burn.
 
-| Model | Benchmark observations |
-|---|---|
-| `claude-fable-5` | Not benchmarked. The most capable model available, and the most expensive at $10/$50 per million tokens. Model thinking cannot be disabled, so there is no `off` — see the thinking table below. Requires an organisation on 30-day data retention. |
-| `claude-mythos-5` | Not benchmarked. Identical to Fable 5 in capability, pricing and behaviour, including the always-on thinking. Only reachable by organisations in Project Glasswing; every other API key is rejected. |
-| `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not benchmarked |
-| `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not benchmarked |
-| `claude-opus-4.6`, `claude-opus-4.6[1m]` | Not benchmarked |
-| `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not benchmarked |
-| `gpt-5.6-luna` | ⚠️ **Accessible, but we strongly advise against use.** Often narrates answers instead of driving the browser and invents nonexistent "limits" to avoid completing tasks. [Whilst this is the model BU Cloud recommends](https://docs.browser-use.com/cloud/agent/models), it was repeatedly unable to complete our benchmark across multiple runs. |
+3. **On a budget?** Use `gpt-5.6-luna { "reasoningEffort": "max" }` with a tightly focused prompt. It might take a while, and it's more prone to hallucinations (especially with broad prompts), but the actual extractions are still great quality.
 
-### Model thinking
+### Benchmarks and observations
 
-OpenBrowse separates two kinds of reasoning. **Browser thinking** is the platform's own step reasoning — the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed — and is always on for every model. **Model thinking** is the provider-side reasoning feature (Anthropic extended thinking, OpenAI reasoning effort), controlled per session by `modelThinkingEffort` (the API also accepts the older `thinkingEffort` name). Values are validated per model at runtime; the valid set, and what an unset value means, differ by model:
+The same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, full schema output) run against BU Cloud and against OpenBrowse on a Raspberry Pi 5, ordered best to worst:
 
-| Model | Valid efforts | Default (when unset) | Can be disabled? |
-|---|---|---|---|
-| claude-sonnet-5, claude-opus-5 | low, medium, high, xhigh, max | **high** — these models think unless told not to | Yes (`off`) |
-| claude-fable-5, claude-mythos-5 | low, medium, high, xhigh, max | high | **No** — the API rejects a disabled config, so `off` is refused with an error |
-| claude-opus-4.8 | low, medium, high, xhigh, max | none (no thinking) | Yes |
-| claude-opus-4.7, claude-opus-4.6, claude-sonnet-4.6 | low, medium, high | none (no thinking) | Yes |
-| gpt-5.6-terra, gpt-5.6-sol, gpt-5.6-luna | low, medium, high, xhigh | a provider-managed depth below `low` (the API rejects `max`) | Yes |
+| Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
+| --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
+| OpenBrowse | gpt-5.6-terra | none | **6** | **2m 30s** | **129k** | **$0.23** | 16/16 |
+| OpenBrowse | claude-sonnet-5 | high | **10** | **3m 42s** | **225k** | **$0.45** | 16/16 |
+| OpenBrowse | claude-sonnet-5 | none | **15** | 10m 04s | **382k** | **$0.69** | 16/16 |
+| OpenBrowse | gpt-5.6-terra | high | **17** | 6m 10s | **364k** | **$0.71** | 16/16 |
+| OpenBrowse | claude-opus-5 | none | 21 | 5m 27s | **584k** | $1.82 | 16/16 |
+| OpenBrowse | gpt-5.6-luna | xhigh | 43 | 17m 35s | **935k** | **$0.23** | 16/16, one wrong URL |
+| OpenBrowse | claude-opus-5 | high | 37 | DNF | 1.06M | $3.00 | DNF, stopped at the $3 cost cap |
 
-`off` genuinely disables thinking wherever the provider allows it, and the dashboard always preselects each model's real default — e.g. "High (Default)" for Sonnet 5, "None (Default)" for Opus 4.8 — so what a run will do is on screen before it starts. When a model returns its reasoning (Anthropic adaptive thinking with an explicit effort), the summarised reasoning appears live in the session activity bar and as a 🧠 card on each step.
+OpenAI and Anthropic models are generally at their best at the opposite ends of the reasoning dial. For example, OpenAI's GPT-5.6-Terra performs better with less reasoning, spending less time planning ahead and more time reacting to the page in front of it, while Anthropic's 5-series Claude models lean towards rabbit holes and need reasoning time to refocus on the goal.
+
+### What is "thinking" in OpenBrowse?
+
+OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of describing how the platform works in "steps" (the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed), so it can't be disabled.
+
+**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime. Models will have different default reasoning levels depending on their provider, so it's a good idea to set this value explicitly.
+
+### All supported models
+
+| Model | Description |
+| --- | --- |
+| `claude-opus-5` | Flagship Anthropic reasoning tier |
+| `claude-sonnet-5` | Our default for reliable, high-quality extraction |
+| `gpt-5.6-sol` | Flagship OpenAI reasoning tier |
+| `gpt-5.6-terra` | Fastest and cheapest, great all-rounder |
+| `gpt-5.6-luna` | Cheap but slow; only completes reliably with reasoning at `xhigh` or above, and even then took ~10x longer than Terra on our benchmark. Use only when time doesn't matter. |
+| `claude-mythos-5` | Not tested. Only reachable by organisations in Project Glasswing. |
+| `claude-fable-5` | Not tested. The most capable model available, and model reasoning cannot be disabled. |
+| `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not tested. |
+| `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not tested. |
+| `claude-opus-4.6`, `claude-opus-4.6[1m]` | Not tested. |
+| `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not tested. |
 
 ## Quick start
 
@@ -90,7 +89,7 @@ const client = new BrowserUse({
 
 const task = await client.tasks.create({
   task: "Find every product on this page and return the structured list.",
-  model: "bu-latest",
+  model: "claude-sonnet-5",
   outputSchema: mySchema,
 });
 ```
@@ -116,9 +115,9 @@ sudo tailscale funnel --bg 8420
 - **Schema answer store**: every write validated live against your JSON Schema, coverage tracked per field, a completeness gate before `done`, and mark-absent semantics for data a site genuinely does not publish.
 - **Grounding guards**: shell-read detection with automatic in-frame retry, evidence-checked enum writes, honest failure over invented data.
 - **Profile import**: bring BU Cloud profiles (cookies + localStorage) via CLI or the dashboard.
-- **Dashboard**: live session feed with model thinking, per-step costs, JSON export (full / steps / output-only), profile management.
+- **Dashboard**: live session feed with model reasoning, per-step costs, JSON export (full / steps / output-only), profile management.
 - **CAPTCHA solving**: optional CapSolver integration.
-- **Multi-provider**: Anthropic and OpenAI models behind one alias set, with per-provider repair layers for each family's failure modes.
+- **Multi-provider**: Anthropic and OpenAI models behind one API, with per-provider repair layers for each family's failure modes.
 
 ## Licence
 

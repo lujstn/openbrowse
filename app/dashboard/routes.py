@@ -21,7 +21,7 @@ from app.agent.pool import pool
 from app.agent.runner import (
     _category_for,
     get_live_agent,
-    model_thinking,
+    model_reasoning,
     resolve_default_effort,
     validate_effort,
 )
@@ -109,7 +109,7 @@ def message_display(m: dict) -> dict:
 
     cards = {
         k: data.get(k)
-        for k in ("see", "plan", "next", "thinking", "model_thinking")
+        for k in ("see", "plan", "next", "thinking", "model_reasoning")
         if data.get(k)
     }
     return {
@@ -144,25 +144,22 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("gpt-5.6-luna", "GPT-5.6 Luna (not recommended)"),
 ]
 
-def _thinking_options_for(model_value: str) -> dict[str, Any]:
-    spec = model_thinking(model_value)
+def _reasoning_options_for(model_value: str) -> dict[str, Any]:
+    spec = model_reasoning(model_value)
     options: list[tuple[str, str]] = []
-    if spec.default == "default":
-        options.append(("default", "Model Default"))
     if spec.can_disable:
-        label = "None (Default)" if spec.default == "off" else "Off"
-        options.append(("off", label))
+        label = "None (Default)" if spec.default == "none" else "None"
+        options.append(("none", label))
     for level in spec.efforts:
         label = "XHigh" if level == "xhigh" else level.capitalize()
         if level == spec.default:
             label = f"{label} (Default)"
         options.append((level, label))
-    default_value = "default" if spec.default == "default" else spec.default
-    return {"options": options, "default": default_value}
+    return {"options": options, "default": spec.default}
 
 
-def thinking_options_map() -> dict[str, dict[str, Any]]:
-    return {value: _thinking_options_for(value) for value, _ in MODEL_OPTIONS}
+def reasoning_options_map() -> dict[str, dict[str, Any]]:
+    return {value: _reasoning_options_for(value) for value, _ in MODEL_OPTIONS}
 
 _LIVE_STATUSES = ("running",)
 
@@ -244,17 +241,17 @@ def _format_relative_time(iso_str: str) -> str:
 @router.get("/", response_class=HTMLResponse)
 async def run_page(request: Request):
     profiles, _ = await crud.list_profiles(page=1, page_size=50)
-    options_map = thinking_options_map()
-    default_thinking = options_map.get(settings.default_model, {})
+    options_map = reasoning_options_map()
+    default_reasoning = options_map.get(settings.default_model, {})
     return templates.TemplateResponse(
         request,
         "run.html",
         context={
             "profiles": profiles,
             "models": MODEL_OPTIONS,
-            "thinking_options": default_thinking.get("options", []),
-            "thinking_default": default_thinking.get("default", "default"),
-            "thinking_options_json": json.dumps(options_map),
+            "reasoning_options": default_reasoning.get("options", []),
+            "reasoning_default": default_reasoning.get("default", "default"),
+            "reasoning_options_json": json.dumps(options_map),
             "default_model": settings.default_model,
             "active_count": pool.active_count,
             "max_concurrent": settings.max_concurrent_sessions,
@@ -269,11 +266,11 @@ async def run_task(
     profile_id: str = Form(""),
     max_cost_usd: float = Form(0.50),
     keep_alive: bool = Form(False),
-    thinking_effort: str = Form("default"),
+    reasoning_effort: str = Form("default"),
     output_schema: str = Form(""),
 ):
     try:
-        effort = validate_effort(model, thinking_effort)
+        effort = validate_effort(model, reasoning_effort)
         if effort == "default":
             effort = resolve_default_effort(model)
     except ValueError as e:
@@ -299,7 +296,7 @@ async def run_task(
         output_schema=parsed_schema,
         max_cost_usd=max_cost_usd,
         keep_alive=keep_alive,
-        thinking_effort=effort,
+        reasoning_effort=effort,
     )
     dispatched = asyncio.create_task(pool.submit(session["id"]))
     _dispatched_tasks.add(dispatched)
@@ -356,6 +353,9 @@ def _strip_thinking(data: str | None) -> str | None:
         return data
     if isinstance(parsed, dict):
         parsed.pop("thinking", None)
+        parsed.pop("model_reasoning", None)
+        # @nonobvious(mirrors): rows written before the model_reasoning rename
+        # stored the raw reasoning under model_thinking; keep stripping it.
         parsed.pop("model_thinking", None)
         return json.dumps(parsed)
     return data

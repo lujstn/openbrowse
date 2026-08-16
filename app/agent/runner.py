@@ -11,11 +11,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from openai import NOT_GIVEN
+from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
 from browser_use.llm import UserMessage
-from browser_use.llm.exceptions import ModelOutputTruncatedError
+from browser_use.llm.exceptions import (
+    ModelOutputTruncatedError,
+    ModelProviderError,
+    ModelRateLimitError,
+)
+from browser_use.llm.openai.responses_serializer import ResponsesAPIMessageSerializer
+from browser_use.llm.schema import SchemaOptimizer
+from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
 from app.agent import cost
 from app.agent.code_stream import CodeStreamObserver
@@ -250,44 +257,132 @@ async def _settle_code_stream(llm: Any, result: Any, output_format: Any) -> None
         logger.debug("code stream settle failed", exc_info=True)
 
 
-class _CacheAwareChatOpenAI(ChatOpenAI):
-    """ChatOpenAI that also records OpenAI cache-write tokens, which browser-use drops,
-    and streams completions through the code observer when one is attached."""
+class _ResponsesChatOpenAI(ChatOpenAI):
+    """ChatOpenAI pointed at OpenAI's Responses API instead of chat.completions:
+    the Responses endpoint accepts the full reasoning ladder (chat.completions
+    rejects "max"). ``reasoning_effort`` here is the Responses effort string, or
+    None to omit the parameter so the provider's own default applies.
+    ``max_completion_tokens`` maps to ``max_output_tokens``.
+    """
 
-    def get_client(self) -> Any:
-        client = super().get_client()
-        observer = getattr(self, "stream_observer", None)
-        if observer is not None:
-            from app.agent.code_stream import StreamingCompletionsShim
+    def _build_request(self, messages: Any, output_format: Any) -> dict[str, Any]:
+        input_messages = ResponsesAPIMessageSerializer.serialize_messages(messages)
+        # @nonobvious(deliberately-missing): no `tools` parameter, ever — declaring
+        # any would let Responses built-ins (web_search, code_interpreter) activate
+        # and act outside the audited browser sandbox.
+        params: dict[str, Any] = {
+            "model": self.model,
+            "input": input_messages,
+            "store": False,
+        }
+        if self.max_completion_tokens is not None:
+            params["max_output_tokens"] = self.max_completion_tokens
+        if self.reasoning_effort is not None:
+            params["reasoning"] = {"effort": self.reasoning_effort}
+        # @nonobvious(mirrors): same trust model as the chat.completions path —
+        # strict structured output cannot express our action registry, so the
+        # schema rides in the system message and the reply is parsed from text.
+        if (
+            output_format is not None
+            and self.add_schema_to_system_prompt
+            and input_messages
+            and input_messages[0].get("role") == "system"
+        ):
+            json_schema = SchemaOptimizer.create_optimized_json_schema(
+                output_format,
+                remove_min_items=self.remove_min_items_from_schema,
+                remove_defaults=self.remove_defaults_from_schema,
+            )
+            schema_text = f"\n<json_schema>\n{json_schema}\n</json_schema>"
+            content = input_messages[0].get("content", "")
+            if isinstance(content, str):
+                input_messages[0]["content"] = content + schema_text
+            elif isinstance(content, list):
+                input_messages[0]["content"] = list(content) + [
+                    {"type": "input_text", "text": schema_text}
+                ]
+        return params
 
-            try:
-                client.chat.completions = StreamingCompletionsShim(
-                    client.chat.completions, observer
-                )
-            except Exception:
-                logger.debug("streaming shim attach failed", exc_info=True)
-        return client
+    @staticmethod
+    def _output_text(response: Any) -> str:
+        text = getattr(response, "output_text", None)
+        if text:
+            return text
+        parts: list[str] = []
+        for item in getattr(response, "output", None) or []:
+            for part in getattr(item, "content", None) or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(part_text)
+        return "".join(parts)
+
+    def _raise_if_truncated(self, response: Any) -> None:
+        details = getattr(response, "incomplete_details", None)
+        if getattr(response, "status", None) == "incomplete" and (
+            getattr(details, "reason", None) == "max_output_tokens"
+        ):
+            raise ModelOutputTruncatedError(
+                message=(
+                    f"Model output was truncated at max_output_tokens="
+                    f"{self.max_completion_tokens}; the structured output is "
+                    "incomplete. Increase max_output_tokens or request shorter output."
+                ),
+                model=self.name,
+            )
+
+    @staticmethod
+    def _usage_from_responses(response: Any) -> ChatInvokeUsage | None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        details = getattr(usage, "input_tokens_details", None)
+        return ChatInvokeUsage(
+            prompt_tokens=usage.input_tokens,
+            prompt_cached_tokens=getattr(details, "cached_tokens", None),
+            # @nonobvious(forced-by): the Responses usage object reports cache
+            # reads only; cache writes are not exposed, so creation stays None.
+            prompt_cache_creation_tokens=None,
+            prompt_image_tokens=None,
+            completion_tokens=usage.output_tokens,
+            total_tokens=usage.total_tokens,
+        )
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
-        result = await super().ainvoke(messages, output_format, **kwargs)
+        params = self._build_request(messages, output_format)
+        try:
+            response = await self.get_client().responses.create(**params)
+            self._raise_if_truncated(response)
+            text = self._output_text(response)
+            usage = self._usage_from_responses(response)
+            stop_reason = getattr(response, "status", None)
+            if output_format is None:
+                result: Any = ChatInvokeCompletion(
+                    completion=text or "", usage=usage, stop_reason=stop_reason
+                )
+            else:
+                if not text:
+                    raise ModelProviderError(
+                        message="Failed to parse structured output from model response",
+                        status_code=500,
+                        model=self.name,
+                    )
+                result = ChatInvokeCompletion(
+                    completion=output_format.model_validate_json(text),
+                    usage=usage,
+                    stop_reason=stop_reason,
+                )
+        except (ModelProviderError, ModelOutputTruncatedError):
+            raise
+        except RateLimitError as e:
+            raise ModelRateLimitError(message=e.message, model=self.name) from e
+        except APIConnectionError as e:
+            raise ModelProviderError(message=str(e), model=self.name) from e
+        except APIStatusError as e:
+            raise ModelProviderError(
+                message=e.message, status_code=e.status_code, model=self.name
+            ) from e
         await _settle_code_stream(self, result, output_format)
         return result
-
-    def _get_usage(self, response: Any):
-        usage = super()._get_usage(response)
-        if usage is None or getattr(response, "usage", None) is None:
-            return usage
-        details = getattr(response.usage, "prompt_tokens_details", None)
-        if details is None:
-            return usage
-        cache_write = getattr(details, "cache_write_tokens", None)
-        if cache_write is None:
-            extra = getattr(details, "model_extra", None)
-            if extra:
-                cache_write = extra.get("cache_write_tokens")
-        if cache_write:
-            usage.prompt_cache_creation_tokens = cache_write
-        return usage
 
 
 _MISSING_ACTION_CORRECTION = (
@@ -356,7 +451,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         await _settle_code_stream(self, result, output_format)
         thinking_text = " ".join((getattr(result, "thinking", None) or "").split())
         if thinking_text:
-            self._last_model_thinking = thinking_text
+            self._last_model_reasoning = thinking_text
             sid = getattr(self, "_activity_session", None)
             if sid:
                 snippet = thinking_text[:140] + ("…" if len(thinking_text) > 140 else "")
@@ -369,7 +464,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         sid = getattr(self, "_activity_session", None)
         if sid:
             last = getattr(self, "_last_action", None)
-            label = "Model thinking" + (f" · next step after {last}" if last else "")
+            label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True)
         try:
             try:
@@ -436,36 +531,12 @@ _ANTHROPIC_MODELS: dict[str, str] = {
     "claude-opus-4-7": "claude-opus-4-7",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6": "claude-opus-4-6",
-    "bu": "claude-sonnet-5",
-    "bu-latest": "claude-sonnet-5",
-    "bu-ultra": "claude-opus-5",
 }
 
 _OPENAI_MODELS: dict[str, str] = {
     "gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
     "gpt-5.6-luna": "gpt-5.6-luna",
-    "bu-mini": "gpt-5.6-terra",
-    "bu-max": "gpt-5.6-sol",
-}
-
-_ALWAYS_THINKING_NOTE = (
-    "model thinking is always on for this model — the API rejects a disabled "
-    "thinking config, so there is no 'off'. The default effort reasons at the "
-    "model's own depth; expect thinking tokens in every step."
-)
-
-_MODEL_WARNINGS: dict[str, str] = {
-    "claude-fable-5": _ALWAYS_THINKING_NOTE,
-    "claude-mythos-5": (
-        f"{_ALWAYS_THINKING_NOTE} Access is limited to Project Glasswing "
-        "organisations; other API keys will be rejected."
-    ),
-    "gpt-5.6-luna": (
-        "expect poor performance — this model often narrates answers instead of "
-        "driving the browser and invents nonexistent limits to avoid completing "
-        "tasks."
-    ),
 }
 
 _THINKING_BUDGETS: dict[str, int] = {
@@ -474,79 +545,98 @@ _THINKING_BUDGETS: dict[str, int] = {
     "high": 16384,
 }
 
+# @nonobvious(forced-by): OpenAI counts reasoning tokens inside the output
+# budget, so higher efforts need proportionally more room above the 4096 the
+# structured reply itself needs; "default" gets the medium tier because the
+# provider reasons at ≈medium when the parameter is omitted.
 _OPENAI_REASONING_HEADROOM: dict[str, int] = {
+    "default": 8192,
     "low": 4096,
     "medium": 8192,
     "high": 12288,
     "xhigh": 20480,
+    "max": 28672,
 }
+
+_OPENAI_LONG_EFFORTS = ("high", "xhigh", "max")
 
 _FULL_LADDER = ("low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
-class ModelThinking:
-    """One model's provider-side reasoning capability (ModelThinking), as
-    distinct from the always-on step reasoning in the feed (BrowserThinking).
+class ModelReasoning:
+    """One model's provider-side reasoning capability (model reasoning), as
+    distinct from the always-on step reasoning in the feed (browser thinking).
 
-    ``default`` is what an unset effort means for this model: "off", a level
-    name, or the literal "default" when the provider manages an unnamed depth
-    of its own (GPT-5.6 reasons below "low" with the parameter omitted).
+    ``default`` is what an unset effort means for this model: "none" or a
+    level name.
     """
 
     efforts: tuple[str, ...]
     default: str
     can_disable: bool
-    style: str  # @nonobvious(means): "adaptive" | "budget" | "openai" wire shape
+    style: str  # @nonobvious(means): "adaptive" | "budget" | "openai-responses" wire shape
 
 # @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16 —
-# omitting `thinking` runs adaptive at "high" on the Claude 5 generation but
-# runs WITHOUT thinking on Opus 4.8 and older; Fable/Mythos 400 on a disabled
-# config; GPT-5.6 rejects "max" and reasons below "low" when the parameter is
-# omitted. Re-probe before editing rows.
-_MODEL_THINKING: dict[str, ModelThinking] = {
-    "claude-sonnet-5": ModelThinking(_FULL_LADDER, "high", True, "adaptive"),
-    "claude-opus-5": ModelThinking(_FULL_LADDER, "high", True, "adaptive"),
-    "claude-fable-5": ModelThinking(_FULL_LADDER, "high", False, "adaptive"),
-    "claude-mythos-5": ModelThinking(_FULL_LADDER, "high", False, "adaptive"),
-    "claude-opus-4-8": ModelThinking(_FULL_LADDER, "off", True, "adaptive"),
-    "claude-opus-4-7": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
-    "claude-opus-4-6": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
-    "claude-sonnet-4-6": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
-    "gpt-5.6-terra": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
-    "gpt-5.6-sol": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
-    "gpt-5.6-luna": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
+# omitting `thinking` runs adaptive at "high" on Claude 5 but WITHOUT thinking
+# on Opus 4.8 and older; Fable/Mythos 400 on a disabled config; GPT-5.6 runs on
+# the Responses endpoint, which accepts "none" through "max" (chat.completions
+# rejects "max") and reasons at ≈medium when omitted. Re-probe before editing.
+_MODEL_REASONING: dict[str, ModelReasoning] = {
+    "claude-sonnet-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-opus-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-fable-5": ModelReasoning(_FULL_LADDER, "high", False, "adaptive"),
+    "claude-mythos-5": ModelReasoning(_FULL_LADDER, "high", False, "adaptive"),
+    "claude-opus-4-8": ModelReasoning(_FULL_LADDER, "none", True, "adaptive"),
+    "claude-opus-4-7": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
+    "claude-opus-4-6": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
+    "claude-sonnet-4-6": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
+    "gpt-5.6-terra": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
+    "gpt-5.6-sol": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
+    "gpt-5.6-luna": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
 }
 
 
-def model_thinking(model: str) -> ModelThinking:
+def model_reasoning(model: str) -> ModelReasoning:
     _, model_id = _resolve_model(model)
-    return _MODEL_THINKING[model_id]
+    return _MODEL_REASONING[model_id]
 
 
 def valid_efforts(model: str) -> list[str]:
-    spec = model_thinking(model)
+    spec = model_reasoning(model)
     out = ["default"]
     if spec.can_disable:
-        out.append("off")
+        out.append("none")
     out.extend(spec.efforts)
     return out
 
 
 def resolve_default_effort(model: str) -> str:
-    return model_thinking(model).default
+    return model_reasoning(model).default
 
 
 def validate_effort(model: str, effort: str | None) -> str:
-    """The canonical ModelThinkingEffort for this model, or a loud ValueError."""
+    """The canonical reasoningEffort for this model, or a loud ValueError."""
     key = (effort or "default").strip().lower()
     allowed = valid_efforts(model)
     if key not in allowed:
+        if key == "none" and not model_reasoning(model).can_disable:
+            raise ValueError(
+                f"reasoning cannot be disabled on {model}. "
+                f"Valid values: {', '.join(allowed)}."
+            )
         raise ValueError(
-            f"'{effort}' is not a valid model thinking effort for {model}. "
+            f"'{effort}' is not a valid reasoning effort for {model}. "
             f"Valid values: {', '.join(allowed)}."
         )
     return key
+
+
+def _canonical_stored_effort(value: str | None) -> str:
+    effort = (value or "default").strip().lower()
+    # @nonobvious(mirrors): sessions stored before the reasoningEffort rename
+    # hold "off" for disabled reasoning; the canonical value is now "none".
+    return "none" if effort == "off" else effort
 
 
 def _resolve_model(model: str) -> tuple[str, str]:
@@ -560,33 +650,23 @@ def _resolve_model(model: str) -> tuple[str, str]:
     raise ValueError(f"'{key}' is not a valid model.")
 
 
-def _build_llm(model: str, thinking_effort: str | None) -> tuple[str, str, Any]:
+def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]:
     want_1m = (model or "").strip().endswith("[1m]")
     provider, model_id = _resolve_model(model)
-    effort = validate_effort(model, thinking_effort)
-    spec = _MODEL_THINKING[model_id]
+    effort = validate_effort(model, reasoning_effort)
+    spec = _MODEL_REASONING[model_id]
     if provider == "openai":
         if not settings.openai_api_key:
             raise ValueError(f"Model '{model}' needs OPENAI_API_KEY, which is not configured")
-        if effort == "off":
-            reasoning = "none"
-        elif effort == "default":
-            # @nonobvious(forced-by): browser-use always sends reasoning_effort
-            # for reasoning models; NOT_GIVEN is the only way to omit it so the
-            # provider's own default applies.
-            reasoning = NOT_GIVEN
-        else:
-            reasoning = effort
-        # @nonobvious(forced-by): OpenAI counts reasoning tokens inside
-        # max_completion_tokens, so at higher efforts the default 4096 budget
-        # is spent on thinking and the structured output truncates mid-JSON.
         completion_budget = 4096 + _OPENAI_REASONING_HEADROOM.get(effort, 0)
-        llm = _CacheAwareChatOpenAI(
+        llm = _ResponsesChatOpenAI(
             model=model_id,
             api_key=settings.openai_api_key,
-            reasoning_effort=reasoning,
+            reasoning_effort=None if effort == "default" else effort,
             max_completion_tokens=completion_budget,
-            timeout=90,
+            # @nonobvious(forced-by): high-effort reasoning turns routinely run
+            # past 90s on the Responses endpoint before the first byte arrives.
+            timeout=240 if effort in _OPENAI_LONG_EFFORTS else 90,
             max_retries=3,
             # @nonobvious(forced-by): OpenAI strict structured output requires every
             # object to list all properties as required and forbids free-form dicts,
@@ -611,10 +691,10 @@ def _build_llm(model: str, thinking_effort: str | None) -> tuple[str, str, Any]:
         kwargs["betas"] = [ONE_M_BETA]
     # @nonobvious(forced-by): omission is the only spelling of "model default"
     # the API offers, and on the Claude 5 generation it means adaptive thinking
-    # ON at effort high — so "off" must send an explicit disabled config, never
-    # omit. validate_effort has already rejected "off" for the models that 400
+    # ON at effort high — so "none" must send an explicit disabled config, never
+    # omit. validate_effort has already rejected "none" for the models that 400
     # on a disabled config (Fable, Mythos).
-    if effort == "off":
+    if effort == "none":
         kwargs["thinking"] = {"type": "disabled"}
     elif effort != "default":
         if spec.style == "adaptive":
@@ -894,14 +974,14 @@ async def run_agent_session(session_id: str) -> None:
         return
 
     requested_model = session.get("model") or settings.default_model
-    thinking_effort = session.get("thinking_effort") or "default"
+    reasoning_effort = _canonical_stored_effort(session.get("reasoning_effort"))
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
     max_cost = session.get("max_cost_usd")
 
     try:
-        provider, model, llm = _build_llm(requested_model, thinking_effort)
+        provider, model, llm = _build_llm(requested_model, reasoning_effort)
     except ValueError as e:
         logger.error("Session %s LLM setup failed: %s", session_id, e)
         await crud.update_session(session_id, status="error")
@@ -917,7 +997,7 @@ async def run_agent_session(session_id: str) -> None:
 
     north_star_task: asyncio.Task | None = None
     try:
-        preflight_effort = "off" if model_thinking(requested_model).can_disable else "default"
+        preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
         _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
         try:
             preflight_llm.max_tokens = 300
@@ -962,17 +1042,6 @@ async def run_agent_session(session_id: str) -> None:
             msg_type="planning",
             summary=f"Session started with model {model}",
         )
-        warned_model = _resolve_model(model)[1]
-        if warned_model in _MODEL_WARNINGS:
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                summary=f"⚠️ {warned_model}: {_MODEL_WARNINGS[warned_model]}",
-                data=json.dumps({"category": "memory", "action": "modelWarning"}),
-                count_step=False,
-            )
-
         browser_session = BrowserSession(
             cdp_url=cdp_url,
             storage_state=storage_state_path,
@@ -1218,10 +1287,10 @@ async def run_agent_session(session_id: str) -> None:
                     val = getattr(step.model_output, src, None)
                     if val:
                         row_data[key] = str(val)[:1500]
-            native_thinking = getattr(llm, "_last_model_thinking", None)
-            if native_thinking:
-                row_data["model_thinking"] = str(native_thinking)[:1500]
-                llm._last_model_thinking = None
+            native_reasoning = getattr(llm, "_last_model_reasoning", None)
+            if native_reasoning:
+                row_data["model_reasoning"] = str(native_reasoning)[:1500]
+                llm._last_model_reasoning = None
             await crud.create_message(
                 session_id=session_id,
                 role="ai",

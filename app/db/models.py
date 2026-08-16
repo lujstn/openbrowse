@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     display_num INTEGER,
     system_prompt_extension TEXT,
     keep_alive INTEGER NOT NULL DEFAULT 0,
-    thinking_effort TEXT NOT NULL DEFAULT 'off',
+    reasoning_effort TEXT NOT NULL DEFAULT 'default',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (profile_id) REFERENCES profiles(id)
@@ -81,9 +81,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN keep_alive INTEGER NOT NULL DEFAULT 0"
         )
-    if "thinking_effort" not in columns:
+    if "thinking_effort" in columns:
         await db.execute(
-            "ALTER TABLE sessions ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'off'"
+            "ALTER TABLE sessions RENAME COLUMN thinking_effort TO reasoning_effort"
+        )
+    elif "reasoning_effort" not in columns:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
         )
     if "capsolver_cost_usd" not in columns:
         await db.execute(

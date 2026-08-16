@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.agent.pool import pool
 from app.agent.runner import resolve_default_effort, validate_effort
@@ -14,6 +14,15 @@ from app.auth import require_api_key
 from app.db import crud
 
 router = APIRouter(prefix="/v3/sessions", tags=["sessions"])
+
+# @nonobvious(means): the mapped levels are BU Cloud's thinkingLevel enum, so
+# v3 SDK callers keep working; every other spelling is steered to reasoningEffort.
+_THINKING_LEVEL_MAP = {
+    "disabled": "none",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+}
 
 
 # ── Pydantic models (match SDK types exactly) ────────────────────────
@@ -32,11 +41,31 @@ class RunTaskRequest(BaseModel):
     skills: bool = True
     enableRecording: bool = False
     proxyCountryCode: str | None = None
-    modelThinkingEffort: str | None = None
-    thinkingEffort: str | None = None  # @nonobvious(means): deprecated alias of modelThinkingEffort
+    reasoningEffort: str | None = None
 
-    def effective_thinking_effort(self) -> str:
-        return self.modelThinkingEffort or self.thinkingEffort or "default"
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_effort_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for legacy in ("thinkingEffort", "modelThinkingEffort"):
+            if legacy in data:
+                raise ValueError(
+                    f"'{legacy}' is no longer supported; use 'reasoningEffort'."
+                )
+        if "thinkingLevel" in data:
+            if "reasoningEffort" in data:
+                raise ValueError(
+                    "send only one of 'thinkingLevel' and 'reasoningEffort'."
+                )
+            level = data.pop("thinkingLevel")
+            mapped = _THINKING_LEVEL_MAP.get(level)
+            if mapped is None:
+                raise ValueError(
+                    f"'{level}' is not a supported thinkingLevel; use 'reasoningEffort'."
+                )
+            data["reasoningEffort"] = mapped
+        return data
 
 
 class SessionResponse(BaseModel):
@@ -63,8 +92,7 @@ class SessionResponse(BaseModel):
     proxyUsedMb: str = "0"
     totalCostUsd: str = "0"
     screenshotUrl: str | None = None
-    modelThinkingEffort: str = "default"
-    thinkingEffort: str = "default"  # @nonobvious(means): deprecated alias of modelThinkingEffort
+    reasoningEffort: str = "default"
     agentmailEmail: str | None = None
     integrationsUsed: list[str] = []
     createdAt: str
@@ -135,8 +163,7 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
         totalOutputTokens=row.get("total_output_tokens", 0),
         llmCostUsd=str(row.get("llm_cost_usd", 0)),
         totalCostUsd=str(row.get("total_cost_usd", 0)),
-        modelThinkingEffort=row.get("thinking_effort") or "default",
-        thinkingEffort=row.get("thinking_effort") or "default",
+        reasoningEffort=row.get("reasoning_effort") or "default",
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
     )
@@ -167,7 +194,7 @@ async def create_session(
     body = body or RunTaskRequest()
 
     try:
-        effort = validate_effort(body.model, body.effective_thinking_effort())
+        effort = validate_effort(body.model, body.reasoningEffort or "default")
         if effort == "default":
             effort = resolve_default_effort(body.model)
     except ValueError as e:
@@ -194,7 +221,7 @@ async def create_session(
             system_prompt_extension=body.systemPromptExtension,
             max_cost_usd=body.maxCostUsd,
             keep_alive=int(body.keepAlive),
-            thinking_effort=effort,
+            reasoning_effort=effort,
         )
         await pool.submit(body.sessionId)
         return _to_session_response(session)
@@ -208,7 +235,7 @@ async def create_session(
         system_prompt_extension=body.systemPromptExtension,
         max_cost_usd=body.maxCostUsd,
         keep_alive=body.keepAlive,
-        thinking_effort=effort,
+        reasoning_effort=effort,
     )
 
     if body.task:

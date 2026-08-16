@@ -18,7 +18,7 @@ _SESSION_COLUMNS = {
     "profile_id", "sensitive_data", "max_cost_usd", "total_input_tokens",
     "total_output_tokens", "llm_cost_usd", "total_cost_usd", "capsolver_cost_usd",
     "screenshot_path", "display_num", "system_prompt_extension",
-    "keep_alive", "thinking_effort", "updated_at",
+    "keep_alive", "reasoning_effort", "updated_at",
 }
 
 _SAFE_PROFILE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -49,7 +49,7 @@ async def create_session(
     system_prompt_extension: str | None = None,
     max_cost_usd: float | None = None,
     keep_alive: bool = False,
-    thinking_effort: str = "default",
+    reasoning_effort: str = "default",
 ) -> dict[str, Any]:
     session_id = _new_id()
     now = _now()
@@ -59,7 +59,7 @@ async def create_session(
             """INSERT INTO sessions
                (id, status, model, task, profile_id, output_schema,
                 sensitive_data, system_prompt_extension, max_cost_usd,
-                keep_alive, thinking_effort, created_at, updated_at)
+                keep_alive, reasoning_effort, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
@@ -72,7 +72,7 @@ async def create_session(
                 system_prompt_extension,
                 max_cost_usd,
                 int(keep_alive),
-                thinking_effort,
+                reasoning_effort,
                 now,
                 now,
             ),

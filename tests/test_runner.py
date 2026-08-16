@@ -1,4 +1,4 @@
-"""Agent runner tests — model registry, provider routing, thinking, LLM builder."""
+"""Agent runner tests — model registry, provider routing, reasoning, LLM builder."""
 
 import types
 from datetime import datetime, timezone
@@ -8,6 +8,7 @@ import pytest
 from app.agent.runner import (
     _THINKING_BUDGETS,
     _build_llm,
+    _canonical_stored_effort,
     _resolve_model,
     resolve_default_effort,
     valid_efforts,
@@ -34,14 +35,6 @@ def test_resolve_sonnet5_and_opus48():
     assert _resolve_model("claude-opus-4-8") == ("anthropic", "claude-opus-4-8")
 
 
-def test_resolve_aliases():
-    assert _resolve_model("bu") == ("anthropic", "claude-sonnet-5")
-    assert _resolve_model("bu-latest") == ("anthropic", "claude-sonnet-5")
-    assert _resolve_model("bu-ultra") == ("anthropic", "claude-opus-5")
-    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
-    assert _resolve_model("bu-max") == ("openai", "gpt-5.6-sol")
-
-
 def test_resolve_openai_gpt56():
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
@@ -54,6 +47,19 @@ def test_resolve_unknown_models_rejected():
             _resolve_model(bad)
 
 
+def test_removed_aliases_rejected():
+    for alias in ("bu", "bu-latest", "bu-ultra", "bu-mini", "bu-max"):
+        with pytest.raises(ValueError, match="not a valid model"):
+            _resolve_model(alias)
+
+
+def test_model_warnings_removed():
+    import app.agent.runner as runner
+
+    assert not hasattr(runner, "_MODEL_WARNINGS")
+    assert not hasattr(runner, "_ALWAYS_THINKING_NOTE")
+
+
 def test_thinking_budget_map():
     assert _THINKING_BUDGETS == {"low": 2048, "medium": 8192, "high": 16384}
 
@@ -63,7 +69,7 @@ def test_build_llm_openai_missing_key(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai=""))
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        runner._build_llm("gpt-5.6-terra", "off")
+        runner._build_llm("gpt-5.6-terra", "none")
 
 
 def test_build_llm_anthropic_missing_key(monkeypatch):
@@ -71,7 +77,7 @@ def test_build_llm_anthropic_missing_key(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic=""))
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-        runner._build_llm("claude-sonnet-5", "off")
+        runner._build_llm("claude-sonnet-5", "none")
 
 
 def test_build_llm_adaptive_thinking(monkeypatch):
@@ -98,7 +104,7 @@ def test_build_llm_anthropic_no_thinking_omits_temperature(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
-    _, _, llm = runner._build_llm("claude-sonnet-5", "off")
+    _, _, llm = runner._build_llm("claude-sonnet-5", "none")
     assert llm.thinking == {"type": "disabled"}
     assert llm.temperature is None
 
@@ -117,30 +123,29 @@ def test_resolve_fable_and_mythos():
     assert _resolve_model("claude-mythos-5") == ("anthropic", "claude-mythos-5")
 
 
-def test_build_llm_always_thinking_models_reject_off(monkeypatch):
+def test_build_llm_always_thinking_models_reject_none(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     for model in ("claude-fable-5", "claude-mythos-5"):
-        with pytest.raises(ValueError, match="not a valid model thinking effort"):
-            runner._build_llm(model, "off")
-        _, _, thinking = runner._build_llm(model, "high")
-        assert thinking.thinking == {"type": "adaptive", "display": "summarized"}
-        assert thinking.output_config == {"effort": "high"}
+        with pytest.raises(ValueError, match="reasoning cannot be disabled"):
+            runner._build_llm(model, "none")
+        _, _, llm = runner._build_llm(model, "high")
+        assert llm.thinking == {"type": "adaptive", "display": "summarized"}
+        assert llm.output_config == {"effort": "high"}
 
 
-def test_always_thinking_models_are_registered_and_warned():
+def test_always_thinking_models_are_registered():
     import app.agent.runner as runner
 
     for model in ("claude-fable-5", "claude-mythos-5"):
         assert model in runner._ANTHROPIC_MODELS.values()
-        spec = runner._MODEL_THINKING[model]
+        spec = runner._MODEL_REASONING[model]
         assert spec.can_disable is False
-        assert "off" not in valid_efforts(model)
-        assert "always on" in runner._MODEL_WARNINGS[model]
+        assert "none" not in valid_efforts(model)
 
 
-def test_every_anthropic_model_is_priced():
+def test_every_model_is_priced():
     import app.agent.runner as runner
     from app.agent import cost
 
@@ -154,46 +159,55 @@ def test_validate_effort_semantics():
     assert validate_effort("claude-sonnet-5", None) == "default"
     assert validate_effort("claude-sonnet-5", "") == "default"
     assert validate_effort("gpt-5.6-terra", "xhigh") == "xhigh"
+    assert validate_effort("gpt-5.6-terra", "max") == "max"
+    assert validate_effort("gpt-5.6-terra", "none") == "none"
     for model, bad in (
         ("claude-sonnet-5", "minimal"),
+        ("claude-sonnet-5", "off"),
         ("claude-sonnet-4-6", "xhigh"),
         ("claude-sonnet-4-6", "max"),
-        ("gpt-5.6-terra", "max"),
-        ("gpt-5.6-terra", "none"),
-        ("claude-fable-5", "off"),
-        ("claude-mythos-5", "off"),
+        ("gpt-5.6-terra", "off"),
     ):
-        with pytest.raises(ValueError, match="not a valid model thinking effort"):
+        with pytest.raises(ValueError, match="not a valid reasoning effort"):
             validate_effort(model, bad)
+    for model in ("claude-fable-5", "claude-mythos-5"):
+        with pytest.raises(ValueError, match="reasoning cannot be disabled"):
+            validate_effort(model, "none")
+
+
+def test_canonical_stored_effort_maps_legacy_off():
+    assert _canonical_stored_effort("off") == "none"
+    assert _canonical_stored_effort("OFF") == "none"
+    assert _canonical_stored_effort(None) == "default"
+    assert _canonical_stored_effort("") == "default"
+    assert _canonical_stored_effort("high") == "high"
 
 
 def test_resolve_default_effort_per_generation():
     assert resolve_default_effort("claude-sonnet-5") == "high"
     assert resolve_default_effort("claude-opus-5") == "high"
     assert resolve_default_effort("claude-fable-5") == "high"
-    assert resolve_default_effort("claude-opus-4-8") == "off"
-    assert resolve_default_effort("claude-sonnet-4-6") == "off"
-    assert resolve_default_effort("gpt-5.6-terra") == "default"
-    assert resolve_default_effort("bu") == "high"
-    assert resolve_default_effort("bu-mini") == "default"
+    assert resolve_default_effort("claude-opus-4-8") == "none"
+    assert resolve_default_effort("claude-sonnet-4-6") == "none"
+    assert resolve_default_effort("gpt-5.6-terra") == "medium"
+    assert resolve_default_effort("gpt-5.6-sol") == "medium"
 
 
 def test_registry_covers_every_model():
     import app.agent.runner as runner
 
     all_ids = set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values())
-    assert all_ids == set(runner._MODEL_THINKING)
+    assert all_ids == set(runner._MODEL_REASONING)
 
 
 def test_build_llm_wire_shapes(monkeypatch):
     import app.agent.runner as runner
-    from openai import NOT_GIVEN
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x", openai="sk-x"))
 
-    _, _, llm = runner._build_llm("claude-opus-5", "off")
+    _, _, llm = runner._build_llm("claude-opus-5", "none")
     assert llm.thinking == {"type": "disabled"}
-    _, _, llm = runner._build_llm("claude-sonnet-4-6", "off")
+    _, _, llm = runner._build_llm("claude-sonnet-4-6", "none")
     assert llm.thinking == {"type": "disabled"}
     for model in ("claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"):
         _, _, llm = runner._build_llm(model, "default")
@@ -203,28 +217,48 @@ def test_build_llm_wire_shapes(monkeypatch):
     assert llm.thinking == {"type": "adaptive", "display": "summarized"}
     assert llm.output_config == {"effort": "max"}
 
-    _, _, llm = runner._build_llm("gpt-5.6-terra", "off")
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "none")
     assert llm.reasoning_effort == "none"
     _, _, llm = runner._build_llm("gpt-5.6-terra", "default")
-    assert llm.reasoning_effort is NOT_GIVEN
+    assert llm.reasoning_effort is None
     _, _, llm = runner._build_llm("gpt-5.6-terra", "xhigh")
     assert llm.reasoning_effort == "xhigh"
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "max")
+    assert llm.reasoning_effort == "max"
 
 
-def test_build_llm_openai_completion_budget_scales_with_effort(monkeypatch):
+def test_build_llm_openai_output_budget_scales_with_effort(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     for effort, budget in (
-        ("off", 4096),
-        ("default", 4096),
+        ("none", 4096),
+        ("default", 12288),
         ("low", 8192),
         ("medium", 12288),
         ("high", 16384),
         ("xhigh", 24576),
+        ("max", 32768),
     ):
         _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
         assert llm.max_completion_tokens == budget, effort
+
+
+def test_build_llm_openai_timeout_scales_with_effort(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
+    for effort, timeout in (
+        ("none", 90),
+        ("default", 90),
+        ("low", 90),
+        ("medium", 90),
+        ("high", 240),
+        ("xhigh", 240),
+        ("max", 240),
+    ):
+        _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
+        assert llm.timeout == timeout, effort
 
 
 def test_resolve_opus_1m_suffix_strips_to_base():
@@ -246,27 +280,146 @@ def test_build_llm_opus5_builds(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
-    provider, model_id, _ = runner._build_llm("claude-opus-5", "off")
+    provider, model_id, _ = runner._build_llm("claude-opus-5", "none")
     assert (provider, model_id) == ("anthropic", "claude-opus-5")
 
 
-def test_openai_subclass_captures_cache_write(monkeypatch):
-    import types
-
+def _responses_llm(monkeypatch, effort="max"):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
-    _, _, llm = runner._build_llm("gpt-5.6-terra", "off")
-    details = types.SimpleNamespace(cached_tokens=100, cache_write_tokens=50)
-    usage = types.SimpleNamespace(
-        prompt_tokens=1000,
-        prompt_tokens_details=details,
-        completion_tokens=200,
-        total_tokens=1200,
+    _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
+    return llm
+
+
+def _messages():
+    from browser_use.llm import SystemMessage, UserMessage
+
+    return [SystemMessage(content="be helpful"), UserMessage(content="hello")]
+
+
+def test_responses_request_shape_explicit_effort(monkeypatch):
+    llm = _responses_llm(monkeypatch, "max")
+    params = llm._build_request(_messages(), None)
+    assert params["model"] == "gpt-5.6-terra"
+    assert params["reasoning"] == {"effort": "max"}
+    assert params["store"] is False
+    assert params["max_output_tokens"] == 32768
+    assert "tools" not in params
+    assert "temperature" not in params
+    assert "frequency_penalty" not in params
+
+
+def test_responses_request_shape_default_omits_reasoning(monkeypatch):
+    llm = _responses_llm(monkeypatch, "default")
+    params = llm._build_request(_messages(), None)
+    assert "reasoning" not in params
+    assert params["store"] is False
+
+
+def test_responses_request_appends_schema_to_system_prompt(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "low")
+    params = llm._build_request(_messages(), Out)
+    system = params["input"][0]
+    assert system["role"] == "system"
+    assert "<json_schema>" in str(system["content"])
+    assert "text" not in params
+
+
+def _fake_response(
+    *,
+    output_text="ok",
+    status="completed",
+    incomplete_reason=None,
+    input_tokens=100,
+    cached_tokens=40,
+    output_tokens=20,
+):
+    return types.SimpleNamespace(
+        output_text=output_text,
+        output=[],
+        status=status,
+        incomplete_details=(
+            types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+        ),
+        usage=types.SimpleNamespace(
+            input_tokens=input_tokens,
+            input_tokens_details=types.SimpleNamespace(cached_tokens=cached_tokens),
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
     )
-    result = llm._get_usage(types.SimpleNamespace(usage=usage))
-    assert result.prompt_cached_tokens == 100
-    assert result.prompt_cache_creation_tokens == 50
+
+
+def _patch_client(monkeypatch, llm, response):
+    captured = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return response
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+    return captured
+
+
+async def test_responses_ainvoke_maps_usage(monkeypatch):
+    llm = _responses_llm(monkeypatch, "medium")
+    captured = _patch_client(monkeypatch, llm, _fake_response())
+    result = await llm.ainvoke(_messages())
+    assert result.completion == "ok"
+    assert result.usage.prompt_tokens == 100
+    assert result.usage.prompt_cached_tokens == 40
+    assert result.usage.prompt_cache_creation_tokens is None
+    assert result.usage.completion_tokens == 20
+    assert captured["reasoning"] == {"effort": "medium"}
+    assert captured["store"] is False
+    assert "tools" not in captured
+
+
+async def test_responses_ainvoke_truncation_raises(monkeypatch):
+    from browser_use.llm.exceptions import ModelOutputTruncatedError
+
+    llm = _responses_llm(monkeypatch, "low")
+    _patch_client(
+        monkeypatch,
+        llm,
+        _fake_response(status="incomplete", incomplete_reason="max_output_tokens"),
+    )
+    with pytest.raises(ModelOutputTruncatedError):
+        await llm.ainvoke(_messages())
+
+
+async def test_responses_ainvoke_parses_structured_output(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "low")
+    _patch_client(monkeypatch, llm, _fake_response(output_text='{"answer": "42"}'))
+    result = await llm.ainvoke(_messages(), output_format=Out)
+    assert result.completion.answer == "42"
+
+
+def test_openai_llm_uses_prompt_schema_not_strict_response_format(monkeypatch):
+    from app.agent import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod, "settings", types.SimpleNamespace(openai_api_key="test-key")
+    )
+    provider, model_id, llm = runner_mod._build_llm("gpt-5.6-terra", "none")
+    assert provider == "openai"
+    assert model_id == "gpt-5.6-terra"
+    assert llm.add_schema_to_system_prompt is True
+    assert llm.dont_force_structured_output is True
+    assert llm.reasoning_effort == "none"
 
 
 def _cached_state(url: str = "https://x.com/listings"):
@@ -374,35 +527,11 @@ def test_action_detail_and_category_for_new_actions():
     assert _category_for("mark_absent") == "schema"
 
 
-def test_luna_allowed_with_warning_registered():
-    from app.agent.runner import _MODEL_WARNINGS, _resolve_model
-
-    assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
-    assert "poor performance" in _MODEL_WARNINGS["gpt-5.6-luna"]
-    assert _resolve_model("bu-mini") == ("openai", "gpt-5.6-terra")
-
-
 def test_card_order_puts_action_directly_after_thinking():
     from app.agent.runner import _CARD_ORDER
 
     assert _CARD_ORDER[0] == "thinking"
     assert _CARD_ORDER[1] == "action"
-
-
-def test_openai_llm_uses_prompt_schema_not_strict_response_format(monkeypatch):
-    import types
-
-    from app.agent import runner as runner_mod
-
-    monkeypatch.setattr(
-        runner_mod, "settings", types.SimpleNamespace(openai_api_key="test-key")
-    )
-    provider, model_id, llm = runner_mod._build_llm("gpt-5.6-terra", "off")
-    assert provider == "openai"
-    assert model_id == "gpt-5.6-terra"
-    assert llm.add_schema_to_system_prompt is True
-    assert llm.dont_force_structured_output is True
-    assert llm.reasoning_effort == "none"
 
 
 def _missing_action_exc():

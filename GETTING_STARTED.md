@@ -36,8 +36,8 @@ sudo apt install -y \
 
 ```bash
 cd ~
-git clone https://github.com/lujstn/browser-use-raspberrypi.git
-cd browser-use-raspberrypi
+git clone git@github.com:lujstn/openbrowse.git
+cd openbrowse
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -152,16 +152,16 @@ Paste the following (adjust `User` and `WorkingDirectory` if your username diffe
 
 ```ini
 [Unit]
-Description=Browser Use Raspberry Pi
+Description=OpenBrowse
 After=network.target tailscaled.service
 Wants=tailscaled.service
 
 [Service]
 Type=simple
-User=lucas
-WorkingDirectory=/home/lucas/Developer/browser-use-raspberrypi
-EnvironmentFile=/home/lucas/Developer/browser-use-raspberrypi/.env
-ExecStart=/home/lucas/Developer/browser-use-raspberrypi/.venv/bin/python -m app.main
+User=<user>
+WorkingDirectory=/home/<user>/openbrowse
+EnvironmentFile=/home/<user>/openbrowse/.env
+ExecStart=/home/<user>/openbrowse/.venv/bin/python -m app.main
 ExecStartPost=+/usr/bin/tailscale funnel --bg 8420
 ExecStopPost=-+/usr/bin/tailscale funnel --bg off
 Restart=on-failure

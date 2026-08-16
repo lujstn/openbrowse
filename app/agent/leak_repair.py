@@ -148,7 +148,7 @@ def _clean_bleed_text(text: str) -> str:
 
 def scrub_tag_bleed(tool_input: dict) -> bool:
     """Repair Claude's trained tool-call XML idiom bleeding as literal text into the
-    forced-JSON AgentOutput fields (seen with thinking_effort=off, which uses forced
+    forced-JSON AgentOutput fields (seen with reasoningEffort=none, which uses forced
     ``tool_choice``): truncate a restarted ``<invoke ...>`` tool call, split a field's
     value on sibling field tags (tolerating the malformed ``<next_move">`` form), keep
     the pre-tag text as that field's own value, and route each bled-out segment to its
