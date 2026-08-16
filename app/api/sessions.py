@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.agent.pool import pool
+from app.agent.runner import resolve_default_effort, validate_effort
 from app.auth import require_api_key
 from app.db import crud
 
@@ -31,7 +32,11 @@ class RunTaskRequest(BaseModel):
     skills: bool = True
     enableRecording: bool = False
     proxyCountryCode: str | None = None
-    thinkingEffort: Literal["off", "low", "medium", "high"] = "off"
+    modelThinkingEffort: str | None = None
+    thinkingEffort: str | None = None  # @nonobvious(means): deprecated alias of modelThinkingEffort
+
+    def effective_thinking_effort(self) -> str:
+        return self.modelThinkingEffort or self.thinkingEffort or "default"
 
 
 class SessionResponse(BaseModel):
@@ -58,7 +63,8 @@ class SessionResponse(BaseModel):
     proxyUsedMb: str = "0"
     totalCostUsd: str = "0"
     screenshotUrl: str | None = None
-    thinkingEffort: str = "off"
+    modelThinkingEffort: str = "default"
+    thinkingEffort: str = "default"  # @nonobvious(means): deprecated alias of modelThinkingEffort
     agentmailEmail: str | None = None
     integrationsUsed: list[str] = []
     createdAt: str
@@ -129,7 +135,8 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
         totalOutputTokens=row.get("total_output_tokens", 0),
         llmCostUsd=str(row.get("llm_cost_usd", 0)),
         totalCostUsd=str(row.get("total_cost_usd", 0)),
-        thinkingEffort=row.get("thinking_effort", "off"),
+        modelThinkingEffort=row.get("thinking_effort") or "default",
+        thinkingEffort=row.get("thinking_effort") or "default",
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
     )
@@ -159,6 +166,13 @@ async def create_session(
 ):
     body = body or RunTaskRequest()
 
+    try:
+        effort = validate_effort(body.model, body.effective_thinking_effort())
+        if effort == "default":
+            effort = resolve_default_effort(body.model)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     if body.sessionId:
         existing = await crud.get_session(body.sessionId)
         if not existing:
@@ -180,7 +194,7 @@ async def create_session(
             system_prompt_extension=body.systemPromptExtension,
             max_cost_usd=body.maxCostUsd,
             keep_alive=int(body.keepAlive),
-            thinking_effort=body.thinkingEffort,
+            thinking_effort=effort,
         )
         await pool.submit(body.sessionId)
         return _to_session_response(session)
@@ -194,7 +208,7 @@ async def create_session(
         system_prompt_extension=body.systemPromptExtension,
         max_cost_usd=body.maxCostUsd,
         keep_alive=body.keepAlive,
-        thinking_effort=body.thinkingEffort,
+        thinking_effort=effort,
     )
 
     if body.task:

@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 import pytest
 
 from app.agent.runner import (
-    _OPENAI_REASONING,
     _THINKING_BUDGETS,
     _build_llm,
     _resolve_model,
+    resolve_default_effort,
+    valid_efforts,
+    validate_effort,
 )
 
 
@@ -52,10 +54,8 @@ def test_resolve_unknown_models_rejected():
             _resolve_model(bad)
 
 
-def test_thinking_budget_and_reasoning_maps():
+def test_thinking_budget_map():
     assert _THINKING_BUDGETS == {"low": 2048, "medium": 8192, "high": 16384}
-    assert _OPENAI_REASONING["off"] == "none"
-    assert _OPENAI_REASONING["high"] == "high"
 
 
 def test_build_llm_openai_missing_key(monkeypatch):
@@ -80,7 +80,7 @@ def test_build_llm_adaptive_thinking(monkeypatch):
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     provider, model_id, llm = runner._build_llm("claude-opus-4.8", "high")
     assert (provider, model_id) == ("anthropic", "claude-opus-4-8")
-    assert llm.thinking == {"type": "adaptive"}
+    assert llm.thinking == {"type": "adaptive", "display": "summarized"}
     assert llm.output_config == {"effort": "high"}
 
 
@@ -99,7 +99,7 @@ def test_build_llm_anthropic_no_thinking_omits_temperature(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     _, _, llm = runner._build_llm("claude-sonnet-5", "off")
-    assert getattr(llm, "thinking", None) is None
+    assert llm.thinking == {"type": "disabled"}
     assert llm.temperature is None
 
 
@@ -117,25 +117,27 @@ def test_resolve_fable_and_mythos():
     assert _resolve_model("claude-mythos-5") == ("anthropic", "claude-mythos-5")
 
 
-def test_build_llm_always_thinking_models_never_send_disabled(monkeypatch):
+def test_build_llm_always_thinking_models_reject_off(monkeypatch):
     import app.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     for model in ("claude-fable-5", "claude-mythos-5"):
-        _, _, llm = runner._build_llm(model, "off")
-        assert getattr(llm, "thinking", None) is None
+        with pytest.raises(ValueError, match="not a valid model thinking effort"):
+            runner._build_llm(model, "off")
         _, _, thinking = runner._build_llm(model, "high")
-        assert thinking.thinking == {"type": "adaptive"}
+        assert thinking.thinking == {"type": "adaptive", "display": "summarized"}
         assert thinking.output_config == {"effort": "high"}
 
 
-def test_always_thinking_models_are_adaptive_and_warned():
+def test_always_thinking_models_are_registered_and_warned():
     import app.agent.runner as runner
 
-    for model in runner._ALWAYS_THINKING_MODELS:
+    for model in ("claude-fable-5", "claude-mythos-5"):
         assert model in runner._ANTHROPIC_MODELS.values()
-        assert model in runner._ADAPTIVE_THINKING_MODELS
-        assert "thinking cannot be turned off" in runner._MODEL_WARNINGS[model]
+        spec = runner._MODEL_THINKING[model]
+        assert spec.can_disable is False
+        assert "off" not in valid_efforts(model)
+        assert "always on" in runner._MODEL_WARNINGS[model]
 
 
 def test_every_anthropic_model_is_priced():
@@ -147,32 +149,66 @@ def test_every_anthropic_model_is_priced():
         assert cost._lookup(model_id, now) is not None, model_id
 
 
-def test_normalise_effort_unknown_values_fall_back_to_off():
+def test_validate_effort_semantics():
+    assert validate_effort("claude-sonnet-5", "HIGH") == "high"
+    assert validate_effort("claude-sonnet-5", None) == "default"
+    assert validate_effort("claude-sonnet-5", "") == "default"
+    assert validate_effort("gpt-5.6-terra", "xhigh") == "xhigh"
+    for model, bad in (
+        ("claude-sonnet-5", "minimal"),
+        ("claude-sonnet-4-6", "xhigh"),
+        ("claude-sonnet-4-6", "max"),
+        ("gpt-5.6-terra", "max"),
+        ("gpt-5.6-terra", "none"),
+        ("claude-fable-5", "off"),
+        ("claude-mythos-5", "off"),
+    ):
+        with pytest.raises(ValueError, match="not a valid model thinking effort"):
+            validate_effort(model, bad)
+
+
+def test_resolve_default_effort_per_generation():
+    assert resolve_default_effort("claude-sonnet-5") == "high"
+    assert resolve_default_effort("claude-opus-5") == "high"
+    assert resolve_default_effort("claude-fable-5") == "high"
+    assert resolve_default_effort("claude-opus-4-8") == "off"
+    assert resolve_default_effort("claude-sonnet-4-6") == "off"
+    assert resolve_default_effort("gpt-5.6-terra") == "default"
+    assert resolve_default_effort("bu") == "high"
+    assert resolve_default_effort("bu-mini") == "default"
+
+
+def test_registry_covers_every_model():
     import app.agent.runner as runner
 
-    assert runner._normalise_effort("HIGH") == "high"
-    assert runner._normalise_effort(" low ") == "low"
-    for bad in (None, "", "none", "minimal", "xhigh", "true"):
-        assert runner._normalise_effort(bad) == "off"
+    all_ids = set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values())
+    assert all_ids == set(runner._MODEL_THINKING)
 
 
-def test_build_llm_openai_unknown_effort_disables_reasoning(monkeypatch):
+def test_build_llm_wire_shapes(monkeypatch):
     import app.agent.runner as runner
+    from openai import NOT_GIVEN
 
-    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
-    _, _, llm = runner._build_llm("bu-mini", "minimal")
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x", openai="sk-x"))
+
+    _, _, llm = runner._build_llm("claude-opus-5", "off")
+    assert llm.thinking == {"type": "disabled"}
+    _, _, llm = runner._build_llm("claude-sonnet-4-6", "off")
+    assert llm.thinking == {"type": "disabled"}
+    for model in ("claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"):
+        _, _, llm = runner._build_llm(model, "default")
+        assert getattr(llm, "thinking", None) is None
+        assert getattr(llm, "output_config", None) is None
+    _, _, llm = runner._build_llm("claude-sonnet-5", "max")
+    assert llm.thinking == {"type": "adaptive", "display": "summarized"}
+    assert llm.output_config == {"effort": "max"}
+
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "off")
     assert llm.reasoning_effort == "none"
-
-
-def test_build_llm_anthropic_unknown_effort_disables_thinking(monkeypatch):
-    import app.agent.runner as runner
-
-    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
-    _, _, adaptive = runner._build_llm("claude-sonnet-5", "minimal")
-    assert getattr(adaptive, "thinking", None) is None
-    assert getattr(adaptive, "output_config", None) is None
-    _, _, budgeted = runner._build_llm("claude-sonnet-4-6", "minimal")
-    assert getattr(budgeted, "thinking", None) is None
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "default")
+    assert llm.reasoning_effort is NOT_GIVEN
+    _, _, llm = runner._build_llm("gpt-5.6-terra", "xhigh")
+    assert llm.reasoning_effort == "xhigh"
 
 
 def test_resolve_opus_1m_suffix_strips_to_base():
@@ -187,7 +223,7 @@ def test_build_llm_1m_sets_betas_and_stays_adaptive(monkeypatch):
     provider, model_id, llm = runner._build_llm("claude-opus-4-8[1m]", "high")
     assert (provider, model_id) == ("anthropic", "claude-opus-4-8")
     assert llm.betas == [runner.ONE_M_BETA]
-    assert llm.thinking == {"type": "adaptive"}
+    assert llm.thinking == {"type": "adaptive", "display": "summarized"}
 
 
 def test_build_llm_opus5_builds(monkeypatch):

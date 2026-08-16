@@ -45,7 +45,7 @@ Both OpenBrowse rows matched the reference output field for field, and were prod
 
 | Model | Benchmark observations |
 |---|---|
-| `claude-fable-5` | Not benchmarked. The most capable model available, and the most expensive at $10/$50 per million tokens. Thinking cannot be disabled on this model, so a thinking effort of `off` still reasons at the model's own default depth. Requires an organisation on 30-day data retention. |
+| `claude-fable-5` | Not benchmarked. The most capable model available, and the most expensive at $10/$50 per million tokens. Model thinking cannot be disabled, so there is no `off` — see the thinking table below. Requires an organisation on 30-day data retention. |
 | `claude-mythos-5` | Not benchmarked. Identical to Fable 5 in capability, pricing and behaviour, including the always-on thinking. Only reachable by organisations in Project Glasswing; every other API key is rejected. |
 | `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not benchmarked |
 | `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not benchmarked |
@@ -53,6 +53,19 @@ Both OpenBrowse rows matched the reference output field for field, and were prod
 | `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not benchmarked |
 | `gpt-5.6-luna` | ⚠️ **Accessible, but we strongly advise against use.** Often narrates answers instead of driving the browser and invents nonexistent "limits" to avoid completing tasks. [Whilst this is the model BU Cloud recommends](https://docs.browser-use.com/cloud/agent/models), it was repeatedly unable to complete our benchmark across multiple runs. |
 
+### Model thinking
+
+OpenBrowse separates two kinds of reasoning. **Browser thinking** is the platform's own step reasoning — the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed — and is always on for every model. **Model thinking** is the provider-side reasoning feature (Anthropic extended thinking, OpenAI reasoning effort), controlled per session by `modelThinkingEffort` (the API also accepts the older `thinkingEffort` name). Values are validated per model at runtime; the valid set, and what an unset value means, differ by model:
+
+| Model | Valid efforts | Default (when unset) | Can be disabled? |
+|---|---|---|---|
+| claude-sonnet-5, claude-opus-5 | low, medium, high, xhigh, max | **high** — these models think unless told not to | Yes (`off`) |
+| claude-fable-5, claude-mythos-5 | low, medium, high, xhigh, max | high | **No** — the API rejects a disabled config, so `off` is refused with an error |
+| claude-opus-4.8 | low, medium, high, xhigh, max | none (no thinking) | Yes |
+| claude-opus-4.7, claude-opus-4.6, claude-sonnet-4.6 | low, medium, high | none (no thinking) | Yes |
+| gpt-5.6-terra, gpt-5.6-sol, gpt-5.6-luna | low, medium, high, xhigh | a provider-managed depth below `low` (the API rejects `max`) | Yes |
+
+`off` genuinely disables thinking wherever the provider allows it, and the dashboard always preselects each model's real default — e.g. "High (Default)" for Sonnet 5, "None (Default)" for Opus 4.8 — so what a run will do is on screen before it starts. When a model returns its reasoning (Anthropic adaptive thinking with an explicit effort), the summarised reasoning appears live in the session activity bar and as a 🧠 card on each step.
 
 ## Quick start
 

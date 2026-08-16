@@ -7,8 +7,11 @@ import json
 import logging
 import re
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from openai import NOT_GIVEN
 
 from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
 from browser_use.llm import UserMessage
@@ -351,6 +354,13 @@ class _RepairingChatAnthropic(ChatAnthropic):
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
         result = await self._ainvoke_inner(messages, output_format, **kwargs)
         await _settle_code_stream(self, result, output_format)
+        thinking_text = " ".join((getattr(result, "thinking", None) or "").split())
+        if thinking_text:
+            self._last_model_thinking = thinking_text
+            sid = getattr(self, "_activity_session", None)
+            if sid:
+                snippet = thinking_text[:140] + ("…" if len(thinking_text) > 140 else "")
+                set_activity(sid, f"💭 {snippet}")
         return result
 
     async def _ainvoke_inner(
@@ -439,13 +449,10 @@ _OPENAI_MODELS: dict[str, str] = {
     "bu-max": "gpt-5.6-sol",
 }
 
-_ALWAYS_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5"}
-
 _ALWAYS_THINKING_NOTE = (
-    "thinking cannot be turned off on this model — the API rejects a disabled "
-    "thinking config, so a thinking effort of 'off' still reasons, at the "
-    "model's own default depth. Expect higher token costs than the effort "
-    "setting suggests."
+    "model thinking is always on for this model — the API rejects a disabled "
+    "thinking config, so there is no 'off'. The default effort reasons at the "
+    "model's own depth; expect thinking tokens in every step."
 )
 
 _MODEL_WARNINGS: dict[str, str] = {
@@ -467,26 +474,72 @@ _THINKING_BUDGETS: dict[str, int] = {
     "high": 16384,
 }
 
-_ADAPTIVE_THINKING_MODELS = {
-    "claude-opus-4-8",
-    "claude-sonnet-5",
-    "claude-opus-5",
-    "claude-fable-5",
-    "claude-mythos-5",
+_FULL_LADDER = ("low", "medium", "high", "xhigh", "max")
+
+
+@dataclass(frozen=True)
+class ModelThinking:
+    """One model's provider-side reasoning capability (ModelThinking), as
+    distinct from the always-on step reasoning in the feed (BrowserThinking).
+
+    ``default`` is what an unset effort means for this model: "off", a level
+    name, or the literal "default" when the provider manages an unnamed depth
+    of its own (GPT-5.6 reasons below "low" with the parameter omitted).
+    """
+
+    efforts: tuple[str, ...]
+    default: str
+    can_disable: bool
+    style: str  # @nonobvious(means): "adaptive" | "budget" | "openai" wire shape
+
+# @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16 —
+# omitting `thinking` runs adaptive at "high" on the Claude 5 generation but
+# runs WITHOUT thinking on Opus 4.8 and older; Fable/Mythos 400 on a disabled
+# config; GPT-5.6 rejects "max" and reasons below "low" when the parameter is
+# omitted. Re-probe before editing rows.
+_MODEL_THINKING: dict[str, ModelThinking] = {
+    "claude-sonnet-5": ModelThinking(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-opus-5": ModelThinking(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-fable-5": ModelThinking(_FULL_LADDER, "high", False, "adaptive"),
+    "claude-mythos-5": ModelThinking(_FULL_LADDER, "high", False, "adaptive"),
+    "claude-opus-4-8": ModelThinking(_FULL_LADDER, "off", True, "adaptive"),
+    "claude-opus-4-7": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
+    "claude-opus-4-6": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
+    "claude-sonnet-4-6": ModelThinking(("low", "medium", "high"), "off", True, "budget"),
+    "gpt-5.6-terra": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
+    "gpt-5.6-sol": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
+    "gpt-5.6-luna": ModelThinking(("low", "medium", "high", "xhigh"), "default", True, "openai"),
 }
 
-_OPENAI_REASONING: dict[str, str] = {
-    "off": "none",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-}
+
+def model_thinking(model: str) -> ModelThinking:
+    _, model_id = _resolve_model(model)
+    return _MODEL_THINKING[model_id]
 
 
-def _normalise_effort(effort: str | None) -> str:
-    """Anything we do not recognise means no thinking, never a silent budget."""
-    key = (effort or "").strip().lower()
-    return key if key in _OPENAI_REASONING else "off"
+def valid_efforts(model: str) -> list[str]:
+    spec = model_thinking(model)
+    out = ["default"]
+    if spec.can_disable:
+        out.append("off")
+    out.extend(spec.efforts)
+    return out
+
+
+def resolve_default_effort(model: str) -> str:
+    return model_thinking(model).default
+
+
+def validate_effort(model: str, effort: str | None) -> str:
+    """The canonical ModelThinkingEffort for this model, or a loud ValueError."""
+    key = (effort or "default").strip().lower()
+    allowed = valid_efforts(model)
+    if key not in allowed:
+        raise ValueError(
+            f"'{effort}' is not a valid model thinking effort for {model}. "
+            f"Valid values: {', '.join(allowed)}."
+        )
+    return key
 
 
 def _resolve_model(model: str) -> tuple[str, str]:
@@ -500,17 +553,27 @@ def _resolve_model(model: str) -> tuple[str, str]:
     raise ValueError(f"'{key}' is not a valid model.")
 
 
-def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
+def _build_llm(model: str, thinking_effort: str | None) -> tuple[str, str, Any]:
     want_1m = (model or "").strip().endswith("[1m]")
-    thinking_effort = _normalise_effort(thinking_effort)
     provider, model_id = _resolve_model(model)
+    effort = validate_effort(model, thinking_effort)
+    spec = _MODEL_THINKING[model_id]
     if provider == "openai":
         if not settings.openai_api_key:
             raise ValueError(f"Model '{model}' needs OPENAI_API_KEY, which is not configured")
+        if effort == "off":
+            reasoning = "none"
+        elif effort == "default":
+            # @nonobvious(forced-by): browser-use always sends reasoning_effort
+            # for reasoning models; NOT_GIVEN is the only way to omit it so the
+            # provider's own default applies.
+            reasoning = NOT_GIVEN
+        else:
+            reasoning = effort
         llm = _CacheAwareChatOpenAI(
             model=model_id,
             api_key=settings.openai_api_key,
-            reasoning_effort=_OPENAI_REASONING[thinking_effort],
+            reasoning_effort=reasoning,
             timeout=90,
             max_retries=3,
             # @nonobvious(forced-by): OpenAI strict structured output requires every
@@ -534,15 +597,19 @@ def _build_llm(model: str, thinking_effort: str) -> tuple[str, str, Any]:
     }
     if want_1m:
         kwargs["betas"] = [ONE_M_BETA]
-    # @nonobvious(forced-by): "off" omits the thinking key rather than sending
-    # {"type": "disabled"} because Fable and Mythos reject an explicit disable
-    # with a 400; omitting it is the only spelling every model accepts.
-    if thinking_effort != "off":
-        if model_id in _ADAPTIVE_THINKING_MODELS:
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": thinking_effort}
+    # @nonobvious(forced-by): omission is the only spelling of "model default"
+    # the API offers, and on the Claude 5 generation it means adaptive thinking
+    # ON at effort high — so "off" must send an explicit disabled config, never
+    # omit. validate_effort has already rejected "off" for the models that 400
+    # on a disabled config (Fable, Mythos).
+    if effort == "off":
+        kwargs["thinking"] = {"type": "disabled"}
+    elif effort != "default":
+        if spec.style == "adaptive":
+            kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            kwargs["output_config"] = {"effort": effort}
         else:
-            budget = _THINKING_BUDGETS[thinking_effort]
+            budget = _THINKING_BUDGETS[effort]
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["max_tokens"] = max(budget + 8192, 16384)
     return provider, model_id, _RepairingChatAnthropic(**kwargs)
@@ -815,7 +882,7 @@ async def run_agent_session(session_id: str) -> None:
         return
 
     requested_model = session.get("model") or settings.default_model
-    thinking_effort = session.get("thinking_effort") or "off"
+    thinking_effort = session.get("thinking_effort") or "default"
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
@@ -838,7 +905,8 @@ async def run_agent_session(session_id: str) -> None:
 
     north_star_task: asyncio.Task | None = None
     try:
-        _, _, preflight_llm = _build_llm(requested_model, "off")
+        preflight_effort = "off" if model_thinking(requested_model).can_disable else "default"
+        _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
         try:
             preflight_llm.max_tokens = 300
         except Exception:
@@ -1138,6 +1206,10 @@ async def run_agent_session(session_id: str) -> None:
                     val = getattr(step.model_output, src, None)
                     if val:
                         row_data[key] = str(val)[:1500]
+            native_thinking = getattr(llm, "_last_model_thinking", None)
+            if native_thinking:
+                row_data["model_thinking"] = str(native_thinking)[:1500]
+                llm._last_model_thinking = None
             await crud.create_message(
                 session_id=session_id,
                 role="ai",

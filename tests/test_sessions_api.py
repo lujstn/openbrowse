@@ -56,6 +56,57 @@ async def test_create_session_without_task(client):
     assert data["status"] == "created"
 
 
+async def test_create_session_resolves_model_thinking_default(client):
+    resp = await client.post("/v3/sessions", json={"model": "claude-sonnet-5"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["modelThinkingEffort"] == "high"
+    assert data["thinkingEffort"] == "high"
+
+    resp = await client.post("/v3/sessions", json={"model": "claude-opus-4-8"})
+    assert resp.json()["modelThinkingEffort"] == "off"
+
+    resp = await client.post("/v3/sessions", json={"model": "gpt-5.6-terra"})
+    assert resp.json()["modelThinkingEffort"] == "default"
+
+
+async def test_create_session_accepts_canonical_field_and_alias(client):
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "claude-sonnet-5", "modelThinkingEffort": "xhigh"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["modelThinkingEffort"] == "xhigh"
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "claude-sonnet-5", "thinkingEffort": "off"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["modelThinkingEffort"] == "off"
+
+
+async def test_create_session_rejects_invalid_effort_per_model(client):
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "claude-fable-5", "modelThinkingEffort": "off"},
+    )
+    assert resp.status_code == 422
+    assert "Valid values" in resp.json()["detail"]
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "gpt-5.6-terra", "modelThinkingEffort": "max"},
+    )
+    assert resp.status_code == 422
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "claude-sonnet-4-6", "modelThinkingEffort": "xhigh"},
+    )
+    assert resp.status_code == 422
+
+
 async def test_list_sessions(client):
     await client.post("/v3/sessions", json={})
     await client.post("/v3/sessions", json={})

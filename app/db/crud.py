@@ -49,7 +49,7 @@ async def create_session(
     system_prompt_extension: str | None = None,
     max_cost_usd: float | None = None,
     keep_alive: bool = False,
-    thinking_effort: str = "off",
+    thinking_effort: str = "default",
 ) -> dict[str, Any]:
     session_id = _new_id()
     now = _now()

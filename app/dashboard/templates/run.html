@@ -171,10 +171,10 @@ block head %}
         />
       </div>
       <div class="field">
-        <label for="thinking_effort">Additional Step Thinking</label>
+        <label for="thinking_effort">Model Thinking</label>
         <select id="thinking_effort" name="thinking_effort">
           {% for value, label in thinking_options %}
-          <option value="{{ value }}">{{ label }}</option>
+          <option value="{{ value }}" {% if value == thinking_default %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </div>
@@ -202,6 +202,23 @@ block head %}
   </form>
 </div>
 <script>
+  var THINKING_OPTIONS = {{ thinking_options_json | safe }};
+  (function () {
+    var modelSel = document.getElementById("model");
+    var thinkSel = document.getElementById("thinking_effort");
+    modelSel.addEventListener("change", function () {
+      var spec = THINKING_OPTIONS[modelSel.value];
+      if (!spec) return;
+      thinkSel.innerHTML = "";
+      spec.options.forEach(function (pair) {
+        var opt = document.createElement("option");
+        opt.value = pair[0];
+        opt.textContent = pair[1];
+        if (pair[0] === spec.default) opt.selected = true;
+        thinkSel.appendChild(opt);
+      });
+    });
+  })();
   (function () {
     var toggle = document.getElementById("use_schema");
     var ta = document.getElementById("output_schema");
