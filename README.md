@@ -113,7 +113,7 @@ sudo tailscale funnel --bg 8420
 - **v3-compatible REST API**: sessions, structured output schemas, cost caps, live URLs.
 - **Visual, tab-based browsing**: parallel foreground tab waves for bulk reads; a code tab shows when the agent runs a script; everything visible over VNC.
 - **Schema answer store**: every write validated live against your JSON Schema, coverage tracked per field, a completeness gate before `done`, and mark-absent semantics for data a site genuinely does not publish.
-- **Grounding guards**: shell-read detection with automatic in-frame retry, evidence-checked enum writes, honest failure over invented data.
+- **Grounding guards**: shell-read detection with automatic in-frame retry, evidence-checked enum writes, URL fields validated as absolute http(s) links at the store boundary, honest failure over invented data.
 - **Profile import**: bring BU Cloud profiles (cookies + localStorage) via CLI or the dashboard.
 - **Dashboard**: live session feed with model reasoning, per-step costs, JSON export (full / steps / output-only), profile management.
 - **CAPTCHA solving**: optional CapSolver integration.

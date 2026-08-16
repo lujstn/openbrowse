@@ -10,16 +10,20 @@ Zod/Pydantic emit for Optional) and enums as ``{"type": "string", "enum": [...]}
 Supported: object / array / primitive types, ``anyOf``/``oneOf`` and ``type``-array
 Optional (``[T, null]``), string ``enum`` (as ``Literal``), nested objects and
 arrays, ``$ref``/``$defs``, ``additionalProperties`` (loose -> allow, false -> forbid)
-and ``description`` preservation. A genuine multi-branch union (more than one
-non-null branch) raises :class:`SchemaConversionError`, letting the caller fall
-back to prose rather than crash.
+and ``description`` preservation. String fields declaring ``format: uri``/``url``,
+or named with a ``Url``/``Uri``/``Href``/``Link`` suffix, validate as absolute
+http(s) URLs. A genuine multi-branch union (more than one non-null branch)
+raises :class:`SchemaConversionError`, letting the caller fall back to prose
+rather than crash.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+import re
+from typing import Annotated, Any, Literal, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model
 
 
 class SchemaConversionError(ValueError):
@@ -32,6 +36,43 @@ _PRIMITIVES: dict[str, type] = {
     "number": float,
     "boolean": bool,
 }
+
+
+def _require_http_url(v: str) -> str:
+    parsed = urlparse(v.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(
+            f"'{v[:80]}' is not an absolute http(s) URL — copy the link's full "
+            "href (resolving relative links against the page URL), or "
+            "mark_absent if the page publishes no link"
+        )
+    return v.strip()
+
+
+HttpUrlStr = Annotated[str, AfterValidator(_require_http_url)]
+
+# @nonobvious(deliberately-missing): pydantic's HttpUrl is not used because it
+# normalises URLs (trailing slash, lowercased host) and serialises as a Url
+# object; scraped links must round-trip byte-identical, so a validated plain
+# str carries the constraint instead.
+_URL_NAME_RE = re.compile(r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)")
+
+
+def _is_url_field(prop_name: str, node: dict) -> bool:
+    fmt = node.get("format")
+    if fmt in ("uri", "url"):
+        return True
+    # @nonobvious(means): any other explicit format is an opt-out — the schema
+    # author has named a different string shape, so the name heuristic must not
+    # override it.
+    if fmt:
+        return False
+    return bool(_URL_NAME_RE.fullmatch(prop_name)) or prop_name.lower() in (
+        "url",
+        "uri",
+        "href",
+        "link",
+    )
 
 
 def _is_null(node: Any) -> bool:
@@ -118,6 +159,8 @@ class _Converter:
                     inner_type = Optional[inner_type]
                 return list[inner_type]  # type: ignore[valid-type]
             return list
+        if node_type == "string" and node.get("format") in ("uri", "url"):
+            return HttpUrlStr
         if node_type in _PRIMITIVES:
             return _PRIMITIVES[node_type]
         return Any
@@ -141,6 +184,8 @@ class _Converter:
             py_type = self.resolve_type(
                 inner_node, _safe_identifier(f"{name}_{prop_name}")
             )
+            if py_type is str and _is_url_field(prop_name, inner_node):
+                py_type = HttpUrlStr
             description = inner_node.get("description") or prop_schema.get("description")
             in_required = prop_name in required
             if in_required and not nullable:

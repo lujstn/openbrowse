@@ -76,14 +76,14 @@ def test_add_item_missing_required_rejected():
 
 def test_add_item_extra_field_rejected():
     s = _store()
-    ok, msg = s.add_item({"title": "X", "url": "u", "salary": "lots"})
+    ok, msg = s.add_item({"title": "X", "url": "https://x.com/u", "salary": "lots"})
     assert ok is False
     assert s.data["items"] == []
 
 
 def test_add_item_wrong_type_rejected():
     s = _store()
-    ok, msg = s.add_item({"title": 123, "url": "u"})
+    ok, msg = s.add_item({"title": 123, "url": "https://x.com/u"})
     assert ok is False
 
 
@@ -157,8 +157,8 @@ def test_search_output():
 
 def test_empty_fields_flags_missing_details():
     s = _store()
-    s.add_item({"title": "A", "url": "u1"})
-    s.add_item({"title": "B", "url": "u2", "description": "has one"})
+    s.add_item({"title": "A", "url": "https://x.com/1"})
+    s.add_item({"title": "B", "url": "https://x.com/2", "description": "has one"})
     flags = s.empty_fields()
     joined = " | ".join(flags)
     assert "indexPageUrl (not set)" in flags
@@ -175,7 +175,7 @@ def test_empty_fields_empty_list():
 
 def test_item_missing_fields_tracks_per_item_gaps():
     s = _store()
-    s.add_item({"title": "A", "url": "u1"})
+    s.add_item({"title": "A", "url": "https://x.com/1"})
     assert set(s.item_missing_fields(0)) == {"department", "location", "description", "publishedAt"}
     s.update_item(0, {"description": "d", "publishedAt": "2026-01-01", "department": "Eng", "location": "London"})
     assert s.item_missing_fields(0) == []
@@ -265,7 +265,7 @@ def test_enum_coercion_rejects_genuinely_wrong_value():
 
 def test_string_whitespace_trimmed():
     s = _store()
-    ok, _ = s.add_item({"title": "  Padded  ", "url": "u"})
+    ok, _ = s.add_item({"title": "  Padded  ", "url": "https://x.com/u"})
     assert ok is True
     assert s.data["items"][0]["title"] == "Padded"
 
@@ -287,8 +287,8 @@ def test_set_field_enum_coercion():
 
 def test_update_many_applies_and_reports_failures():
     s = _store()
-    s.add_item({"title": "A", "url": "u1"})
-    s.add_item({"title": "B", "url": "u2"})
+    s.add_item({"title": "A", "url": "https://x.com/1"})
+    s.add_item({"title": "B", "url": "https://x.com/2"})
     ok, msg = s.update_many(
         [
             {"index": 0, "fields": {"publishedAt": "2026-01-01"}},
@@ -315,7 +315,7 @@ def test_update_many_rejects_non_list():
 def test_mark_absent_settles_fields():
     s = _store()
     s.set_field("indexPageUrl", "https://example.com/items")
-    s.add_item({"title": "A", "url": "u1", "description": "d", "department": "Eng", "location": "L"})
+    s.add_item({"title": "A", "url": "https://x.com/1", "description": "d", "department": "Eng", "location": "L"})
     assert any("publishedAt" in e for e in s.empty_fields())
     ok, msg = s.mark_absent("publishedAt", "no date shown anywhere on detail pages")
     assert ok is True and "publishedAt" in msg
@@ -342,8 +342,8 @@ def test_mark_absent_accepts_top_level_field():
 def test_coverage_summary_groups_fields():
     s = _store()
     s.set_field("indexPageUrl", "https://example.com")
-    s.add_item({"title": "A", "url": "u1", "description": "d"})
-    s.add_item({"title": "B", "url": "u2"})
+    s.add_item({"title": "A", "url": "https://x.com/1", "description": "d"})
+    s.add_item({"title": "B", "url": "https://x.com/2"})
     s.mark_absent("location", "not shown")
     cov = s.coverage_summary()
     assert cov.startswith("Coverage — ")
@@ -391,7 +391,7 @@ def test_extra_key_hints_quiet_when_filled_or_absent():
 
 def test_bool_coerces_to_string_for_plain_str_fields():
     s = _store()
-    s.add_item({"title": "A", "url": "u1"})
+    s.add_item({"title": "A", "url": "https://x.com/1"})
     ok, msg = s.update_item(0, {"description": True})
     assert ok is True, msg
     assert s.data["items"][0]["description"] == "true"

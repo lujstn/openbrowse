@@ -78,3 +78,82 @@ def test_cloud_schema_2_builds_and_enforces_enum():
     assert ok.items[0].title == "Widget"
     with pytest.raises(ValidationError):
         model.model_validate({"items": [{"condition": "NOT_A_REAL_ENUM"}]})
+
+
+def test_url_fields_validated_by_format():
+    schema = {
+        "type": "object",
+        "properties": {
+            "homepage": {"type": "string", "format": "uri"},
+            "note": {"type": "string"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Fmt")
+    ok = model.model_validate({"homepage": "https://example.com/x", "note": "Powered by"})
+    assert ok.homepage == "https://example.com/x"
+    for bad in ("Powered by", "example.com/x", "/jobs/3", "ftp://example.com", ""):
+        with pytest.raises(ValidationError, match="absolute http"):
+            model.model_validate({"homepage": bad})
+
+
+def test_url_fields_validated_by_name_suffix():
+    schema = {
+        "type": "object",
+        "properties": {
+            "applyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "sourceURI": {"type": "string"},
+            "href": {"type": "string"},
+            "hyperLink": {"type": "string"},
+            "curl": {"type": "string"},
+            "linkText": {"type": "string"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Named")
+    good = model.model_validate(
+        {
+            "applyUrl": "https://jobs.ashbyhq.com/m/x/application",
+            "sourceURI": "http://a.b/c",
+            "href": "https://a.b",
+            "hyperLink": "https://a.b",
+            "curl": "not a url",
+            "linkText": "Apply here",
+        }
+    )
+    assert good.curl == "not a url"
+    assert good.linkText == "Apply here"
+    assert model.model_validate({}).applyUrl is None
+    for field in ("applyUrl", "sourceURI", "href", "hyperLink"):
+        with pytest.raises(ValidationError, match="absolute http"):
+            model.model_validate({field: "Powered by"})
+
+
+def test_url_validation_trims_and_preserves_value():
+    schema = {"type": "object", "properties": {"sourceUrl": {"type": "string"}}}
+    model = json_schema_to_pydantic(schema, "Trim")
+    url = "https://www.marshmallow.com/jobs?ashby_jid=034a8a61#openings"
+    assert model.model_validate({"sourceUrl": f"  {url} "}).sourceUrl == url
+
+
+def test_explicit_non_url_format_opts_out_of_name_heuristic():
+    schema = {
+        "type": "object",
+        "properties": {"shareLink": {"type": "string", "format": "date-time"}},
+    }
+    model = json_schema_to_pydantic(schema, "OptOut")
+    assert model.model_validate({"shareLink": "not a url"}).shareLink == "not a url"
+
+
+def test_url_format_inside_array_items():
+    schema = {
+        "type": "object",
+        "properties": {
+            "recordingUrls": {
+                "type": "array",
+                "items": {"type": "string", "format": "uri"},
+            }
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Arr")
+    assert model.model_validate({"recordingUrls": ["https://a.b/x"]}).recordingUrls
+    with pytest.raises(ValidationError, match="absolute http"):
+        model.model_validate({"recordingUrls": ["https://a.b/x", "nope"]})
