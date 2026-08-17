@@ -211,7 +211,7 @@ async def test_solve_captcha_retries_without_optional_fields_when_refused() -> N
 
     async def fake_create(client, payload):
         payloads.append(dict(payload))
-        if "cookies" in payload or "recaptchaDataSValue" in payload:
+        if "cookies" in payload:
             return {"errorId": 1, "errorDescription": "ERROR_INVALID_TASK_DATA"}
         return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
 
@@ -230,7 +230,241 @@ async def test_solve_captcha_retries_without_optional_fields_when_refused() -> N
 
     assert len(payloads) == 2
     assert "cookies" not in payloads[1]
+    assert payloads[1]["recaptchaDataSValue"] == "one-shot-blob"
     assert not result.error
+
+
+def test_captcha_probe_js_falls_back_to_anchor_iframe_s_param() -> None:
+    from app.agent.tools import _CAPTCHA_PROBE_JS
+
+    assert _CAPTCHA_PROBE_JS.count('frameParam("recaptcha/api2/anchor", "s")') == 2
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_sends_is_invisible_when_probe_says_so() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    probe = dict(_INTERSTITIAL_PROBE, interstitial=False, invisible=True)
+    seen: dict = {}
+
+    async def fake_create(client, payload):
+        seen.update(payload)
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(
+                tools_mod,
+                "_eval_js",
+                _fake_eval(session, probe, "https://shop.example.com/checkout"),
+            ),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+        ):
+            await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert seen["isInvisible"] is True
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_sends_api_domain_for_a_google_interstitial() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    seen: dict = {}
+
+    async def fake_create(client, payload):
+        seen.update(payload)
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(
+                tools_mod,
+                "_eval_js",
+                _fake_eval(session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index"),
+            ),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=True)),
+        ):
+            await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert seen["apiDomain"] == "http://www.google.com/"
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_omits_api_domain_off_google() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    probe = dict(_INTERSTITIAL_PROBE)
+    seen: dict = {}
+
+    async def fake_create(client, payload):
+        seen.update(payload)
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(
+                tools_mod,
+                "_eval_js",
+                _fake_eval(session, probe, "https://example.com/sorry/index"),
+            ),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=True)),
+        ):
+            await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert "apiDomain" not in seen
+
+
+def test_submit_interstitial_js_prefers_the_widgets_own_form() -> None:
+    from app.agent.tools import _SUBMIT_INTERSTITIAL_JS
+
+    assert "widget.closest" in _SUBMIT_INTERSTITIAL_JS
+    assert 'form#captcha-form' in _SUBMIT_INTERSTITIAL_JS
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_retries_with_fresh_data_s_after_a_rejection() -> None:
+    """A re-served interstitial mints a new data-s; the second attempt must use
+    it rather than repeating the stale one that just failed."""
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    probes = iter(
+        [
+            dict(_INTERSTITIAL_PROBE, dataS="stale-blob"),
+            dict(_INTERSTITIAL_PROBE, dataS="fresh-blob"),
+        ]
+    )
+
+    async def _eval(browser_session, expression: str):
+        if "interstitial" in expression:
+            return next(probes, dict(_INTERSTITIAL_PROBE, dataS="fresh-blob"))
+        if "location.href" in expression:
+            return "https://www.google.com/sorry/index"
+        return None
+
+    payloads: list[dict] = []
+
+    async def fake_create(client, payload):
+        payloads.append(dict(payload))
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(tools_mod, "_eval_js", _eval),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(
+                tools_mod,
+                "_interstitial_cleared",
+                AsyncMock(side_effect=[False, True]),
+            ),
+        ):
+            result = await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert len(payloads) == 2
+    assert payloads[0]["recaptchaDataSValue"] == "stale-blob"
+    assert payloads[1]["recaptchaDataSValue"] == "fresh-blob"
+    assert not result.error
+    assert "cleared" in (result.extracted_content or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_refuses_a_third_solve_on_the_same_host() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    create_calls = 0
+
+    async def fake_create(client, payload):
+        nonlocal create_calls
+        create_calls += 1
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        action = _solve_action(tools)
+        with (
+            patch.object(
+                tools_mod,
+                "_eval_js",
+                _fake_eval(
+                    session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index"
+                ),
+            ),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=False)),
+        ):
+            await action(captcha_type="recaptcha_v2", browser_session=session)
+            await action(captcha_type="recaptcha_v2", browser_session=session)
+            calls_before_third = create_calls
+            result = await action(captcha_type="recaptcha_v2", browser_session=session)
+
+    assert result.error
+    assert "third" in result.error.lower()
+    assert create_calls == calls_before_third
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_warns_when_the_token_arrives_suspiciously_fast() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    feed: list[str] = []
+
+    async def progress(message: str) -> None:
+        feed.append(message)
+
+    async def fake_create(client, payload):
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools, progress=progress)
+        with (
+            patch.object(
+                tools_mod,
+                "_eval_js",
+                _fake_eval(
+                    session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index"
+                ),
+            ),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=True)),
+        ):
+            await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    arrival_lines = [m for m in feed if "token arrived" in m]
+    assert arrival_lines
+    assert "suspiciously fast" in arrival_lines[0]
 
 
 @pytest.mark.asyncio
