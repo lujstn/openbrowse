@@ -99,6 +99,19 @@ def test_sonnet_5_date_cutover():
     assert round(after, 9) == round((1000 * 3 + 1000 * 15) / 1_000_000, 9)
 
 
+def test_gemini_flash_prices_implicit_cache_hits():
+    u = _usage(
+        prompt_tokens=1_000_000,
+        prompt_cached_tokens=400_000,
+        prompt_cache_creation_tokens=None,
+        completion_tokens=10_000,
+    )
+    got = cost.usage_cost("gemini-3.7-flash", u, now=_AUG)
+    expected = (600_000 * 0.75 + 400_000 * 0.075 + 10_000 * 3.75) / 1_000_000
+    assert round(got, 9) == round(expected, 9)
+    assert got > 0
+
+
 def test_unknown_model_is_free():
     assert cost.usage_cost("some-unlisted-model", _usage(prompt_tokens=1000), now=_AUG) == 0.0
 

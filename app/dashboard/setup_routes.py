@@ -42,6 +42,7 @@ async def setup_save(
     api_key: str = Form(...),
     anthropic_api_key: str = Form(""),
     openai_api_key: str = Form(""),
+    gemini_api_key: str = Form(""),
     capsolver_api_key: str = Form(""),
     dashboard_password: str = Form(""),
     max_concurrent_sessions: str = Form(""),
@@ -60,6 +61,7 @@ async def setup_save(
     for name, value in (
         ("ANTHROPIC_API_KEY", anthropic_api_key),
         ("OPENAI_API_KEY", openai_api_key),
+        ("GEMINI_API_KEY", gemini_api_key),
         ("CAPSOLVER_API_KEY", capsolver_api_key),
         ("DASHBOARD_PASSWORD", dashboard_password),
     ):

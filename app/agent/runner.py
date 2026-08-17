@@ -13,7 +13,14 @@ from typing import Any
 
 from openai import APIConnectionError, APIStatusError, RateLimitError
 
-from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
+from browser_use import (
+    Agent,
+    BrowserSession,
+    ChatAnthropic,
+    ChatGoogle,
+    ChatOpenAI,
+    Tools,
+)
 from browser_use.llm import UserMessage
 from browser_use.llm.exceptions import (
     ModelOutputTruncatedError,
@@ -801,6 +808,180 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 set_activity(sid, "Running actions")
 
 
+class _ForwardingProxy:
+    """Forwards every attribute to ``inner`` except the ones handed to it, so a
+    single method deep inside a vendor client can be swapped without touching
+    the object itself.
+    """
+
+    def __init__(self, inner: Any, **overrides: Any) -> None:
+        object.__setattr__(self, "_inner", inner)
+        for name, value in overrides.items():
+            object.__setattr__(self, name, value)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+
+class _ThinkingChatGoogle(ChatGoogle):
+    """ChatGoogle wired into the missing-action repair ladder, the reasoning feed
+    and the code-stream settle, like the other two clients.
+
+    Gemini returns its reasoning as response parts flagged ``thought`` rather than
+    as a field on the completion, and the library only calls the non-streaming
+    endpoint, so ``generate_content`` is swapped for a streaming one that pushes
+    the summary into the feed as it is written, then merges the chunks back into
+    the single response the library expects.
+    """
+
+    @staticmethod
+    def _thought_text(response: Any) -> str:
+        parts: list[str] = []
+        for candidate in getattr(response, "candidates", None) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                if getattr(part, "thought", False) and getattr(part, "text", None):
+                    parts.append(part.text)
+        return " ".join(" ".join(parts).split())
+
+    def _get_usage(self, response: Any) -> Any:
+        try:
+            self._last_thoughts = self._thought_text(response)
+        except Exception:
+            logger.debug("gemini thought harvest failed", exc_info=True)
+            self._last_thoughts = ""
+        return super()._get_usage(response)
+
+    def get_client(self) -> Any:
+        client = super().get_client()
+        inner = client.aio.models
+
+        async def generate_content(*, model: str, contents: Any, config: Any) -> Any:
+            # @nonobvious(must-hold): only the merge is guarded. A stream that
+            # fails mid-flight must propagate, because the library already retries
+            # those and a fallback here would re-issue inside that loop, paying
+            # for the same prompt twice over on every attempt.
+            collected = await self._consume_stream(inner, model, contents, config)
+            try:
+                return self._merge_stream(*collected)
+            except Exception:
+                logger.warning(
+                    "gemini stream merge failed; falling back to a plain call",
+                    exc_info=True,
+                )
+                return await inner.generate_content(
+                    model=model, contents=contents, config=config
+                )
+
+        return _ForwardingProxy(
+            client,
+            aio=_ForwardingProxy(
+                client.aio,
+                models=_ForwardingProxy(inner, generate_content=generate_content),
+            ),
+        )
+
+    async def _consume_stream(
+        self, models: Any, model: str, contents: Any, config: Any
+    ) -> tuple[Any, Any, list[str], list[str]]:
+        """Read the streamed completion, pushing reasoning into the feed as it
+        arrives. Returns the closing chunk, the usage totals, and the answer and
+        reasoning text.
+        """
+        sid = getattr(self, "_activity_session", None)
+        loop = asyncio.get_running_loop()
+        thoughts: list[str] = []
+        answer: list[str] = []
+        last: Any = None
+        usage: Any = None
+        last_push = 0.0
+
+        stream = await models.generate_content_stream(
+            model=model, contents=contents, config=config
+        )
+        async for chunk in stream:
+            last = chunk
+            usage = getattr(chunk, "usage_metadata", None) or usage
+            for candidate in getattr(chunk, "candidates", None) or []:
+                content = getattr(candidate, "content", None)
+                for part in getattr(content, "parts", None) or []:
+                    text = getattr(part, "text", None)
+                    if not isinstance(text, str) or not text:
+                        continue
+                    if getattr(part, "thought", False):
+                        thoughts.append(text)
+                        if sid and loop.time() - last_push > 0.4:
+                            last_push = loop.time()
+                            joined = " ".join("".join(thoughts).split())
+                            set_activity(sid, f"💭 {joined[-140:]}", spin=True)
+                    else:
+                        answer.append(text)
+        return last, usage, answer, thoughts
+
+    @staticmethod
+    def _merge_stream(
+        last: Any, usage: Any, answer: list[str], thoughts: list[str]
+    ) -> Any:
+        """Rebuild the streamed chunks into the one whole response the library
+        expects, keeping the reasoning in its own part so it stays out of the text.
+        """
+        from google.genai import types as genai_types
+
+        if last is None or not getattr(last, "candidates", None):
+            raise ValueError("stream produced no candidates")
+        content = last.candidates[0].content
+        if content is None:
+            raise ValueError("stream produced no content")
+
+        parts = [genai_types.Part(text="".join(answer))]
+        if thoughts:
+            parts.append(genai_types.Part(text="".join(thoughts), thought=True))
+        content.parts = parts
+        # @nonobvious(forced-by): only the closing chunks carry usage totals, and
+        # a response without them prices the whole call at zero.
+        if usage is not None:
+            last.usage_metadata = usage
+        return last
+
+    async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
+        sid = getattr(self, "_activity_session", None)
+        if sid:
+            last = getattr(self, "_last_action", None)
+            label = "Model reasoning" + (f" · next step after {last}" if last else "")
+            set_activity(sid, label, spin=True)
+
+        async def _call(msgs: Any) -> Any:
+            return await super(_ThinkingChatGoogle, self).ainvoke(
+                msgs, output_format, **kwargs
+            )
+
+        try:
+            try:
+                result = await _invoke_with_action_repair(_call, messages, output_format)
+            except ModelOutputTruncatedError:
+                logger.info("Output truncated; retrying with max_output_tokens=64000")
+                prev = self.max_output_tokens
+                self.max_output_tokens = 64000
+                try:
+                    result = await _call(messages)
+                finally:
+                    self.max_output_tokens = prev
+        finally:
+            if sid:
+                set_activity(sid, "Running actions")
+
+        await _settle_code_stream(self, result, output_format)
+        thoughts = getattr(self, "_last_thoughts", "")
+        if thoughts:
+            if getattr(result, "thinking", None) is None:
+                result.thinking = thoughts
+            self._last_model_reasoning = thoughts
+            if sid:
+                snippet = thoughts[:140] + ("…" if len(thoughts) > 140 else "")
+                set_activity(sid, f"💭 {snippet}")
+        return result
+
+
 _ANTHROPIC_MODELS: dict[str, str] = {
     "claude-fable-5": "claude-fable-5",
     "claude-mythos-5": "claude-mythos-5",
@@ -820,6 +1001,10 @@ _OPENAI_MODELS: dict[str, str] = {
     "gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
     "gpt-5.6-luna": "gpt-5.6-luna",
+}
+
+_GOOGLE_MODELS: dict[str, str] = {
+    "gemini-3.7-flash": "gemini-3.7-flash",
 }
 
 _THINKING_BUDGETS: dict[str, int] = {
@@ -856,11 +1041,13 @@ class ModelReasoning:
     efforts: tuple[str, ...]
     default: str
     can_disable: bool
-    style: str  # @nonobvious(means): "adaptive" | "budget" | "openai-responses" wire shape
+    style: str  # @nonobvious(means): "adaptive" | "budget" | "openai-responses" | "gemini" wire shape
 
 # @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16:
 # Fable/Mythos 400 on a disabled config; the Responses endpoint accepts "none"
-# through "max" (chat.completions rejects "max"). Re-probe before editing.
+# through "max" (chat.completions rejects "max"). Gemini 3.7 Flash has no off
+# switch and 400s on the "minimal" level, so it carries a three-rung ladder.
+# Re-probe before editing.
 _MODEL_REASONING: dict[str, ModelReasoning] = {
     "claude-sonnet-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
     "claude-opus-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
@@ -873,6 +1060,7 @@ _MODEL_REASONING: dict[str, ModelReasoning] = {
     "gpt-5.6-terra": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
     "gpt-5.6-sol": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
     "gpt-5.6-luna": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
+    "gemini-3.7-flash": ModelReasoning(("low", "medium", "high"), "medium", False, "gemini"),
 }
 
 
@@ -925,7 +1113,17 @@ def _resolve_model(model: str) -> tuple[str, str]:
         return "anthropic", _ANTHROPIC_MODELS[key]
     if key in _OPENAI_MODELS:
         return "openai", _OPENAI_MODELS[key]
+    if key in _GOOGLE_MODELS:
+        return "google", _GOOGLE_MODELS[key]
     raise ValueError(f"'{key}' is not a valid model.")
+
+
+def _cap_output_tokens(llm: Any, cap: int) -> None:
+    # @nonobvious(forced-by): each client names its output cap differently and
+    # accepts an assignment to a name it does not use, leaving the call uncapped.
+    for attr in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+        if hasattr(llm, attr):
+            setattr(llm, attr, cap)
 
 
 def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]:
@@ -949,6 +1147,32 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
             # the system prompt and the reply is parsed tolerantly.
             add_schema_to_system_prompt=True,
             dont_force_structured_output=True,
+        )
+        return provider, model_id, llm
+
+    if provider == "google":
+        if not settings.gemini_api_key:
+            raise ValueError(f"Model '{model}' needs GEMINI_API_KEY, which is not configured")
+        # @nonobvious(forced-by): browser-use picks a thinking branch by matching
+        # the literal substrings "gemini-3-flash"/"gemini-3.1-flash", which this
+        # id matches neither of, so a thinking_level argument is dropped with a
+        # warning. This pass-through dict is copied verbatim and left alone.
+        thinking: dict[str, Any] = {"include_thoughts": True}
+        if effort != "default":
+            thinking["thinking_level"] = effort.upper()
+        llm = _ThinkingChatGoogle(
+            model=model_id,
+            api_key=settings.gemini_api_key,
+            # @nonobvious(forced-by): Gemini counts thinking tokens against the
+            # output cap, so the library's 8096 default truncates ordinary steps.
+            max_output_tokens=32768,
+            max_retries=3,
+            # @nonobvious(forced-by): a free-form dict parameter (e.g. add_item's
+            # item) becomes a property-less {"type": "object"}, and a
+            # response_schema built from that can only ever emit {}; the schema
+            # rides in the prompt and the reply is parsed tolerantly instead.
+            supports_structured_output=False,
+            config={"thinking_config": thinking},
         )
         return provider, model_id, llm
 
@@ -1276,10 +1500,7 @@ async def run_agent_session(session_id: str) -> None:
     try:
         preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
         _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
-        try:
-            preflight_llm.max_tokens = 300
-        except Exception:
-            pass
+        _cap_output_tokens(preflight_llm, 300)
         north_star_task = asyncio.create_task(_derive_north_star(preflight_llm, task))
     except Exception:
         logger.debug("North Star pre-flight setup failed", exc_info=True)

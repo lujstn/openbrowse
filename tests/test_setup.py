@@ -53,6 +53,7 @@ async def test_setup_writes_env_and_shows_key_once(client):
             "api_key": "generated-abc123",
             "anthropic_api_key": "sk-ant-test",
             "openai_api_key": "",
+            "gemini_api_key": "AIza-test",
             "dashboard_password": "hunter2",
         },
     )
@@ -61,6 +62,7 @@ async def test_setup_writes_env_and_shows_key_once(client):
     env = (tmp_path / ".env").read_text()
     assert "API_KEY=generated-abc123" in env
     assert "ANTHROPIC_API_KEY=sk-ant-test" in env
+    assert "GEMINI_API_KEY=AIza-test" in env
     assert "DASHBOARD_PASSWORD=hunter2" in env
     assert "OPENAI_API_KEY" not in env
 

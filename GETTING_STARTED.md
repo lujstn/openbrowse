@@ -8,7 +8,7 @@ OpenBrowse is a self-hosted replacement for Browser Use Cloud, built for a Raspb
 
 - A Linux machine: built and benchmarked on a Raspberry Pi 5 (16GB, Debian 64-bit), but any Debian/Ubuntu VPS or home server works
 - SSH access to the machine
-- An [Anthropic API key](https://console.anthropic.com/) and/or an [OpenAI API key](https://platform.openai.com/api-keys)
+- An [Anthropic API key](https://console.anthropic.com/), an [OpenAI API key](https://platform.openai.com/api-keys) and/or a [Gemini API key](https://aistudio.google.com/apikey)
 - _(Optional)_ [Tailscale](https://tailscale.com/) installed and authenticated, for private access or public exposure
 
 ---
@@ -58,6 +58,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `API_KEY`                 | A secret bearer token used to authenticate API requests                        |
 | `ANTHROPIC_API_KEY`       | Your Anthropic API key (`sk-ant-...`), for `claude-*` models                   |
 | `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
+| `GEMINI_API_KEY`          | _(Optional)_ Your [Google AI Studio](https://aistudio.google.com/apikey) key, for `gemini-*` models |
 | `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 5); budget ~2GB RAM and one CPU core per session |
