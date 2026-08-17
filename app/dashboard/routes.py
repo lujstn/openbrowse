@@ -862,14 +862,14 @@ _VNC_VIEW_HTML = """<!doctype html>
 
 @vnc_router.get("/vnc/{session_id}/view")
 async def vnc_view(request: Request, session_id: str):
-    if not dashboard_auth_ok(request.headers.get("authorization")):
+    if not dashboard_auth_ok(request.headers.get("authorization"), request):
         return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
     return HTMLResponse(_VNC_VIEW_HTML)
 
 
 @vnc_router.get("/vnc/{session_id}/{asset:path}")
 async def vnc_asset(request: Request, session_id: str, asset: str):
-    if not dashboard_auth_ok(request.headers.get("authorization")):
+    if not dashboard_auth_ok(request.headers.get("authorization"), request):
         return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
     port = await _novnc_port_for_session(session_id)
     if port is None:
@@ -930,7 +930,7 @@ async def _bridge(client_ws: WebSocket, upstream: Any) -> None:
 
 @vnc_router.websocket("/vnc/{session_id}/{ws_path:path}")
 async def vnc_ws(websocket: WebSocket, session_id: str, ws_path: str):
-    if not dashboard_auth_ok(websocket.headers.get("authorization")):
+    if not dashboard_auth_ok(websocket.headers.get("authorization"), websocket):
         await websocket.close(code=1008)
         return
     port = await _novnc_port_for_session(session_id)
