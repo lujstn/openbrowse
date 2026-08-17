@@ -5,6 +5,7 @@ title: "OpenBrowse: Self-hosted AI browser agents"
 version: 1.1.1
 date-released: 2026-08-17
 license: MIT
+doi: "10.5281/zenodo.21986248"
 authors:
   - family-names: "Johnston Kurilov"
     given-names: "Lucas"
