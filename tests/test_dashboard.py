@@ -578,3 +578,25 @@ def test_streaming_response_caret_and_handoff_behaviour():
     harness = Path(__file__).parent / "fixtures" / "streaming_response_harness.mjs"
     proc = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+async def test_run_page_composer_keeps_native_submission(client):
+    resp = await client.get("/", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert 'class="ob-composer-field"' in resp.text
+    assert 'class="ob-composer-mirror"' in resp.text
+    assert 'class="ob-composer-input"' in resp.text
+    assert "native: true" in resp.text
+    assert '<button class="run-btn" type="submit" disabled>Run</button>' in resp.text
+
+
+async def test_followup_composer_replaces_the_hidden_input(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="watch a page", keep_alive=True)
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    assert 'class="ob-composer ob-composer-dock"' in resp.text
+    assert 'id="followup-input"' in resp.text
+    assert "OpenBrowseAgents.PromptInput" in resp.text
+    assert 'style="display: none"' not in resp.text.split('id="followup-form"')[1][:200]

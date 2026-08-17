@@ -345,11 +345,163 @@
     }, 400);
   }
 
+  var SEND_ICON =
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+    'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+  var STOP_ICON =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">' +
+    '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+  function PromptInput(form, opts) {
+    opts = opts || {};
+    this.form = form;
+    this.input = form.querySelector(".ob-composer-input");
+    this.mirror = form.querySelector(".ob-composer-mirror");
+    this.sendBtn = form.querySelector(".ob-composer-send");
+    this.minRows = opts.minRows || 1;
+    this.maxRows = opts.maxRows || 8;
+    this.onSubmit = opts.onSubmit;
+    this.onStop = opts.onStop;
+    this._native = !!opts.native;
+    this._loading = null;
+    this._chrome = null;
+    this._bind();
+    this.setLoading(false);
+    this.resize();
+  }
+
+  PromptInput.prototype._bind = function () {
+    var self = this;
+    this.input.addEventListener("input", function () {
+      self.resize();
+    });
+    this.input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      // @nonobvious(forced-by): an IME candidate window commits on Enter, and
+      // submitting there would send half-typed text in Japanese or Chinese.
+      if (e.isComposing || (e.nativeEvent && e.nativeEvent.isComposing)) return;
+      e.preventDefault();
+      self.submit();
+    });
+    if (!this._native) {
+      this.form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        self.submit();
+      });
+    }
+    if (this.sendBtn) {
+      this.sendBtn.addEventListener("click", function (e) {
+        if (!self._loading) return;
+        e.preventDefault();
+        if (self.onStop) self.onStop();
+      });
+    }
+    if (global.ResizeObserver) {
+      this._ro = new ResizeObserver(function () {
+        self._metrics = null;
+        self.resize();
+      });
+      this._ro.observe(this.input);
+    }
+  };
+
+  var MIRRORED_STYLES = [
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "wordSpacing",
+    "lineHeight",
+    "textTransform",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "boxSizing",
+  ];
+
+  // @nonobvious(must-hold): the twin only measures the true height while its box
+  // matches the real one exactly, so it copies the computed metrics rather than
+  // assuming any, and each host page is free to style its own field.
+  PromptInput.prototype._measure = function () {
+    if (this._metrics) return this._metrics;
+    var cs = global.getComputedStyle(this.input);
+    var style = this.mirror.style;
+    MIRRORED_STYLES.forEach(function (key) {
+      style[key] = cs[key];
+    });
+    style.borderStyle = "solid";
+    style.borderColor = "transparent";
+    this._metrics = {
+      lineHeight: parseFloat(cs.lineHeight) || 20,
+      chrome:
+        parseFloat(cs.paddingTop) +
+        parseFloat(cs.paddingBottom) +
+        parseFloat(cs.borderTopWidth) +
+        parseFloat(cs.borderBottomWidth),
+    };
+    return this._metrics;
+  };
+
+  // @nonobvious(forced-by): a textarea cannot report the height its content
+  // wants without first being shrunk, which flickers; an off-screen twin with
+  // the same box measures it instead. The zero-width space keeps a trailing
+  // newline from collapsing.
+  PromptInput.prototype.resize = function () {
+    if (!this.mirror) return;
+    this.mirror.textContent = this.input.value + "​";
+    var m = this._measure();
+    var min = this.minRows * m.lineHeight + m.chrome;
+    var max = this.maxRows * m.lineHeight + m.chrome;
+    var wanted = this.mirror.scrollHeight;
+    this.input.style.height = Math.min(Math.max(wanted, min), max) + "px";
+    this.input.style.overflowY = wanted > max ? "auto" : "hidden";
+  };
+
+  PromptInput.prototype.value = function () {
+    return this.input.value.trim();
+  };
+
+  PromptInput.prototype.clear = function () {
+    this.input.value = "";
+    this.resize();
+  };
+
+  PromptInput.prototype.submit = function () {
+    if (this._loading || !this.value()) return;
+    if (this._native) {
+      if (this.form.requestSubmit) this.form.requestSubmit();
+      else this.form.submit();
+      return;
+    }
+    if (this.onSubmit) this.onSubmit(this.value());
+  };
+
+  PromptInput.prototype.setLoading = function (loading) {
+    if (this._loading === !!loading) return;
+    this._loading = !!loading;
+    this.form.classList.toggle("is-loading", this._loading);
+    this.input.readOnly = this._loading;
+    if (!this.sendBtn) return;
+    this.sendBtn.innerHTML = this._loading ? STOP_ICON : SEND_ICON;
+    this.sendBtn.setAttribute("aria-label", this._loading ? "Stop" : "Send");
+    this.sendBtn.title = this._loading ? "Stop the agent" : "Send";
+    this.sendBtn.type = this._loading ? "button" : "submit";
+    this.sendBtn.disabled = this._loading && !this.onStop;
+  };
+
   global.OpenBrowseAgents = {
     renderMdLite: renderMdLite,
     reveal: { open: revealOpen, close: revealClose },
     Typewriter: Typewriter,
     StreamingResponse: StreamingResponse,
+    PromptInput: PromptInput,
     handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
   };
 })(window);

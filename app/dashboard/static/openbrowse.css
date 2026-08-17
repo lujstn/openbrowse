@@ -225,6 +225,115 @@
   transform: translateY(0);
 }
 
+.ob-composer {
+  display: block;
+}
+.ob-composer-dock {
+  padding: 10px 12px;
+  border-top: 1px solid var(--ob-border);
+  background: #0d0d0d;
+  flex: 0 0 auto;
+}
+.ob-composer-shell {
+  border: 1px solid var(--ob-border-strong);
+  border-radius: 14px;
+  background: var(--ob-bg);
+  padding: 4px 4px 4px 0;
+  transition: border-color 0.18s var(--ob-ease-out);
+}
+.ob-composer:focus-within .ob-composer-shell {
+  border-color: var(--ob-text-faint);
+}
+.ob-composer-field {
+  position: relative;
+}
+.ob-composer-mirror,
+.ob-composer-input {
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  padding: 10px 12px;
+  border: 0;
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+}
+.ob-composer-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  min-height: 0;
+}
+.ob-composer-input {
+  display: block;
+  resize: none;
+  overflow-y: hidden;
+  background: none;
+  color: var(--ob-text);
+}
+.ob-composer-input:focus {
+  outline: none;
+}
+.ob-composer-input::placeholder {
+  color: var(--ob-text-faint);
+}
+.ob-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 4px 2px 12px;
+}
+.ob-composer-controls {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+  min-width: 0;
+}
+.ob-composer-send {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--ob-accent);
+  color: var(--ob-bg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background 0.18s var(--ob-ease-out),
+    transform 0.12s var(--ob-ease-out);
+}
+.ob-composer-send:hover:not(:disabled) {
+  background: #7db8fb;
+}
+.ob-composer-send:active:not(:disabled) {
+  transform: scale(0.9);
+}
+.ob-composer-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ob-composer.is-loading .ob-composer-send {
+  background: var(--ob-danger-strong);
+  color: #fff;
+}
+.ob-composer.is-loading .ob-composer-input {
+  color: var(--ob-text-dim);
+}
+
+.ob-composer-hint {
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  padding: 6px 4px 0 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,
@@ -232,7 +341,9 @@
   .ob-stream-actions,
   .msg-row.expanded .msg-cards.ob-handoff-grow,
   .msg-row.expanded .msg-cards.ob-handoff-grow .card,
-  .ob-row-enter {
+  .ob-row-enter,
+  .ob-composer-shell,
+  .ob-composer-send {
     transition: none !important;
   }
 }

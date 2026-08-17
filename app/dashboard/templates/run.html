@@ -57,6 +57,10 @@ block head %}
     border-radius: 12px;
     padding: 20px;
   }
+  .run-card .ob-composer-input {
+    min-height: 0;
+    resize: none;
+  }
   .run-card textarea {
     width: 100%;
     min-height: 120px;
@@ -205,12 +209,17 @@ block head %}
     </span>
   </div>
   <form class="run-card" method="post" action="/run">
-    <textarea
-      name="task"
-      placeholder="Describe what the browser agent should do…"
-      required
-      autofocus
-    ></textarea>
+    <div class="ob-composer-field">
+      <div class="ob-composer-mirror" aria-hidden="true"></div>
+      <textarea
+        name="task"
+        class="ob-composer-input"
+        rows="4"
+        placeholder="Describe what the browser agent should do…"
+        required
+        autofocus
+      ></textarea>
+    </div>
     <div class="run-controls">
       <div class="field">
         <label for="model">Model</label>
@@ -314,6 +323,15 @@ block head %}
     }
     task.addEventListener("input", sync);
     sync();
+    // @nonobvious(forced-by): agents.js is deferred, so it has not run yet while
+    // this inline script executes during parsing.
+    document.addEventListener("DOMContentLoaded", function () {
+      new OpenBrowseAgents.PromptInput(task.closest("form"), {
+        native: true,
+        minRows: 4,
+        maxRows: 14,
+      });
+    });
   })();
   (function () {
     var toggle = document.getElementById("use_schema");
