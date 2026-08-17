@@ -1174,3 +1174,46 @@ async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeyp
         assert len(push) <= _REASONING_MAX_CHARS, "a live push outgrew the persisted row"
         assert settled.startswith(push), "the live card must be a head slice, never a tail"
     assert pushes[-1] == settled, "the last live card must match the row that replaces it"
+
+
+async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypatch):
+    """Adaptive thinking can open a block then stay silent, so the feed has to
+    say it is thinking on the block, not on the first token.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    llm._activity_session = "sess-silent"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
+    )
+
+    events = [
+        types.SimpleNamespace(
+            type="content_block_start",
+            content_block=types.SimpleNamespace(type="thinking"),
+        )
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            self._it = iter(events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_message(self):
+            return "final"
+
+    assert await llm._drain_stream(FakeStream()) == "final"
+    assert pushes == [{"label": _REASONING_LABEL, "spin": True, "stream": None}]
