@@ -79,19 +79,69 @@ def _safe_fromjson(value: str) -> dict:
 
 templates.env.filters["fromjson"] = _safe_fromjson
 
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_MD_CODE_RE = re.compile(r"`([^`]+)`")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_CODE_RE = re.compile(r"`([^`\n]+)`")
+_MD_FENCE_RE = re.compile(r"```[^\n]*\n?(.*?)(?:```\n?|\Z)", re.DOTALL)
+_MD_LIST_ITEM_RE = re.compile(r"^[-*]\s+(.*)$")
+
+
+def _mdlite_inline(text: str) -> str:
+    t = _MD_BOLD_RE.sub(r"<strong>\1</strong>", text)
+    return _MD_CODE_RE.sub(r"<code>\1</code>", t)
+
+
+def _mdlite_prose(text: str) -> str:
+    """Bold/code resolve across a whole paragraph (so a marker pair can still
+    span a line break), list items resolve per line; lines are batched into
+    the two so a run of plain lines stays one bold-eligible unit.
+    """
+    parts: list[str] = []
+    para_lines: list[str] = []
+    list_items: list[str] = []
+
+    def flush_para() -> None:
+        if para_lines:
+            joined = _mdlite_inline("\n".join(para_lines))
+            parts.append(joined.replace("\n", "<br>"))
+            para_lines.clear()
+
+    def flush_list() -> None:
+        if list_items:
+            parts.append("<ul>" + "".join(list_items) + "</ul>")
+            list_items.clear()
+
+    for line in text.split("\n"):
+        item = _MD_LIST_ITEM_RE.match(line)
+        if item:
+            flush_para()
+            list_items.append(f"<li>{_mdlite_inline(item.group(1))}</li>")
+            continue
+        flush_list()
+        para_lines.append(line)
+    flush_para()
+    flush_list()
+    return "<br>".join(parts)
 
 
 def _mdlite(text: str) -> Markup:
-    """Markdown-lite for model reasoning text: escape everything, then allow
-    bold, inline code and line breaks. Full markdown is deliberately not
-    rendered; reasoning is prose, not a document.
+    """Markdown-lite for model reasoning text: escape everything, then resolve
+    bold, inline code, fenced code blocks and bullet lists. An unterminated
+    ``**`` or backtick has no matching closer to find, so it is left as
+    literal text rather than guessed at; an unterminated fence has nowhere to
+    stop, so it runs to the end of the text as code. Both cases are reachable
+    on real (not just streamed) text, since reasoning is truncated to 6000
+    characters before storage and that cut can land mid-marker.
     """
     t = _html.escape(str(text or ""))
-    t = _MD_BOLD_RE.sub(r"<strong>\1</strong>", t)
-    t = _MD_CODE_RE.sub(r"<code>\1</code>", t)
-    return Markup(t.replace("\n", "<br>"))
+    out: list[str] = []
+    pos = 0
+    for m in _MD_FENCE_RE.finditer(t):
+        if m.start() > pos:
+            out.append(_mdlite_prose(t[pos : m.start()]))
+        out.append(f"<pre><code>{m.group(1)}</code></pre>")
+        pos = m.end()
+    out.append(_mdlite_prose(t[pos:]))
+    return Markup("".join(out))
 
 
 templates.env.filters["mdlite"] = _mdlite
@@ -748,44 +798,50 @@ async def sse_live_grid(request: Request):
     return EventSourceResponse(event_generator())
 
 
+_MESSAGES_POLL_INTERVAL_S = 1.0
+_STATUS_POLL_INTERVAL_S = 0.25
+
+
 @router.get("/sse/session/{session_id}/messages")
 async def sse_session_messages(request: Request, session_id: str):
-    last_count = 0
-
     async def event_generator() -> AsyncGenerator[dict[str, str], None]:
-        nonlocal last_count
+        last_id: str | None = None
+        last_status_payload: str | None = None
+        last_messages_at = 0.0
         while True:
             if await request.is_disconnected():
                 break
-            messages, _ = await crud.list_messages(session_id, limit=500)
-            if len(messages) > last_count:
-                new_msgs = messages[last_count:]
-                last_count = len(messages)
-                html = templates.get_template("_message_rows.html").render(
-                    messages=new_msgs,
-                    format_relative=_format_relative_time,
-                )
-                yield {"event": "messages", "data": html}
+            now = time.monotonic()
+            if now - last_messages_at >= _MESSAGES_POLL_INTERVAL_S:
+                last_messages_at = now
+                new_msgs, _ = await crud.list_messages(session_id, after=last_id, limit=500)
+                if new_msgs:
+                    last_id = new_msgs[-1]["id"]
+                    html = templates.get_template("_message_rows.html").render(
+                        messages=new_msgs,
+                        format_relative=_format_relative_time,
+                    )
+                    yield {"event": "messages", "data": html}
             session = await crud.get_session(session_id)
             if session:
-                yield {
-                    "event": "status",
-                    "data": json.dumps({
-                        "status": session["status"],
-                        "liveUrl": session.get("live_url"),
-                        "stepCount": session.get("step_count", 0),
-                        "totalInputTokens": session.get("total_input_tokens", 0),
-                        "totalOutputTokens": session.get("total_output_tokens", 0),
-                        "llmCostUsd": str(session.get("llm_cost_usd", 0)),
-                        "capsolverCostUsd": str(session.get("capsolver_cost_usd", 0)),
-                        "totalCostUsd": str(session.get("total_cost_usd", 0)),
-                        "provider": model_provider(session.get("model")),
-                        "output": session.get("output") or "",
-                        "activity": get_activity(session_id),
-                        "isTaskSuccessful": session.get("is_task_successful"),
-                    }),
-                }
-            await asyncio.sleep(1)
+                payload = json.dumps({
+                    "status": session["status"],
+                    "liveUrl": session.get("live_url"),
+                    "stepCount": session.get("step_count", 0),
+                    "totalInputTokens": session.get("total_input_tokens", 0),
+                    "totalOutputTokens": session.get("total_output_tokens", 0),
+                    "llmCostUsd": str(session.get("llm_cost_usd", 0)),
+                    "capsolverCostUsd": str(session.get("capsolver_cost_usd", 0)),
+                    "totalCostUsd": str(session.get("total_cost_usd", 0)),
+                    "provider": model_provider(session.get("model")),
+                    "output": session.get("output") or "",
+                    "activity": get_activity(session_id),
+                    "isTaskSuccessful": session.get("is_task_successful"),
+                })
+                if payload != last_status_payload:
+                    last_status_payload = payload
+                    yield {"event": "status", "data": payload}
+            await asyncio.sleep(_STATUS_POLL_INTERVAL_S)
 
     return EventSourceResponse(event_generator())
 
