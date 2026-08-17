@@ -278,7 +278,14 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         if self.max_completion_tokens is not None:
             params["max_output_tokens"] = self.max_completion_tokens
         if self.reasoning_effort is not None:
-            params["reasoning"] = {"effort": self.reasoning_effort}
+            reasoning: dict[str, Any] = {"effort": self.reasoning_effort}
+            # @nonobvious(means): "auto" asks for reasoning summaries so the feed
+            # can show a 🧠 card; at effort "none" there is nothing to summarise.
+            if self.reasoning_effort != "none" and not getattr(
+                self, "_summary_unsupported", False
+            ):
+                reasoning["summary"] = "auto"
+            params["reasoning"] = reasoning
         # @nonobvious(mirrors): same trust model as the chat.completions path —
         # strict structured output cannot express our action registry, so the
         # schema rides in the system message and the reply is parsed from text.
@@ -331,6 +338,53 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             )
 
     @staticmethod
+    def _reasoning_summary(response: Any) -> str:
+        parts: list[str] = []
+        for item in getattr(response, "output", None) or []:
+            if getattr(item, "type", None) != "reasoning":
+                continue
+            for s in getattr(item, "summary", None) or []:
+                text = getattr(s, "text", None)
+                if text:
+                    parts.append(text)
+        return " ".join(" ".join(parts).split())
+
+    async def _create_with_summary_fallback(self, params: dict[str, Any]) -> Any:
+        try:
+            return await self.get_client().responses.create(**params)
+        except APIStatusError as e:
+            # @nonobvious(forced-by): reasoning summaries need OpenAI org
+            # verification; unverified orgs 400 on the parameter, so drop it
+            # once and remember rather than failing every step.
+            if (
+                e.status_code == 400
+                and "summary" in str(e).lower()
+                and "summary" in (params.get("reasoning") or {})
+            ):
+                self._summary_unsupported = True
+                retry_params = dict(params)
+                retry_params["reasoning"] = {
+                    k: v for k, v in params["reasoning"].items() if k != "summary"
+                }
+                return await self.get_client().responses.create(**retry_params)
+            raise
+
+    def _parse_structured(self, text: str, output_format: Any) -> Any:
+        try:
+            return output_format.model_validate_json(text)
+        except Exception:
+            # @nonobvious(forced-by): some models append prose after the JSON
+            # object and output_text concatenates every output item, so a strict
+            # parse dies on "trailing characters"; the first balanced JSON
+            # object is the intended reply.
+            cleaned = _strip_json_fence(text)
+            start = cleaned.find("{")
+            if start < 0:
+                raise
+            obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            return output_format.model_validate(obj)
+
+    @staticmethod
     def _usage_from_responses(response: Any) -> ChatInvokeUsage | None:
         usage = getattr(response, "usage", None)
         if usage is None:
@@ -348,39 +402,55 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         )
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
-        params = self._build_request(messages, output_format)
+        sid = getattr(self, "_activity_session", None)
+        if sid:
+            last = getattr(self, "_last_action", None)
+            label = "Model reasoning" + (f" · next step after {last}" if last else "")
+            set_activity(sid, label, spin=True)
+        summary = ""
         try:
-            response = await self.get_client().responses.create(**params)
-            self._raise_if_truncated(response)
-            text = self._output_text(response)
-            usage = self._usage_from_responses(response)
-            stop_reason = getattr(response, "status", None)
-            if output_format is None:
-                result: Any = ChatInvokeCompletion(
-                    completion=text or "", usage=usage, stop_reason=stop_reason
-                )
-            else:
-                if not text:
-                    raise ModelProviderError(
-                        message="Failed to parse structured output from model response",
-                        status_code=500,
-                        model=self.name,
+            params = self._build_request(messages, output_format)
+            try:
+                response = await self._create_with_summary_fallback(params)
+                self._raise_if_truncated(response)
+                text = self._output_text(response)
+                usage = self._usage_from_responses(response)
+                summary = self._reasoning_summary(response)
+                stop_reason = getattr(response, "status", None)
+                if output_format is None:
+                    result: Any = ChatInvokeCompletion(
+                        completion=text or "", usage=usage, stop_reason=stop_reason
                     )
-                result = ChatInvokeCompletion(
-                    completion=output_format.model_validate_json(text),
-                    usage=usage,
-                    stop_reason=stop_reason,
-                )
-        except (ModelProviderError, ModelOutputTruncatedError):
-            raise
-        except RateLimitError as e:
-            raise ModelRateLimitError(message=e.message, model=self.name) from e
-        except APIConnectionError as e:
-            raise ModelProviderError(message=str(e), model=self.name) from e
-        except APIStatusError as e:
-            raise ModelProviderError(
-                message=e.message, status_code=e.status_code, model=self.name
-            ) from e
+                else:
+                    if not text:
+                        raise ModelProviderError(
+                            message="Failed to parse structured output from model response",
+                            status_code=500,
+                            model=self.name,
+                        )
+                    result = ChatInvokeCompletion(
+                        completion=self._parse_structured(text, output_format),
+                        usage=usage,
+                        stop_reason=stop_reason,
+                    )
+            except (ModelProviderError, ModelOutputTruncatedError):
+                raise
+            except RateLimitError as e:
+                raise ModelRateLimitError(message=e.message, model=self.name) from e
+            except APIConnectionError as e:
+                raise ModelProviderError(message=str(e), model=self.name) from e
+            except APIStatusError as e:
+                raise ModelProviderError(
+                    message=e.message, status_code=e.status_code, model=self.name
+                ) from e
+        finally:
+            if sid:
+                set_activity(sid, "Running actions")
+        if summary:
+            self._last_model_reasoning = summary
+            if sid:
+                snippet = summary[:140] + ("…" if len(summary) > 140 else "")
+                set_activity(sid, f"💭 {snippet}")
         await _settle_code_stream(self, result, output_format)
         return result
 

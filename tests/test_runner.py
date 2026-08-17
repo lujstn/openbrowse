@@ -302,7 +302,7 @@ def test_responses_request_shape_explicit_effort(monkeypatch):
     llm = _responses_llm(monkeypatch, "max")
     params = llm._build_request(_messages(), None)
     assert params["model"] == "gpt-5.6-terra"
-    assert params["reasoning"] == {"effort": "max"}
+    assert params["reasoning"] == {"effort": "max", "summary": "auto"}
     assert params["store"] is False
     assert params["max_output_tokens"] == 32768
     assert "tools" not in params
@@ -339,10 +339,19 @@ def _fake_response(
     input_tokens=100,
     cached_tokens=40,
     output_tokens=20,
+    reasoning_summary=None,
 ):
+    output = []
+    if reasoning_summary:
+        output.append(
+            types.SimpleNamespace(
+                type="reasoning",
+                summary=[types.SimpleNamespace(type="summary_text", text=reasoning_summary)],
+            )
+        )
     return types.SimpleNamespace(
         output_text=output_text,
-        output=[],
+        output=output,
         status=status,
         incomplete_details=(
             types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
@@ -378,7 +387,7 @@ async def test_responses_ainvoke_maps_usage(monkeypatch):
     assert result.usage.prompt_cached_tokens == 40
     assert result.usage.prompt_cache_creation_tokens is None
     assert result.usage.completion_tokens == 20
-    assert captured["reasoning"] == {"effort": "medium"}
+    assert captured["reasoning"] == {"effort": "medium", "summary": "auto"}
     assert captured["store"] is False
     assert "tools" not in captured
 
@@ -582,3 +591,79 @@ async def test_missing_action_three_failures_raises_short_error(monkeypatch):
     assert "abandoned" in text
     assert "validation error" not in text
     assert len(text) < 400
+
+
+def test_responses_request_omits_summary_at_none(monkeypatch):
+    llm = _responses_llm(monkeypatch, "none")
+    params = llm._build_request(_messages(), None)
+    assert params["reasoning"] == {"effort": "none"}
+
+
+async def test_responses_ainvoke_captures_reasoning_summary(monkeypatch):
+    llm = _responses_llm(monkeypatch, "high")
+    _patch_client(
+        monkeypatch, llm, _fake_response(reasoning_summary="**Plan** figure out the page")
+    )
+    result = await llm.ainvoke(_messages())
+    assert result.completion == "ok"
+    assert llm._last_model_reasoning == "**Plan** figure out the page"
+
+
+async def test_responses_summary_400_falls_back_and_remembers(monkeypatch):
+    llm = _responses_llm(monkeypatch, "medium")
+    from openai import APIStatusError
+    import httpx
+
+    calls = []
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            if "summary" in (kwargs.get("reasoning") or {}):
+                raise APIStatusError(
+                    "reasoning.summary requires org verification",
+                    response=httpx.Response(
+                        400, request=httpx.Request("POST", "http://x")
+                    ),
+                    body=None,
+                )
+            return _fake_response()
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+    result = await llm.ainvoke(_messages())
+    assert result.completion == "ok"
+    assert llm._summary_unsupported is True
+    assert len(calls) == 2 and "summary" not in calls[1]["reasoning"]
+    calls.clear()
+    await llm.ainvoke(_messages())
+    assert len(calls) == 1 and "summary" not in calls[0]["reasoning"]
+
+
+async def test_responses_tolerant_parse_handles_trailing_prose(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "low")
+    for text in (
+        '{"answer": "42"} And that is my final answer.',
+        'Here you go:\n```json\n{"answer": "42"}\n```',
+        '{"answer": "42"}{"echo": true}',
+    ):
+        _patch_client(monkeypatch, llm, _fake_response(output_text=text))
+        result = await llm.ainvoke(_messages(), output_format=Out)
+        assert result.completion.answer == "42", text
+
+
+async def test_responses_tolerant_parse_still_raises_on_junk(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "low")
+    _patch_client(monkeypatch, llm, _fake_response(output_text="no json here at all"))
+    with pytest.raises(Exception):
+        await llm.ainvoke(_messages(), output_format=Out)
