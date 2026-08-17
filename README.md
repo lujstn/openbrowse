@@ -126,6 +126,47 @@ sudo tailscale funnel --bg 8420
 - **CAPTCHA solving**: optional CapSolver integration.
 - **Multi-provider**: Anthropic and OpenAI models behind one API, with per-provider repair layers for each family's failure modes.
 
-## Licence
+## Citation
 
-MIT
+This project is licensed under the MIT License. If you use OpenBrowse as part of your research or project, please cite:
+
+```bibtex
+@software{openbrowse2026,
+  author = {Johnston Kurilov, Lucas},
+  title = {{OpenBrowse}: Self-hosted AI browser agents},
+  year = {2026},
+  publisher = {GitHub},
+  url = {https://github.com/lujstn/openbrowse}
+}
+```
+
+<br>
+
+---
+<br>
+
+<p align="center" style="font-size:12px; font-weight: 600; margin-bottom: 1.3rem;" >built with <з by @lujstn</p>
+
+<div align="center">
+  <div style="display: flex; max-width: 600px; flex-direction: row; align-items: center; justify-content: space-between;">
+    <img src=".github/assets/IMG_8874.jpg" alt="@lujstn" width="400">
+    <div>
+
+  [![Twitter](https://img.shields.io/twitter/follow/lujstn?style=social)](https://x.com/intent/user?screen_name=lujstn)
+
+  [![Instagram](https://img.shields.io/badge/Instagram-Follow-E4405F?style=social&logo=instagram)](https://www.instagram.com/lujstn/)
+
+  [![TikTok](https://img.shields.io/badge/TikTok-000000?style=flat&logo=tiktok&logoColor=white)](https://www.tiktok.com/@lujstn)
+
+  [![GitHub](https://img.shields.io/github/followers/lujstn?style=social)](https://github.com/lujstn)
+    </div>
+  </div>
+</div>
+
+<br>
+
+<div align="center">
+
+  [![Built in London](https://buildin.london/badge.svg)](https://buildin.london)
+
+</div>

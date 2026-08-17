@@ -1172,11 +1172,12 @@ async def run_agent_session(session_id: str) -> None:
 
         async def _read_progress(label: str) -> None:
             set_activity(session_id, label, spin=True)
+            action = (label.split(":", 1)[0].split() or ["read_pages"])[0]
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
                 msg_type="event",
-                data=json.dumps({"category": "read", "action": "read_pages"}),
+                data=json.dumps({"category": "read", "action": action}),
                 summary=label[:200],
                 count_step=False,
             )

@@ -1733,3 +1733,174 @@ async def test_judge_injection_elides_long_values_keeping_all_records() -> None:
     assert "long values elided" in params.text
     for i in range(16):
         assert f"Item {i}" in params.text, i
+
+
+def _link_node(index, href, tag="a", target="main", text="link", parent=None):
+    import types as _t
+
+    return _t.SimpleNamespace(
+        tag_name=tag,
+        attributes={"href": href} if href else {},
+        is_visible=True,
+        target_id=target,
+        content_document=None,
+        parent_node=parent,
+        session_id="s1",
+        backend_node_id=index,
+        get_meaningful_text_for_llm=lambda text=text: text,
+    )
+
+
+def _embed_map(with_frame_doc):
+    import types as _t
+
+    iframe = _t.SimpleNamespace(
+        tag_name="iframe",
+        attributes={"src": "https://board.example.com/acme/embed"},
+        is_visible=True,
+        target_id="frame-1",
+        content_document=(
+            _t.SimpleNamespace(target_id="frame-1") if with_frame_doc else None
+        ),
+        parent_node=None,
+        session_id="s1",
+        backend_node_id=1,
+        get_meaningful_text_for_llm=lambda: "",
+    )
+    role1 = _link_node(11, "https://x.com/list?embed_jid=aaa", target="frame-1")
+    role2 = _link_node(12, "https://x.com/list?embed_jid=bbb", target="frame-1")
+    vendor = _link_node(30, "https://board.example.com/", target="main", text="Powered by")
+    return {1: iframe, 11: role1, 12: role2, 30: vendor}
+
+
+def test_scan_link_map_frame_filter_counts_matched_frames() -> None:
+    from app.agent.tools import _scan_link_map
+
+    links, frames, anchors, iframe_present = _scan_link_map(
+        _embed_map(with_frame_doc=True),
+        "https://x.com/list",
+        frame_url_contains="board.example.com",
+    )
+    assert frames == 1
+    assert iframe_present is True
+    assert [l["href"] for l in links] == [
+        "https://x.com/list?embed_jid=aaa",
+        "https://x.com/list?embed_jid=bbb",
+    ]
+
+
+def test_scan_link_map_reports_zero_frames_instead_of_silent_empty() -> None:
+    from app.agent.tools import _scan_link_map
+
+    links, frames, anchors, iframe_present = _scan_link_map(
+        _embed_map(with_frame_doc=False),
+        "https://x.com/list",
+        frame_url_contains="board.example.com",
+    )
+    assert frames == 0
+    assert links == []
+    assert anchors == 3
+    assert iframe_present is True
+
+
+async def test_find_links_retries_then_errors_honestly_when_frame_missing(
+    monkeypatch,
+) -> None:
+    import types as _t
+
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    scans = {"n": 0}
+    selector_map = _embed_map(with_frame_doc=False)
+
+    async def fake_settle(session, frame):
+        return None
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            scans["n"] += 1
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    progress_msgs = []
+
+    async def progress(label):
+        progress_msgs.append(label)
+
+    tools = Tools()
+    clipboard: dict = {}
+    tools_mod.register_tab_tools(
+        tools, object(), clipboard, None, progress
+    )
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+    )
+    assert scans["n"] == 2
+    assert result.error and "No embedded frame matching" in result.error
+    assert "open them by index" in result.error
+    assert any("matched 0 frame(s)" in m for m in progress_msgs)
+
+
+async def test_find_links_frameless_retry_when_embed_present(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+    first_map = _embed_map(with_frame_doc=True)
+    late_map = dict(first_map)
+    late_map[13] = _link_node(13, "https://x.com/list?embed_jid=ccc", target="frame-1")
+    late_map[14] = _link_node(14, "https://x.com/list?embed_jid=ddd", target="frame-1")
+    maps = [
+        {1: first_map[1], 30: first_map[30]},
+        late_map,
+    ]
+
+    async def fake_settle(session, frame):
+        return None
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return maps.pop(0) if len(maps) > 1 else maps[0]
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        href_contains="embed_jid",
+    )
+    assert not result.error
+    import json as _json
+
+    found = _json.loads(result.extracted_content)
+    assert len(found) == 4
+    assert all("embed_jid" in l["href"] for l in found)

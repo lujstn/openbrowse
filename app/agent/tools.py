@@ -547,6 +547,107 @@ async def _emit_progress(progress: Any, message: str) -> None:
         logger.debug("_emit_progress failed", exc_info=True)
 
 
+class _FindLinksError(Exception):
+    pass
+
+
+_FIND_LINKS_RETRY_DELAY_S = 3.0
+
+
+def _scan_link_map(
+    selector_map: dict[int, Any],
+    current: str,
+    *,
+    href_contains: str | None = None,
+    href_regex: str | None = None,
+    frame_url_contains: str | None = None,
+    container: Any = None,
+    attr: dict[str, str] | None = None,
+    visible_only: bool = False,
+) -> tuple[list[dict[str, Any]], int | None, int, bool]:
+    """One pass over the DOM selector map: (links, frames matched by the frame
+    filter or None, anchors seen, whether any iframe exists in the map).
+    """
+    frame_target_ids: set[Any] | None = None
+    if frame_url_contains:
+        needle = frame_url_contains.lower()
+        frame_target_ids = set()
+        for node in selector_map.values():
+            if node.tag_name != "iframe":
+                continue
+            cd = getattr(node, "content_document", None)
+            src = (node.attributes or {}).get("src", "") or ""
+            if cd is not None and needle in src.lower():
+                frame_target_ids.add(cd.target_id)
+
+    container_target_id = None
+    container_ident: tuple | None = None
+    if container is not None:
+        cd = getattr(container, "content_document", None)
+        if container.tag_name == "iframe" and cd is not None:
+            container_target_id = cd.target_id
+        else:
+            container_ident = (container.session_id, container.backend_node_id)
+
+    pattern = re.compile(href_regex) if href_regex else None
+
+    def _in_container(node: Any) -> bool:
+        if container_target_id is not None:
+            return node.target_id == container_target_id
+        cur, seen = node, 0
+        while cur is not None and seen < 300:
+            if (cur.session_id, cur.backend_node_id) == container_ident:
+                return True
+            cur = cur.parent_node
+            seen += 1
+        return False
+
+    links: list[dict[str, Any]] = []
+    seen_href: set[str] = set()
+    anchors_seen = 0
+    iframe_present = any(
+        node.tag_name == "iframe" for node in selector_map.values()
+    )
+    for index in sorted(selector_map):
+        node = selector_map[index]
+        if node.tag_name != "a":
+            continue
+        href = (node.attributes or {}).get("href")
+        if not href:
+            continue
+        anchors_seen += 1
+        if visible_only and not node.is_visible:
+            continue
+        abs_href = urljoin(current, href)
+        if href_contains and href_contains.lower() not in abs_href.lower():
+            continue
+        if pattern and not pattern.search(abs_href):
+            continue
+        if frame_target_ids is not None and node.target_id not in frame_target_ids:
+            continue
+        if container is not None and not _in_container(node):
+            continue
+        if attr and not all(
+            k in (node.attributes or {})
+            and str(v).lower() in str((node.attributes or {}).get(k, "")).lower()
+            for k, v in attr.items()
+        ):
+            continue
+        if abs_href in seen_href:
+            continue
+        seen_href.add(abs_href)
+        links.append(
+            {
+                "index": index,
+                "text": node.get_meaningful_text_for_llm()[:150],
+                "href": abs_href,
+            }
+        )
+    return links, (
+        len(frame_target_ids) if frame_target_ids is not None else None
+    ), anchors_seen, iframe_present
+
+
 def _saved_links_sans_offhost(clipboard: dict[str, Any] | None) -> tuple[list[str], int]:
     """The last find_links result minus links flagged as pointing off-site, plus
     how many were skipped — so a no-args bulk read covers the listing without
@@ -2106,88 +2207,73 @@ def register_tab_tools(
             )
         try:
             await _settle_lazy_links(browser_session, frame_url_contains)
-            try:
-                await browser_session.get_browser_state_summary(include_screenshot=False)
-            except Exception:
-                logger.debug("find_links: post-settle state refresh failed", exc_info=True)
-            selector_map = await browser_session.get_selector_map()
-            current = await _eval_js(browser_session, "window.location.href") or ""
 
-            frame_target_ids: set[Any] | None = None
-            if frame_url_contains:
-                needle = frame_url_contains.lower()
-                frame_target_ids = set()
-                for node in selector_map.values():
-                    if node.tag_name != "iframe":
-                        continue
-                    cd = getattr(node, "content_document", None)
-                    src = (node.attributes or {}).get("src", "") or ""
-                    if cd is not None and needle in src.lower():
-                        frame_target_ids.add(cd.target_id)
-
-            container_target_id = None
-            container_ident: tuple | None = None
-            if container_index is not None:
-                container = await browser_session.get_element_by_index(container_index)
-                if container is None:
-                    return ActionResult(error=f"No element at index {container_index}.")
-                cd = getattr(container, "content_document", None)
-                if container.tag_name == "iframe" and cd is not None:
-                    container_target_id = cd.target_id
-                else:
-                    container_ident = (container.session_id, container.backend_node_id)
-
-            pattern = re.compile(href_regex) if href_regex else None
-
-            def _in_container(node: Any) -> bool:
-                if container_target_id is not None:
-                    return node.target_id == container_target_id
-                cur, seen = node, 0
-                while cur is not None and seen < 300:
-                    if (cur.session_id, cur.backend_node_id) == container_ident:
-                        return True
-                    cur = cur.parent_node
-                    seen += 1
-                return False
-
-            links: list[dict[str, Any]] = []
-            seen_href: set[str] = set()
-            for index in sorted(selector_map):
-                node = selector_map[index]
-                if node.tag_name != "a":
-                    continue
-                if visible_only and not node.is_visible:
-                    continue
-                href = (node.attributes or {}).get("href")
-                if not href:
-                    continue
-                abs_href = urljoin(current, href)
-                if href_contains and href_contains.lower() not in abs_href.lower():
-                    continue
-                if pattern and not pattern.search(abs_href):
-                    continue
-                if frame_target_ids is not None and node.target_id not in frame_target_ids:
-                    continue
-                if container_index is not None and not _in_container(node):
-                    continue
-                if attr and not all(
-                    k in (node.attributes or {})
-                    and str(v).lower() in str((node.attributes or {}).get(k, "")).lower()
-                    for k, v in attr.items()
-                ):
-                    continue
-                if abs_href in seen_href:
-                    continue
-                seen_href.add(abs_href)
-                links.append(
-                    {
-                        "index": index,
-                        "text": node.get_meaningful_text_for_llm()[:150],
-                        "href": abs_href,
-                    }
+            async def _scan() -> tuple[list[dict[str, Any]], int | None, int, bool]:
+                try:
+                    await browser_session.get_browser_state_summary(
+                        include_screenshot=False
+                    )
+                except Exception:
+                    logger.debug("find_links: state refresh failed", exc_info=True)
+                selector_map = await browser_session.get_selector_map()
+                current = await _eval_js(browser_session, "window.location.href") or ""
+                container = None
+                if container_index is not None:
+                    container = await browser_session.get_element_by_index(
+                        container_index
+                    )
+                    if container is None:
+                        raise _FindLinksError(f"No element at index {container_index}.")
+                return _scan_link_map(
+                    selector_map,
+                    current,
+                    href_contains=href_contains,
+                    href_regex=href_regex,
+                    frame_url_contains=frame_url_contains,
+                    container=container,
+                    attr=attr,
+                    visible_only=visible_only,
                 )
+
+            links, frames_matched, anchors_seen, iframe_present = await _scan()
+            retried = False
+            # @nonobvious(forced-by): OOPIF frame targets and embed-rewritten
+            # hrefs attach late on slow devices — a first scan can see a bare
+            # main document while the page visibly shows the embed; one settle
+            # retry recovers it instead of silently returning the footer links.
+            if (frame_url_contains and not frames_matched) or (
+                not frame_url_contains and len(links) <= 2 and iframe_present
+            ):
+                retried = True
+                await asyncio.sleep(_FIND_LINKS_RETRY_DELAY_S)
+                links, frames_matched, anchors_seen, iframe_present = await _scan()
+        except _FindLinksError as e:
+            return ActionResult(error=str(e))
         except Exception as e:
             return ActionResult(error=f"find_links failed: {type(e).__name__}: {e}")
+
+        telemetry = (
+            f"find_links: {len(links)} link(s) matched from {anchors_seen} anchor(s)"
+            + (
+                f"; frame filter '{frame_url_contains}' matched "
+                f"{frames_matched or 0} frame(s)"
+                if frame_url_contains
+                else ""
+            )
+            + (" (after one settle retry)" if retried else "")
+        )
+        await _emit_progress(progress, telemetry)
+
+        if frame_url_contains and not frames_matched:
+            return ActionResult(
+                error=(
+                    f"No embedded frame matching '{frame_url_contains}' is attached "
+                    "in the DOM right now, so nothing could be read from it — the "
+                    "embed may still be loading. The role links may still exist as "
+                    "indexed elements: open them by index, or wait 2 seconds and "
+                    "re-run find_links."
+                )
+            )
 
         offhost_count = 0
         if len(links) >= 3:
