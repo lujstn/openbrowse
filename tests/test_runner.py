@@ -820,7 +820,7 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
     assert any(p.startswith("💭 checking the") for p in pushes)
 
 
-def _review_history(done: bool, verdict, reason: str = "needs work"):
+def _review_history(done: bool, verdict, reason: str = "needs work", steps: int = 1):
     import types as _t
 
     judgement = None
@@ -830,7 +830,7 @@ def _review_history(done: bool, verdict, reason: str = "needs work"):
         )
     step = _t.SimpleNamespace(result=[_t.SimpleNamespace(judgement=judgement)])
     return _t.SimpleNamespace(
-        history=[step],
+        history=[step] * steps,
         is_done=lambda: done,
         is_successful=lambda: done,
     )
@@ -857,8 +857,8 @@ async def test_run_with_review_loops_until_reviewer_passes(monkeypatch) -> None:
     monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
 
     histories = [
-        _review_history(True, False, "fix the empty fields"),
-        _review_history(True, True),
+        _review_history(True, False, "fix the empty fields", steps=1),
+        _review_history(True, True, steps=2),
     ]
     tasks: list[str] = []
     agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
@@ -888,10 +888,10 @@ async def test_run_with_review_forces_changes_after_two_justifications(
     monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
 
     histories = [
-        _review_history(True, False, "round 1"),
-        _review_history(True, False, "round 2"),
-        _review_history(True, False, "round 3"),
-        _review_history(True, False, "round 4"),
+        _review_history(True, False, "round 1", steps=1),
+        _review_history(True, False, "round 2", steps=2),
+        _review_history(True, False, "round 3", steps=3),
+        _review_history(True, False, "round 4", steps=4),
     ]
     tasks: list[str] = []
     agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
@@ -930,3 +930,39 @@ async def test_run_with_review_skips_failed_or_passing_runs(monkeypatch) -> None
 
     await runner_mod._run_with_review(agent, None, "sid", run_failed)
     assert called == []
+
+
+async def test_run_with_review_stops_when_round_adds_no_steps(monkeypatch) -> None:
+    import types as _t
+
+    from app.agent import runner as runner_mod
+
+    events: list[str] = []
+
+    async def fake_create_message(**kwargs):
+        events.append(kwargs.get("summary") or "")
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+
+    def dead_history():
+        return _review_history(True, False, "still wrong")
+
+    histories = [dead_history(), dead_history(), dead_history(), dead_history()]
+    tasks: list[str] = []
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
+
+    async def run_agent():
+        return histories.pop(0)
+
+    await runner_mod._run_with_review(agent, _ReviewStore(), "sid", run_agent)
+    assert len(tasks) == 1
+    assert any("no agent activity" in e for e in events)
+
+
+def test_browser_sessions_keep_alive_for_review_rounds() -> None:
+    import inspect
+
+    from app.agent import runner as runner_mod
+
+    src = inspect.getsource(runner_mod.run_agent_session)
+    assert "browser_session.browser_profile.keep_alive = True" in src

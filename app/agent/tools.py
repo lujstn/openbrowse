@@ -3909,7 +3909,11 @@ def register_completeness_gate(
                     "the right page — content rendered inside an embedded "
                     "third-party frame is equally well identified by the host "
                     "page's own URL or the embedded provider's URL; do not "
-                    "fail the run over which of the two a URL field carries.\n\n"
+                    "fail the run over which of the two a URL field carries. "
+                    'Values rendered as "<N chars>" are display elisions of '
+                    "complete stored data, shortened only for this review — "
+                    "the delivered output contains the full values; do not "
+                    "treat them as truncation or missing content.\n\n"
                     f"{params.text}"
                 )
             except Exception:

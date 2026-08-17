@@ -226,6 +226,7 @@ async def _run_with_review(
             count_step=False,
         )
         snapshot = store.read_output() if store is not None else None
+        steps_before = len(getattr(history, "history", []) or [])
         replies_left = _MAX_REVIEW_JUSTIFICATIONS - justifications
         message = _review_message(reason, replies_left)
         try:
@@ -233,6 +234,23 @@ async def _run_with_review(
         except AttributeError:
             agent._message_manager.add_new_task(message)
         history = await run_agent()
+        # @nonobvious(must-hold): a round that added no steps means the agent
+        # could not act at all (dead browser, wedged loop) — re-judging the
+        # unchanged trajectory can only repeat the same verdict, so burning
+        # the remaining rounds on it is pure cost.
+        if len(getattr(history, "history", []) or []) <= steps_before:
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                summary=(
+                    "Review round produced no agent activity — stopping the "
+                    "review conversation and recording the standing verdict"
+                ),
+                data=json.dumps({"category": "judge", "action": "review"}),
+                count_step=False,
+            )
+            break
         if store is not None and store.read_output() == snapshot:
             justifications += 1
     return history
@@ -1235,6 +1253,11 @@ async def run_agent_session(session_id: str) -> None:
             storage_state=storage_state_path,
             cross_origin_iframes=True,
         )
+        # @nonobvious(forced-by): agent.run() kills the browser at run end
+        # unless the profile says keep_alive — the review loop re-runs the
+        # agent, and a reviewer round against a dead browser silently re-judges
+        # the same trajectory. Chrome's real teardown is ours (stop_chrome).
+        browser_session.browser_profile.keep_alive = True
 
         clipboard: dict[str, Any] = {}
         tab_manager = TabManager(browser_session)
