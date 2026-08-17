@@ -1,8 +1,18 @@
 # OpenBrowse
 
-**The open-source Browser Use Cloud alternative.** Self-host AI browser agents on a Raspberry Pi or any VPS, drive them through the same v3 REST API the `browser-use-sdk` already speaks, and watch every run live in a real browser. Built on top of the [Browser Use](https://github.com/browser-use/browser-use) SDK. Cheaper than the cloud, and on our benchmark, faster and better.
+**The open-source Browser Use Cloud alternative.** Self-host AI browser agents on a Raspberry Pi or any VPS, drive them through the same v3 REST API the `browser-use-sdk` already speaks, and watch every run live in a real browser. Built on top of the [Browser Use](https://github.com/browser-use/browser-use) SDK. It's cheaper, faster, and more reliable than BU Cloud.
 
 [openbrowse.co](https://openbrowse.co)
+
+## Benchmarks
+
+Given the same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, requiring full schema output):
+
+| Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
+| --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
+| **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | **3m 42s** | **225k** | **$0.45** | **16/16** |
+| **OpenBrowse** | **gpt-5.6-terra** | **none** | **6** | **2m 30s** | **129k** | **$0.23** | **16/16** |
 
 ## Why OpenBrowse over BU Cloud?
 
@@ -17,7 +27,7 @@
 | Live view | Replay | Real-time VNC of the actual browser, a step feed with the model's reasoning, and an IDE-style code tab that streams the agent's sandbox scripts live as they're written |
 | API | v3 REST | The same v3 REST surface: point `browser-use-sdk` at your box and change nothing but `baseUrl` and `apiKey` |
 
-## Models
+## Model providers
 
 ### Recommended models
 
@@ -27,20 +37,20 @@
 
 3. **On a budget?** Use `gpt-5.6-luna { "reasoningEffort": "max" }` with a tightly focused prompt. It might take a while, and it's more prone to hallucinations (especially with broad prompts), but the actual extractions are still great quality.
 
-### Benchmarks and observations
+### Comparisons
 
-The same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, full schema output) run against BU Cloud and against OpenBrowse on a Raspberry Pi 5, ordered best to worst:
+The same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, full schema output) run against BU Cloud and against OpenBrowse on a Raspberry Pi 5 (16GB) without concurrency, ordered best to worst:
 
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
-| OpenBrowse | gpt-5.6-terra | none | **6** | **2m 30s** | **129k** | **$0.23** | 16/16 |
 | OpenBrowse | claude-sonnet-5 | high | **10** | **3m 42s** | **225k** | **$0.45** | 16/16 |
-| OpenBrowse | claude-sonnet-5 | none | **15** | 10m 04s | **382k** | **$0.69** | 16/16 |
-| OpenBrowse | gpt-5.6-terra | high | **17** | 6m 10s | **364k** | **$0.71** | 16/16 |
-| OpenBrowse | claude-opus-5 | none | 21 | 5m 27s | **584k** | $1.82 | 16/16 |
-| OpenBrowse | gpt-5.6-luna | xhigh | 43 | 17m 35s | **935k** | **$0.23** | 16/16, one wrong URL |
-| OpenBrowse | claude-opus-5 | high | 37 | DNF | 1.06M | $3.00 | DNF, stopped at the $3 cost cap |
+| OpenBrowse | claude-sonnet-5 | none | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | gpt-5.6-terra | high | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | gpt-5.6-terra | none | **6** | **2m 30s** | **129k** | **$0.23** | 16/16 |
+| OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
 
 OpenAI and Anthropic models are generally at their best at the opposite ends of the reasoning dial. For example, OpenAI's GPT-5.6-Terra performs better with less reasoning, spending less time planning ahead and more time reacting to the page in front of it, while Anthropic's 5-series Claude models lean towards rabbit holes and need reasoning time to refocus on the goal.
 
@@ -52,19 +62,9 @@ OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of 
 
 ### All supported models
 
-| Model | Description |
-| --- | --- |
-| `claude-opus-5` | Flagship Anthropic reasoning tier |
-| `claude-sonnet-5` | Our default for reliable, high-quality extraction |
-| `gpt-5.6-sol` | Flagship OpenAI reasoning tier |
-| `gpt-5.6-terra` | Fastest and cheapest, great all-rounder |
-| `gpt-5.6-luna` | Cheap but slow; only completes reliably with reasoning at `xhigh` or above, and even then took ~10x longer than Terra on our benchmark. Use only when time doesn't matter. |
-| `claude-mythos-5` | Not tested. Only reachable by organisations in Project Glasswing. |
-| `claude-fable-5` | Not tested. The most capable model available, and model reasoning cannot be disabled. |
-| `claude-opus-4.8`, `claude-opus-4.8[1m]` | Not tested. |
-| `claude-opus-4.7`, `claude-opus-4.7[1m]` | Not tested. |
-| `claude-opus-4.6`, `claude-opus-4.6[1m]` | Not tested. |
-| `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]` | Not tested. |
+- OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
+- Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
+- Google: ⚠️ Coming soon
 
 ## Quick start
 
@@ -98,7 +98,7 @@ Full installation (Raspberry Pi system packages, Xvfb + VNC live view, systemd s
 
 ## Exposing it to the web
 
-OpenBrowse was built and benchmarked on a Raspberry Pi 5 (16GB), but it is plain Python + Chromium: any Linux VPS or home server works. To reach it from outside that box without opening ports, put it behind [Tailscale](https://tailscale.com/):
+OpenBrowse runs on plain Python + Chromium and can be easily port forwarded. To reach it from outside that box without opening ports, put it behind [Tailscale](https://tailscale.com/):
 
 ```bash
 # private access from your own devices
