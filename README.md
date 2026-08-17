@@ -11,6 +11,12 @@
 
 [openbrowse.co](https://openbrowse.co)
 
+<div align="left">
+  <a href="https://buildin.london"><img src="https://buildin.london/badge.svg" alt="Built in London" style="width: 200px;"></a>
+</div>
+
+---
+
 ## Benchmarks
 
 Given the same real-world extraction task (a careers page with 16 records behind an embedded, cross-origin board, requiring full schema output):
@@ -142,31 +148,20 @@ This project is licensed under the MIT License. If you use OpenBrowse as part of
 
 <br>
 
----
-<br>
-
-<p align="center" style="font-size:12px; font-weight: 600; margin-bottom: 1.3rem;" >built with <з by @lujstn</p>
-
-<div align="center">
-  <div style="display: flex; max-width: 600px; flex-direction: row; align-items: center; justify-content: space-between;">
-    <img src=".github/assets/IMG_8874.jpg" alt="@lujstn" width="400">
-    <div>
-
-  [![Twitter](https://img.shields.io/twitter/follow/lujstn?style=social)](https://x.com/intent/user?screen_name=lujstn)
-
-  [![Instagram](https://img.shields.io/badge/Instagram-Follow-E4405F?style=social&logo=instagram)](https://www.instagram.com/lujstn/)
-
-  [![TikTok](https://img.shields.io/badge/TikTok-000000?style=flat&logo=tiktok&logoColor=white)](https://www.tiktok.com/@lujstn)
-
-  [![GitHub](https://img.shields.io/github/followers/lujstn?style=social)](https://github.com/lujstn)
-    </div>
-  </div>
-</div>
-
-<br>
-
-<div align="center">
-
-  [![Built in London](https://buildin.london/badge.svg)](https://buildin.london)
-
-</div>
+<table align="center">
+  <tr>
+    <th colspan="2">built with <з by @lujstn</th>
+  </tr>
+  <tr>
+    <td><img src=".github/assets/IMG_8874.jpg" alt="@lujstn" width="400"></td>
+    <td valign="middle">
+      <a href="https://x.com/intent/user?screen_name=lujstn"><img src="https://img.shields.io/twitter/follow/lujstn?style=social" alt="Twitter"></a>
+      <br>
+      <a href="https://www.instagram.com/lujstn/"><img src="https://img.shields.io/badge/Instagram-Follow-E4405F?style=social&logo=instagram" alt="Instagram"></a>
+      <br>
+      <a href="https://www.tiktok.com/@lujstn"><img src="https://img.shields.io/badge/TikTok-000000?style=flat&logo=tiktok&logoColor=white" alt="TikTok"></a>
+      <br>
+      <a href="https://lujstn.com"><img src="https://img.shields.io/badge/%F0%9F%94%97_lujstn.com-1a1a1a" alt="lujstn.com"></a>
+    </td>
+  </tr>
+</table>
