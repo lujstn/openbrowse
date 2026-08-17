@@ -1589,16 +1589,18 @@ async def run_agent_session(session_id: str) -> None:
             own_word = "success" if is_successful else "failure"
             reason = " ".join(
                 (judgement.failure_reason or judgement.reasoning or "").split()
-            )[:400]
+            )[:4000]
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
                 msg_type="event",
                 summary=(
-                    f"Judge dissent: verdict {judge_word} vs recorded {own_word}"
-                    + (f" — {reason}" if reason else "")
+                    f"Judge review disagrees: {judge_word} vs recorded {own_word}"
+                    " — expand for its reasoning"
                 ),
-                data=json.dumps({"category": "judge", "action": "verdict"}),
+                data=json.dumps(
+                    {"category": "judge", "action": "verdict", "reasoning": reason}
+                ),
                 count_step=False,
             )
 

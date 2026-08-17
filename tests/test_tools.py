@@ -2884,3 +2884,52 @@ async def test_gate_bounce_has_no_termination_vocabulary() -> None:
     assert "stop early" not in text
     assert "Do the work above first" in text
     assert text.index("Do the work above first") > text.index("mark_absent")
+
+
+def test_draft_row_rejected_enum_value_never_pollutes_weaker_field() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "locationType": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["ONSITE", "HYBRID", "REMOTE"]},
+                                {"type": "null"},
+                            ]
+                        },
+                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema))
+    page = {
+        "url": "https://x.com/jobs?id=1",
+        "title": "Role One",
+        "text": "t" * 500,
+        "jsonld": {
+            "@type": "JobPosting",
+            "title": "Role One",
+            "jobLocationType": "TELECOMMUTE",
+            "jobLocation": {
+                "@type": "Place",
+                "address": {"@type": "PostalAddress", "addressLocality": "London"},
+            },
+        },
+    }
+    import json as _json
+
+    row = _draft_row(store, page)
+    assert row.get("location") == "London"
+    assert "TELECOMMUTE" not in _json.dumps(row)

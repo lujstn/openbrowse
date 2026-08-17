@@ -273,7 +273,7 @@ def _url_discriminators(url: str) -> set[str]:
     """Long, distinctive tokens from a page URL (query values and path segments)
     that can re-identify the page's own embed among many — an embedded panel's URL
     typically carries the record id from its host page's URL (e.g. a detail page
-    ``…?id=<uuid>`` framing ``…/vendor/<uuid>?embed=js``).
+    ``…?id=<uuid>`` framing ``…/panel/<uuid>?embed=js``).
     """
     from urllib.parse import parse_qsl, urlparse
 
@@ -2476,7 +2476,7 @@ def register_tab_tools(
             ) -> bool:
                 # @nonobvious(forced-by): OOPIF frame targets and embed-rewritten
                 # hrefs attach late on slow devices — a scan can see a bare main
-                # document, or a matched frame holding only its vendor anchor
+                # document, or a matched frame holding only its branding anchor
                 # while the role links are still being rewritten; retrying
                 # recovers it instead of silently returning 0-2 footer links.
                 if frame_url_contains:
@@ -2496,10 +2496,10 @@ def register_tab_tools(
             retried = retries > 0
 
             # @nonobvious(forced-by): embeds rewrite anchors to the HOST page's
-            # URLs, so a caller's vendor-host href filter can never match them
-            # (relaxed frame-only rescan recovers the listing); conversely a
-            # stably-wrong frame filter misses anchors whose rewritten hrefs
-            # still carry the vendor's name (href rescan on the needle).
+            # URLs, so an href filter on the embedded site's domain can never
+            # match them (relaxed frame-only rescan recovers the links);
+            # conversely a stably-wrong frame filter misses anchors whose
+            # rewritten hrefs still carry that domain (href rescan on it).
             salvaged = False
             salvage_note = ""
             degenerate = (
@@ -2525,9 +2525,10 @@ def register_tab_tools(
                         f"'{frame_url_contains}' frame — this embed rewrites its "
                         "anchors to the host page's own URLs (e.g. "
                         + ", ".join(samples)
-                        + "), so filters on the vendor's host cannot match them. "
-                        "Returning the frame's full link set instead; each "
-                        "detail page carries the real ATS/apply link."
+                        + "), so filters on the embedded site's own domain cannot "
+                        "match them. Returning the frame's full link set "
+                        "instead; each linked page carries its own outward "
+                        "links."
                     )
                     links = frame_links
                     salvaged = True
@@ -3086,8 +3087,10 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         key_tokens = _name_tokens(path.replace(".", " "))
         if not key_tokens:
             continue
-        # @nonobvious(forced-by): try matches best-first, not just the best —
-        # if the tie-winner rejects the value the runner-up must get its chance.
+        # @nonobvious(forced-by): equal-score ties only — when the tie-winner
+        # rejects a value (enum mismatch) an equally-close field gets its
+        # chance, but a lower-score field is semantically farther and would be
+        # polluted (jobLocationType's TELECOMMUTE landing in 'location').
         candidates = sorted(
             (
                 (len(_name_tokens(fname) & key_tokens), fname)
@@ -3096,6 +3099,9 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             ),
             key=lambda pair: -pair[0],
         )
+        if candidates:
+            top_score = candidates[0][0]
+            candidates = [c for c in candidates if c[0] == top_score]
         for _score, fname in candidates:
             # @nonobvious(forced-by): a page boolean may only fill a boolean
             # field — string coercion would store true as a junk "true" string.
@@ -3119,13 +3125,16 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             ),
             key=lambda pair: -pair[0],
         )
+        if label_candidates:
+            top_score = label_candidates[0][0]
+            label_candidates = [c for c in label_candidates if c[0] == top_score]
         for _score, fname in label_candidates:
             if _try_set(fname, value):
                 break
 
     if isinstance(page.get("links"), list):
         # @nonobvious(forced-by): visible text near a link is unreliable for URL
-        # fields (embed vendors render "Apply" then "Powered by", which
+        # fields (embedded panels render generic anchor text like "Powered by", which
         # token-matches applyUrl); the anchors' own hrefs are the source.
         for fname in fields:
             if fname in row or not re.fullmatch(
@@ -3252,8 +3261,8 @@ def _refresh_read_items(
 ) -> set[int]:
     """Indices of items whose own page has ever been observed as read. Recorded
     permanently the moment an item's URL-field value is in the visited/failed
-    sets, so later improving the URL (e.g. swapping an embed link for the direct
-    ATS link) can never make the item count as unread again. Called at the start
+    sets, so later improving the URL (e.g. swapping an embed link for the
+    destination site's direct link) can never make the item count as unread again. Called at the start
     of every item mutation and inside the gate checks.
     """
     if clipboard is None:
@@ -3849,7 +3858,13 @@ def register_completeness_gate(
                     answer = answer[:_JUDGE_ANSWER_CAP] + "\n…[truncated for length]"
                 params.text = (
                     f"FINAL STRUCTURED OUTPUT ({store.coverage_summary()}"
-                    f"{elision_note}):\n{answer}\n\n{params.text}"
+                    f"{elision_note}):\n{answer}\n\n"
+                    "REVIEW NOTE: URL fields are correct when they resolve to "
+                    "the right page — content rendered inside an embedded "
+                    "third-party frame is equally well identified by the host "
+                    "page's own URL or the embedded provider's URL; do not "
+                    "fail the run over which of the two a URL field carries.\n\n"
+                    f"{params.text}"
                 )
             except Exception:
                 logger.debug("judge answer injection failed", exc_info=True)
