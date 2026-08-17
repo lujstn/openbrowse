@@ -129,21 +129,26 @@
     border-left: 2px solid #f59e0b;
     padding-left: 10px;
   }
-  .saved-banner {
-    background: #0d1f16;
-    border: 1px solid #1d4029;
-    color: #34d399;
+  .failed-banner {
+    background: #201012;
+    border: 1px solid #4a1d1d;
+    color: #f87171;
     border-radius: 8px;
     padding: 10px 14px;
     font-size: 13px;
+    line-height: 1.5;
     margin-bottom: 16px;
   }
 </style>
 {% endblock %} {% block content %}
 <div class="settings-wrap">
   <h1>Settings</h1>
-  {% if saved %}
-  <div class="saved-banner">Saved. Changes take effect after the service restarts.</div>
+  {% if restart_failed %}
+  <div class="failed-banner">
+    The settings were saved to .env, but the server does not appear to have
+    restarted, so the old configuration is still running. Restart it manually
+    to apply the changes.
+  </div>
   {% endif %}
   <form id="settings-form" method="post" action="/settings">
     {% for group in groups %}

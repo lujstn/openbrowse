@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -39,6 +40,7 @@ from app.profiles.storage import cookie_domains, read_state_file
 logger = logging.getLogger(__name__)
 
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
+_STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
     ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CAPSOLVER_API_KEY"]),
@@ -496,10 +498,17 @@ async def settings_page(request: Request):
     other = [row(k) for k in entries if k not in grouped_keys]
     if other:
         groups.append({"title": "Other", "rows": other})
+    restart_failed = False
+    restarted = request.query_params.get("restarted")
+    if restarted:
+        try:
+            restart_failed = _STARTED_AT < float(restarted)
+        except ValueError:
+            pass
     return templates.TemplateResponse(
         request,
         "settings.html",
-        context={"groups": groups, "saved": request.query_params.get("saved") == "1"},
+        context={"groups": groups, "restart_failed": restart_failed},
     )
 
 
@@ -533,7 +542,9 @@ async def settings_save(request: Request):
             new[k] = v
     _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
     _schedule_restart()
-    return templates.TemplateResponse(request, "restarting.html")
+    return templates.TemplateResponse(
+        request, "restarting.html", context={"saved_at": int(time.time())}
+    )
 
 
 @router.get("/profiles", response_class=HTMLResponse)

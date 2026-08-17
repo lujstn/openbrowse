@@ -302,3 +302,24 @@ async def test_static_logo_assets_served(client):
     assert resp.status_code == 200
     resp = await client.get("/static/openbrowse.svg")
     assert resp.status_code == 200
+
+
+async def test_settings_restart_outcome_banners(client, tmp_path, monkeypatch):
+    import time as _time
+
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=k\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    now = _time.time()
+    monkeypatch.setattr("app.dashboard.routes._STARTED_AT", now)
+
+    resp = await client.get(
+        f"/settings?restarted={int(now) - 60}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    assert "does not appear to have" not in resp.text
+
+    resp = await client.get(
+        f"/settings?restarted={int(now) + 60}", headers=_basic("admin", "secret-key")
+    )
+    assert "does not appear to have" in resp.text
