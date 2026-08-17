@@ -897,6 +897,32 @@ async def _read_pages_impl(
             f"the real content for {recovered} of {len(flagged_urls)} page(s)",
         )
 
+    lone = _flag_lone_frame_fallbacks(results, url_contains)
+    if lone:
+        await _emit_progress(
+            progress,
+            f"read_pages: {len(lone)} page(s) read the outer shell while sibling "
+            "pages rendered their embedded panel — retrying each inside the panel",
+        )
+        try:
+            for i in range(0, len(lone), concurrency):
+                if _out_of_budget(lone[i:]):
+                    break
+                await _run_wave(lone[i : i + concurrency])
+        finally:
+            await _focus_target(browser_session, home_target)
+        still = _flag_lone_frame_fallbacks(results, url_contains)
+        await _emit_progress(
+            progress,
+            f"read_pages: recovered {len(lone) - len(still)} of {len(lone)} "
+            "shell page(s)"
+            + (
+                f"; {len(still)} still shell-only and reported as FAILED"
+                if still
+                else ""
+            ),
+        )
+
     if clipboard is not None:
         visited = clipboard.setdefault("_visited", set())
         failed = clipboard.setdefault("_read_failed", set())
@@ -914,6 +940,36 @@ async def _read_pages_impl(
                 frame_failed.discard(_norm_url(u))
         _extend_evidence_corpus(clipboard, results)
     return [results[u] for u in urls if u in results]
+
+
+def _flag_lone_frame_fallbacks(
+    results: dict[str, dict[str, Any]], url_contains: str | None
+) -> list[str]:
+    """Turn a solitary main-doc fallback into a loud failure: when a frame filter
+    was requested and sibling pages DID render their embedded panel, an "ok" page
+    without a frame match read the embedding shell — the panel demonstrably
+    renders on this site, so the fallback is a per-page attach flake, not a plain
+    page. The count-based shell detector needs three near-identical pages and
+    cannot see one stray shell; this check works off the siblings' proof instead.
+    Returns the flagged URLs.
+    """
+    if not url_contains:
+        return []
+    ok_pages = [p for p in results.values() if not p.get("error")]
+    if not any(p.get("frame_matched") for p in ok_pages):
+        return []
+    flagged: list[str] = []
+    for p in ok_pages:
+        if p.get("frame_matched"):
+            continue
+        p["error"] = (
+            "read the embedding shell, not this page's real content: sibling "
+            f"pages rendered their embedded '{url_contains}' panel but this "
+            "page's panel never attached — the main document was read instead. "
+            "Re-run read_pages for this url with the same frame_url_contains"
+        )
+        flagged.append(str(p.get("url") or ""))
+    return flagged
 
 
 async def _flag_shell_reads(
@@ -1617,7 +1673,8 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
             hint = (
                 "\nHint: browser.* and fetch are async — call them with await. "
                 "save_json, read_json, add_item/update_item/update_items/set_field/"
-                "mark_absent, read_output, coverage, remember and recall all work "
+                "mark_absent/remove_items, read_output, coverage, remember and "
+                "recall all work "
                 "with OR without await."
             )
         tail = f"\n--- stdout ---\n{out}" if out else ""
@@ -1678,7 +1735,7 @@ def register_code_tools(
         "recall; and, when a schema output exists, await add_item(item) / await "
         "update_item(index, fields) / await update_items([{index, fields}, ...]) / "
         "await set_field(key, value) / await mark_absent(field, reason) / "
-        "read_output() (returns the output as a plain dict, like read_json) / "
+        "await remove_items(indices, reason) / read_output() (returns the output as a plain dict, like read_json) / "
         "coverage() write straight to the validated output. STDOUT "
         "is truncated to a small preview — print only counts/keys, never whole blobs. "
         "Variables persist across runs."
@@ -3137,6 +3194,23 @@ def _refresh_read_items(
     return read
 
 
+def _remap_read_items(clipboard: dict[str, Any] | None, removed: list[int]) -> None:
+    """Shift the permanently-recorded read-item indices after a removal so the
+    provenance in ``_read_items`` keeps pointing at the same items.
+    """
+    if clipboard is None:
+        return
+    read = clipboard.get("_read_items")
+    if not read:
+        return
+    removed_set = set(removed)
+    clipboard["_read_items"] = {
+        i - sum(1 for r in removed_set if r < i)
+        for i in read
+        if i not in removed_set
+    }
+
+
 def _absence_unearned(
     store: OutputStore, clipboard: dict[str, Any] | None, field: str
 ) -> str | None:
@@ -3246,12 +3320,20 @@ def _store_bridge(
         _, msg = store.mark_absent(field, reason)
         return _AwaitableStr(msg)
 
+    def remove_items(indices: list[int], reason: str = "") -> str:
+        ok, msg = store.remove_items(indices)
+        if ok:
+            _remap_read_items(clipboard, sorted({int(i) for i in indices}))
+            _mirror()
+        return _AwaitableStr(msg)
+
     return {
         "add_item": add_item,
         "update_item": update_item,
         "update_items": update_items,
         "set_field": set_field,
         "mark_absent": mark_absent,
+        "remove_items": remove_items,
         # @nonobvious(forced-by): scripts index into this — a dict, never a JSON string.
         "read_output": lambda: _awaitable(json.loads(store.read_output())),
         "coverage": lambda: _AwaitableStr(store.coverage_summary()),
@@ -3326,6 +3408,25 @@ def register_output_store_tools(
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
         note = f"{msg} {store.coverage_summary()}"
+        return ActionResult(extracted_content=note, long_term_memory=note)
+
+    @tools.action(
+        f"Remove item(s) from the '{array}' list by 0-based index — the repair "
+        "tool for rows that should not be in the answer: duplicates, a "
+        "landing/listing page captured as a record, or rows superseded by "
+        "corrected ones. Pass the indices to delete plus a one-line reason. "
+        "Remaining items shift down, so re-check indices with read_output before "
+        "any follow-up update_item calls."
+    )
+    async def remove_items(
+        indices: list[int], reason: str, file_system: FileSystem
+    ) -> ActionResult:
+        ok, msg = store.remove_items(indices)
+        if not ok:
+            return ActionResult(error=msg)
+        _remap_read_items(clipboard, sorted({int(i) for i in indices}))
+        await _mirror_output(store, file_system)
+        note = f"{msg} Reason: {reason}. {store.coverage_summary()}"
         return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(

@@ -2416,3 +2416,172 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
     html = await sb.get_html()
     assert html.startswith("<div>shell</div>")
     assert "MAIN page only" in html
+
+
+async def test_lone_frame_fallback_flagged_and_retried(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    good = "https://x.com/good"
+    flaky = "https://x.com/flaky"
+    attempts = {"n": 0}
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        if url == good:
+            return {
+                "url": url,
+                "text": "real panel content " * 30,
+                "jsonld": None,
+                "links": [],
+                "frame_matched": True,
+            }
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return {
+                "url": url,
+                "text": "outer shell nav footer " * 30,
+                "jsonld": None,
+                "links": [],
+            }
+        return {
+            "url": url,
+            "text": "real panel content for flaky " * 30,
+            "jsonld": None,
+            "links": [],
+            "frame_matched": True,
+        }
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    progress_msgs: list[str] = []
+
+    async def progress(msg):
+        progress_msgs.append(msg)
+
+    clipboard: dict = {}
+    pages = await tools_mod._read_pages_impl(
+        session, [good, flaky], "board.example.com", clipboard, progress=progress
+    )
+    by_url = {p["url"]: p for p in pages}
+    assert not by_url[flaky].get("error")
+    assert by_url[flaky].get("frame_matched") is True
+    assert attempts["n"] == 2
+    assert any("read the outer shell while sibling" in m for m in progress_msgs)
+    assert any("recovered 1 of 1" in m for m in progress_msgs)
+
+
+async def test_lone_frame_fallback_fails_honestly_when_unrecoverable(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+
+    good = "https://x.com/good"
+    flaky = "https://x.com/flaky"
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        if url == good:
+            return {
+                "url": url,
+                "text": "real panel content " * 30,
+                "jsonld": None,
+                "links": [],
+                "frame_matched": True,
+            }
+        return {
+            "url": url,
+            "text": "outer shell nav footer " * 30,
+            "jsonld": None,
+            "links": [],
+        }
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    clipboard: dict = {}
+    pages = await tools_mod._read_pages_impl(
+        session, [good, flaky], "board.example.com", clipboard, progress=None
+    )
+    by_url = {p["url"]: p for p in pages}
+    err = by_url[flaky].get("error") or ""
+    assert "embedding shell" in err
+    assert tools_mod._frame_failure(err)
+    assert tools_mod._norm_url(flaky) in clipboard["_read_failed_frame"]
+    assert tools_mod._norm_url(flaky) not in clipboard["_visited"]
+
+
+def test_lone_frame_fallback_needs_sibling_proof() -> None:
+    from app.agent.tools import _flag_lone_frame_fallbacks
+
+    results = {
+        "https://x.com/a": {"url": "https://x.com/a", "text": "shell"},
+        "https://x.com/b": {"url": "https://x.com/b", "text": "shell"},
+    }
+    assert _flag_lone_frame_fallbacks(results, "board.example.com") == []
+    assert not any(p.get("error") for p in results.values())
+    assert _flag_lone_frame_fallbacks(results, None) == []
+
+
+def test_store_remove_items() -> None:
+    store = _items_store()
+    for name in ("A", "B", "C", "D"):
+        store.add_item({"title": name, "sourceUrl": f"https://x.com/{name.lower()}"})
+
+    ok, msg = store.remove_items([0, 2])
+    assert ok
+    assert "2 item(s)" in msg and "2 remain" in msg
+    remaining = [it["title"] for it in store.data["items"]]
+    assert remaining == ["B", "D"]
+
+    ok, msg = store.remove_items([9])
+    assert not ok and "No item at index 9" in msg
+    ok, msg = store.remove_items([])
+    assert not ok
+    ok, msg = store.remove_items(["x"])
+    assert not ok
+
+
+async def test_remove_items_action_remaps_read_provenance() -> None:
+    from app.agent.tools import register_output_store_tools
+    from browser_use import Tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard: dict = {
+        "_visited": {"https://x.com/b", "https://x.com/c"},
+        "_read_items": {1, 2},
+    }
+    for name in ("A", "B", "C"):
+        store.add_item({"title": name, "sourceUrl": f"https://x.com/{name.lower()}"})
+    register_output_store_tools(tools, store, clipboard)
+    entry = tools.registry.registry.actions["remove_items"]
+    result = await entry.function(
+        params=entry.param_model(indices=[0], reason="landing-page artefact"),
+        file_system=_FakeFileSystem(),
+    )
+    assert not result.error
+    assert "landing-page artefact" in result.extracted_content
+    assert [it["title"] for it in store.data["items"]] == ["B", "C"]
+    assert clipboard["_read_items"] == {0, 1}
+
+    bad = await entry.function(
+        params=entry.param_model(indices=[5], reason="nope"),
+        file_system=_FakeFileSystem(),
+    )
+    assert bad.error
+
+
+async def test_store_bridge_remove_items() -> None:
+    from app.agent.tools import _store_bridge
+
+    store = _items_store()
+    fs = _FakeFileSystem()
+    clipboard: dict = {"_read_items": {1}}
+    store.add_item({"title": "A"})
+    store.add_item({"title": "B"})
+    bridge = _store_bridge(store, clipboard, fs)
+    msg = await bridge["remove_items"]([0], "duplicate")
+    assert "1 item(s)" in msg
+    assert [it["title"] for it in store.data["items"]] == ["B"]
+    assert clipboard["_read_items"] == {0}

@@ -295,6 +295,34 @@ class OutputStore:
         arr[index] = clean
         return True, f"Updated item #{index} ({', '.join(fields) or 'nothing'})."
 
+    def remove_items(self, indices: Any) -> tuple[bool, str]:
+        """Delete items by 0-based index in one call. Remaining items shift down,
+        so the message restates the new count; callers holding index-keyed state
+        must remap it themselves.
+        """
+        if not self._array_field:
+            return False, "This output has no list to remove items from."
+        if not isinstance(indices, list) or not indices:
+            return False, "remove_items expects a non-empty list of integer indices."
+        arr = self._data[self._array_field]
+        try:
+            wanted = sorted({int(i) for i in indices})
+        except (TypeError, ValueError):
+            return False, f"indices must be integers, got {indices!r}."
+        bad = [i for i in wanted if not 0 <= i < len(arr)]
+        if bad:
+            upper = len(arr) - 1 if arr else 0
+            return False, (
+                f"No item at index {', '.join(map(str, bad))}. Valid range: 0..{upper}."
+            )
+        for i in reversed(wanted):
+            del arr[i]
+        return True, (
+            f"Removed {len(wanted)} item(s) from '{self._array_field}' "
+            f"({len(arr)} remain; indices have shifted — re-check with read_output "
+            "before further update_item calls)."
+        )
+
     def set_field(self, key: str, value: Any) -> tuple[bool, str]:
         if key not in self._model.model_fields:
             known = ", ".join(self._model.model_fields)

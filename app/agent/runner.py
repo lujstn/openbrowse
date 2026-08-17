@@ -162,6 +162,7 @@ _STORE_ONLY_ACTIONS = {
     "update_items",
     "set_field",
     "mark_absent",
+    "remove_items",
     "read_output",
     "search_output",
     "add_items_from_file",
