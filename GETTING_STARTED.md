@@ -64,6 +64,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
 | `KEEP_ALIVE_IDLE_TIMEOUT` | _(Optional)_ Seconds a keep-alive session waits, browser and history still open, for its next follow-up before closing itself. Default `600`; `0` waits indefinitely. A parked session is also closed early if a newly started session needs its display slot |
 | `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend for a single task. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's `maxCostUsd` for that task. Neither is a fixed total for a whole conversation, since both refresh on every follow-up. Set `0` to remove the ceiling |
+| `CHROME_LIGHT_FLAGS`      | _(Optional)_ `1` launches Chromium with lighter flags for constrained hosts (no GPU probe, capped helper processes and JS heap); default `0` |
 
 Generate a secure `API_KEY`:
 
@@ -195,6 +196,8 @@ ExecStartPost=+/usr/bin/tailscale funnel --bg 8420
 ExecStopPost=-+/usr/bin/tailscale funnel --bg off
 Restart=on-failure
 RestartSec=5
+CPUWeight=300
+MemoryHigh=12G
 StandardOutput=journal
 StandardError=journal
 
@@ -204,6 +207,17 @@ WantedBy=multi-user.target
 ```
 
 The `ExecStartPost` line automatically enables Tailscale Funnel when the service starts, and `ExecStopPost` disables it on stop. To run **without** the funnel (local network only), remove those two lines.
+
+`CPUWeight=300` only matters when the CPU is oversubscribed: it tells the kernel to favour browser sessions over background services (a media server's transcodes, for example) during contention, and does nothing on an idle box. `MemoryHigh=12G` throttles the service before it can push the host into out-of-memory territory. Both lines are safe to remove on a dedicated host.
+
+**Optional, recommended for concurrent sessions — enable CPU pressure metrics (PSI).** The server prefers the kernel's pressure stall information over load average when judging whether the host is struggling; PSI measures time tasks actually spent waiting for CPU, so a busy-but-healthy box is not misread as overloaded. Raspberry Pi OS compiles PSI in but ships it disabled. To enable it, append `psi=1` to the single line in `/boot/firmware/cmdline.txt` and reboot:
+
+```bash
+sudo sed -i '1 s/$/ psi=1/' /boot/firmware/cmdline.txt
+sudo reboot
+```
+
+Verify with `cat /proc/pressure/cpu` — if the file exists, PSI is live. Without it the server falls back to load-average heuristics, which still work but over-count a session's own rendering as pressure.
 
 Enable and start:
 
@@ -414,7 +428,7 @@ ss -tlnp | grep 8420
 
 **Symptom:** Sessions are killed mid-task, the Pi becomes unresponsive, or the OOM killer fires (visible in `dmesg`).
 
-**Check:** The server defaults to a maximum of 3 concurrent sessions (`max_concurrent_sessions = 3` in `app/config.py`). Each Chromium instance uses ~400–600 MB. On a 16GB Pi this is comfortable, but if you've reduced the default or are running other services:
+**Check:** The server defaults to a maximum of 1 concurrent session (`MAX_CONCURRENT_SESSIONS` in `.env`). Each Chromium instance uses ~400–600 MB. On a 16GB Pi a few sessions are comfortable memory-wise, but if you've raised the cap or are running other services:
 
 ```bash
 # Check current memory usage
@@ -424,10 +438,10 @@ free -h
 dmesg | grep -i oom
 ```
 
-To reduce concurrency, edit `max_concurrent_sessions` in `app/config.py` directly:
+To change concurrency, set `MAX_CONCURRENT_SESSIONS` in `.env`:
 
-```python
-max_concurrent_sessions: int = 1  # default is 3
+```bash
+MAX_CONCURRENT_SESSIONS=1
 ```
 
 Then restart the service. Or increase swap:

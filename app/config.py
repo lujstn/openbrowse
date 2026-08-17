@@ -89,6 +89,10 @@ class Settings:
     )
     keep_alive_idle_timeout: int = field(default_factory=_keep_alive_idle_timeout)
     cloud_max_cost_factor: float = field(default_factory=_cost_factor)
+    chrome_light_flags: bool = field(
+        default_factory=lambda: os.environ.get("CHROME_LIGHT_FLAGS", "").lower()
+        in ("1", "true", "yes")
+    )
     default_model: str = "claude-sonnet-5"
     stale_session_minutes: int = 15
     reconcile_interval_seconds: int = 60

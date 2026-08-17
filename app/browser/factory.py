@@ -209,6 +209,18 @@ async def launch_chrome(slot: DisplaySlot) -> str:
         "--disable-dev-shm-usage",
         "--window-size=1920,1080",
     ]
+    if settings.chrome_light_flags:
+        # @nonobvious(deliberately-missing): no site-isolation collapse
+        # (--disable-features=IsolateOrigins,site-per-process) — cross-origin
+        # frame reads depend on per-target OOPIFs and would silently break.
+        args += [
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--renderer-process-limit=4",
+            "--js-flags=--max-old-space-size=256",
+            "--enable-low-end-device-mode",
+            "--disable-background-networking",
+        ]
 
     slot.chrome_proc = await asyncio.create_subprocess_exec(
         *args,
