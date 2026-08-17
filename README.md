@@ -24,8 +24,8 @@ Given the same real-world extraction task (a careers page with 16 records behind
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
-| **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | **3m 42s** | **225k** | **$0.45** | **16/16** |
-| **OpenBrowse** | **gpt-5.6-terra** | **none** | **8** | **1m 34s** | **143k** | **$0.16** | **16/16** |
+| **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | **4m 02s** | **242k** | **$0.40** | **14/14** |
+| **OpenBrowse** | **gpt-5.6-terra** | **none** | **11** | **1m 47s** | **202k** | **$0.24** | **14/14** |
 
 ## Why OpenBrowse over BU Cloud?
 
@@ -57,10 +57,10 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
-| OpenBrowse | claude-sonnet-5 | high | **10** | **3m 42s** | **225k** | **$0.45** | 16/16 |
+| OpenBrowse | claude-sonnet-5 | high | **10** | **4m 02s** | **242k** | **$0.40** | 14/14 |
 | OpenBrowse | claude-sonnet-5 | none | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | gpt-5.6-terra | high | TBD | TBD | TBD | TBD | TBD |
-| OpenBrowse | gpt-5.6-terra | none | **8** | **1m 34s** | **143k** | **$0.16** | 16/16 |
+| OpenBrowse | gpt-5.6-terra | none | **11** | **1m 47s** | **202k** | **$0.24** | 14/14 |
 | OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
