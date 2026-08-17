@@ -58,16 +58,16 @@ The same real-world extraction task (a careers page with 14 records behind an em
 
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
-| OpenBrowse | gpt-5.6-luna | max | 36 | 17m 03s | 1.08M | **$0.22** | 14/14 |
-| OpenBrowse | gpt-5.6-terra | none | 11 | **1m 47s** | **202k** | **$0.24** | 14/14 |
-| OpenBrowse | claude-sonnet-5 | high | 10 | 4m 02s | **242k** | **$0.40** | 14/14 |
-| OpenBrowse | gpt-5.6-sol | none | **8** | **2m 03s** | **136k** | **$0.41** | 14/14 |
-| OpenBrowse | claude-sonnet-5 | none | **9** | 5m 18s | **237k** | **$0.51** | 14/14 |
-| OpenBrowse | gpt-5.6-terra | high | 17 | 5m 05s | **434k** | **$0.66** | 14/14 |
+| OpenBrowse | **gpt-5.6-luna** | **max** | 36 | 17m 03s | 1.08M | **$0.22** | 14/14 |
+| OpenBrowse | **gpt-5.6-terra** | **none** | 11 | **1m 47s** | **202k** | **$0.24** | 14/14 |
+| OpenBrowse | **claude-sonnet-5** | **high** | 10 | 4m 02s | **242k** | **$0.40** | 14/14 |
+| OpenBrowse | **gpt-5.6-sol** | **none** | **8** | **2m 03s** | **136k** | **$0.41** | 14/14 |
+| OpenBrowse | **claude-sonnet-5** | **none** | **9** | 5m 18s | **237k** | **$0.51** | 14/14 |
+| OpenBrowse | **gpt-5.6-terra** | **high** | 17 | 5m 05s | **434k** | **$0.66** | 14/14 |
 | BU Cloud | claude-sonnet-5 | high | 10 | 2m 36s | 859k | $0.78 | 14/14<sup>1</sup> |
+| OpenBrowse | gpt-5.6-sol | medium | 16 | 5m 24s | **339k** | $1.12 | 14/14 |
 | OpenBrowse | claude-opus-5 | medium | 15 | 3m 56s | **398k** | $1.32 | 14/14 |
 | OpenBrowse | claude-opus-5 | none | 17 | 4m 53s | **480k** | $1.62 | 14/14 |
-| OpenBrowse | gpt-5.6-sol | medium | TBD | TBD | TBD | TBD | TBD |
 
 <sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were hallucinated when not shown on the page.</i></sub>
 

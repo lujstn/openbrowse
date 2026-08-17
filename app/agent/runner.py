@@ -480,9 +480,12 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                     parts.append(getattr(event, "delta", "") or "")
                     now = loop.time()
                     text = " ".join("".join(parts).split())
-                    if now - last_push > 0.4 and len(text) >= 24:
+                    if now - last_push > 0.4:
                         last_push = now
-                        set_activity(sid, f"💭 {text[-140:]}", spin=True)
+                        snippet = (
+                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
+                        )
+                        set_activity(sid, snippet, spin=True)
             return await stream.get_final_response()
 
     async def _create(self, params: dict[str, Any]) -> Any:
@@ -750,6 +753,10 @@ class _RepairingChatAnthropic(ChatAnthropic):
         last_push = 0.0
         async for event in stream:
             etype = getattr(event, "type", "")
+            if sid and etype == "content_block_start":
+                block = getattr(event, "content_block", None)
+                if getattr(block, "type", None) == "thinking":
+                    set_activity(sid, "💭 Thinking…", spin=True)
             if sid and etype == "content_block_delta":
                 delta = getattr(event, "delta", None)
                 chunk = getattr(delta, "thinking", None)
@@ -757,11 +764,16 @@ class _RepairingChatAnthropic(ChatAnthropic):
                     think_parts.append(chunk)
                     now = loop.time()
                     text = " ".join("".join(think_parts).split())
-                    # @nonobvious(forced-by): the first delta is often a single
-                    # character, and a ticker reading "💭 I" looks broken.
-                    if now - last_push > 0.4 and len(text) >= 24:
+                    if now - last_push > 0.4:
                         last_push = now
-                        set_activity(sid, f"💭 {text[-140:]}", spin=True)
+                        # @nonobvious(forced-by): adaptive thinking reasons
+                        # privately and can stream a lone fragment then go
+                        # silent for tens of seconds; a stuck "💭 I" reads as
+                        # broken, so short accumulations show as Thinking….
+                        snippet = (
+                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
+                        )
+                        set_activity(sid, snippet, spin=True)
             if observer is None:
                 continue
             if etype == "input_json" and getattr(event, "partial_json", ""):
