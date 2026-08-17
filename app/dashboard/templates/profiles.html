@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Profiles — OpenBrowse{% endblock
+{% extends "base.html" %} {% block title %}Profiles · OpenBrowse{% endblock
 %} {% block head %}
 <style>
   .create-card {
@@ -181,6 +181,14 @@
     color: #737373;
     font-size: 12px;
   }
+  .np-form {
+    display: none;
+    gap: 10px;
+    align-items: center;
+  }
+  .np-form.open {
+    display: flex;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Profiles <span class="badge">{{ total }}</span></h1>
@@ -197,7 +205,7 @@
       <span class="np-sub">Bring an existing profile's cookies and localStorage</span>
     </a>
   </div>
-  <form id="np-create-form" method="post" action="/profiles/create" hidden style="display: flex; gap: 10px; align-items: center">
+  <form id="np-create-form" class="np-form" method="post" action="/profiles/create">
     <input name="name" placeholder="Profile name (optional)" autocomplete="off" style="flex: 1" />
     <button class="btn btn-primary" type="submit">Create</button>
     <button class="btn" type="button" id="np-create-cancel">✕</button>
@@ -294,13 +302,11 @@
     var form = document.getElementById("np-create-form");
     var cancel = document.getElementById("np-create-cancel");
     tile.addEventListener("click", function () {
-      form.hidden = false;
-      form.style.display = "flex";
+      form.classList.add("open");
       form.querySelector("input").focus();
     });
     cancel.addEventListener("click", function () {
-      form.hidden = true;
-      form.style.display = "none";
+      form.classList.remove("open");
     });
   })();
 </script>

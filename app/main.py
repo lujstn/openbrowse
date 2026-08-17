@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 # @nonobvious(forced-by): browser-use reads this env var ONCE at module import to
@@ -15,6 +16,7 @@ os.environ.setdefault("BROWSER_USE_ACTION_TIMEOUT_S", "480")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.agent.pool import pool
 from app.api.profiles import router as profiles_router
@@ -87,6 +89,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount(
+    "/static",
+    StaticFiles(directory=str(Path(__file__).parent / "dashboard" / "static")),
+    name="static",
+)
 app.include_router(sessions_router)
 app.include_router(profiles_router)
 app.include_router(import_router)

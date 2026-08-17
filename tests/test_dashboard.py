@@ -247,39 +247,52 @@ async def test_session_log_export_scopes(client):
     assert output == {"items": [{"title": "A"}]}
 
 
-async def test_settings_page_masks_secrets(client, tmp_path, monkeypatch):
-    env = tmp_path / ".env"
-    env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
-    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
-    assert resp.status_code == 200
-    assert "supersecret" not in resp.text
-    assert "MAX_CONCURRENT_SESSIONS" in resp.text
-    assert 'value="3"' in resp.text
-    assert "leave blank to keep" in resp.text
-
-
-async def test_settings_save_keeps_blank_secrets_and_updates_values(
+async def test_settings_page_hides_secrets_behind_password_inputs(
     client, tmp_path, monkeypatch
 ):
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\n")
     monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert 'type="password"' in resp.text
+    assert 'value="supersecret"' in resp.text
+    assert "MAX_CONCURRENT_SESSIONS" in resp.text
+    assert 'value="3"' in resp.text
+    assert "DASHBOARD_USER" in resp.text and "DASHBOARD_PASSWORD" in resp.text
+    auth_pos = resp.text.find("Authentication")
+    providers_pos = resp.text.find("Model providers")
+    assert 0 < auth_pos < providers_pos
+    assert resp.text.find("DASHBOARD_USER") < providers_pos
+
+
+async def test_settings_save_updates_and_removes_values(client, tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\nOLD_VAR=x\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
     resp = await client.post(
         "/settings",
         headers=_basic("admin", "secret-key"),
         data={
-            "key": ["API_KEY", "MAX_CONCURRENT_SESSIONS", "NEW_VAR"],
-            "value": ["", "1", "hello"],
+            "key": ["API_KEY", "MAX_CONCURRENT_SESSIONS", "OLD_VAR", "NEW_VAR"],
+            "value": ["supersecret", "1", "", "hello"],
         },
     )
     assert resp.status_code == 303
     text = env.read_text()
     assert "API_KEY=supersecret" in text
     assert "MAX_CONCURRENT_SESSIONS=1" in text
+    assert "OLD_VAR" not in text
     assert "NEW_VAR=hello" in text
 
 
 async def test_settings_requires_auth(client):
     resp = await client.get("/settings")
     assert resp.status_code == 401
+
+
+async def test_static_logo_assets_served(client):
+    resp = await client.get("/static/openbrowse.ico")
+    assert resp.status_code == 200
+    resp = await client.get("/static/openbrowse.svg")
+    assert resp.status_code == 200

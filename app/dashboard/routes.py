@@ -37,15 +37,10 @@ from app.profiles.storage import cookie_domains, read_state_file
 logger = logging.getLogger(__name__)
 
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
-_KNOWN_ENV_VARS = [
-    "API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "CAPSOLVER_API_KEY",
-    "DASHBOARD_USER",
-    "DASHBOARD_PASSWORD",
-    "MAX_CONCURRENT_SESSIONS",
-    "DEFAULT_MODEL",
+_ENV_GROUPS: list[tuple[str, list[str]]] = [
+    ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
+    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CAPSOLVER_API_KEY"]),
+    ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
 
@@ -482,35 +477,37 @@ async def dashboard_stop_session(session_id: str):
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     entries = _read_env_file()
-    keys = list(entries) + [k for k in _KNOWN_ENV_VARS if k not in entries]
-    rows = [
-        {
+    grouped_keys: set[str] = set()
+
+    def row(k: str) -> dict[str, Any]:
+        return {
             "key": k,
-            "value": "" if _is_secret_var(k) else entries.get(k, ""),
+            "value": entries.get(k, ""),
             "present": k in entries,
             "secret": _is_secret_var(k),
         }
-        for k in keys
-    ]
+
+    groups = []
+    for title, keys in _ENV_GROUPS:
+        grouped_keys.update(keys)
+        groups.append({"title": title, "rows": [row(k) for k in keys]})
+    other = [row(k) for k in entries if k not in grouped_keys]
+    if other:
+        groups.append({"title": "Other", "rows": other})
     return templates.TemplateResponse(
         request,
         "settings.html",
-        context={"rows": rows, "saved": request.query_params.get("saved") == "1"},
+        context={"groups": groups, "saved": request.query_params.get("saved") == "1"},
     )
 
 
 @router.post("/settings")
 async def settings_save(request: Request):
     form = await request.form()
-    entries = _read_env_file()
     new: dict[str, str] = {}
     for k, v in zip(form.getlist("key"), form.getlist("value")):
         k, v = str(k).strip(), str(v).strip()
-        if not k:
-            continue
-        if _is_secret_var(k) and not v and k in entries:
-            new[k] = entries[k]
-        elif v:
+        if k and v:
             new[k] = v
     _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
     return RedirectResponse("/settings?saved=1", status_code=303)

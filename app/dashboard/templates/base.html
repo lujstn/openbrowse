@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}OpenBrowse{% endblock %}</title>
+    <link rel="icon" href="/static/openbrowse.ico" />
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <style>
@@ -34,10 +35,20 @@
         align-items: center;
       }
       nav .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         font-weight: 700;
         font-size: 14px;
         color: #fff;
         letter-spacing: -0.02em;
+      }
+      nav .brand:hover {
+        text-decoration: none;
+        color: #fff;
+      }
+      nav .brand svg {
+        color: #fff;
       }
       nav a {
         color: #999;
@@ -98,24 +109,29 @@
         height: 8px;
         border-radius: 50%;
       }
+      @keyframes statpulse {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+      }
       .status-running .status-dot {
-        background: #22c55e;
-        box-shadow: 0 0 6px #22c55e;
+        background: #60a5fa;
+        box-shadow: 0 0 6px rgba(96, 165, 250, 0.7);
+        animation: statpulse 1.6s ease-in-out infinite;
       }
       .status-created .status-dot {
-        background: #eab308;
+        background: #9ca3af;
       }
       .status-stopped .status-dot {
-        background: #666;
+        background: #6b7280;
       }
       .status-error .status-dot {
-        background: #ef4444;
+        background: #f87171;
       }
       .status-idle .status-dot {
-        background: #3b82f6;
+        background: #2dd4bf;
       }
       .status-expired .status-dot {
-        background: #666;
+        background: #6b7280;
       }
       .mono {
         font-family: "SF Mono", "Menlo", monospace;
@@ -163,7 +179,17 @@
   </head>
   <body>
     <nav>
-      <span class="brand">OpenBrowse</span>
+      <a class="brand" href="/">
+        <svg width="18" height="18" viewBox="0 0 512 512" fill="none" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="31.847" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M290.705 369.914C290.705 369.914 210.213 396.956 210.213 396.956C206.233 398.293 201.92 398.257 197.962 396.856C148.001 379.164 115.992 340.272 102.051 289.137C88.11 238.002 100.116 183.282 134.184 142.681"></path>
+            <path d="M323.368 335.617C323.368 335.617 323.368 197.851 323.368 197.851C323.368 189.565 317.701 182.353 309.65 180.395C309.65 180.395 209.618 156.063 209.618 156.063C198.308 153.312 187.407 161.879 187.407 173.519C187.407 173.519 187.407 386.246 187.407 386.246"></path>
+            <path d="M227.468 87.842C290.827 75.641 355.374 102.279 391.688 155.613C428.002 208.947 429.129 278.765 394.556 333.244"></path>
+            <path d="M297.945 429.25C324.428 425.197 350.031 416.68 373.665 404.061"></path>
+          </g>
+        </svg>
+        OpenBrowse
+      </a>
       <a href="/">Run</a>
       <a href="/sessions">Sessions</a>
       <a href="/profiles">Profiles</a>

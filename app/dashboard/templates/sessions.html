@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Sessions — OpenBrowse{% endblock
+{% extends "base.html" %} {% block title %}Sessions · OpenBrowse{% endblock
 %} {% block head %}
 <style>
   .live-grid {
@@ -52,9 +52,11 @@
   .status-d-queued .status-dot {
     background: #9ca3af;
   }
+  @keyframes statpulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
   .status-d-running .status-dot {
     background: #60a5fa;
     box-shadow: 0 0 6px #60a5fa;
+    animation: statpulse 1.6s ease-in-out infinite;
   }
   .status-d-success .status-dot {
     background: #34d399;
@@ -84,10 +86,9 @@
 {% endblock %} {% block content %}
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
 
-<div class="section-label">Live</div>
-<div id="live-grid" class="live-grid"></div>
-<div id="live-grid-empty" class="live-grid-empty" style="display: none">
-  No live sessions
+<div id="live-section" {% if not live_sessions %}style="display: none"{% endif %}>
+  <div class="section-label">Live</div>
+  <div id="live-grid" class="live-grid"></div>
 </div>
 
 <div class="section-label">History</div>
@@ -119,7 +120,7 @@
 <script>
   (function () {
     const grid = document.getElementById("live-grid");
-    const empty = document.getElementById("live-grid-empty");
+    const liveSection = document.getElementById("live-section");
     function esc(s) {
       return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
         return {
@@ -183,7 +184,7 @@
           grid.appendChild(buildTile(item));
         }
       });
-      empty.style.display = grid.querySelector(".grid-tile") ? "none" : "";
+      liveSection.style.display = grid.querySelector(".grid-tile") ? "" : "none";
     }
     function connect() {
       const src = new EventSource("/sse/live-grid");

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Session {{ session.id[:8] }} —
+{% extends "base.html" %} {% block title %}Session {{ session.id[:8] }} ·
 OpenBrowse{% endblock %} {% block head %}
 <style>
   .detail-layout {
@@ -422,7 +422,8 @@ OpenBrowse{% endblock %} {% block head %}
   .j-num { color: #f59e0b; }
   .j-bool { color: #f472b6; }
   .j-null { color: #94a3b8; }
-  .status-d-running .status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); }
+  @keyframes statpulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+  .status-d-running .status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); animation: statpulse 1.6s ease-in-out infinite; }
   .status-d-queued .status-dot { background: #9ca3af; }
   .no-live.queued { flex-direction: column; gap: 12px; }
   .queued-dot { width: 12px; height: 12px; border-radius: 50%; background: #9ca3af; animation: qpulse 2s ease-in-out infinite; }
