@@ -52,9 +52,9 @@ https://github.com/user-attachments/assets/c1330d77-67b6-4a7d-bd43-7cdfa230b9d1
 
 ### Recommended models
 
-1. **For most use cases**, `gpt-5.6-terra { "reasoningEffort": "none" }` and `claude-sonnet-5 { "reasoningEffort": "high" }` both strike a great balance of reliablity, accuracy, and cost.
+1. **For most use cases**, `gpt-5.6-terra { "reasoningEffort": "none" }`, `gpt-5.6-sol { "reasoningEffort": "none" }` and `claude-sonnet-5 { "reasoningEffort": "high" }` all strike a great balance of reliability, accuracy, and cost.
 
-2. **For intense workflows**, using either `claude-opus-5` or `gpt-5.6-sol` with `{ "reasoningEffort": "none" }` are great options, but watch out for token burn.
+2. **For intense workflows**, use `claude-opus-5 { "reasoningEffort": "medium" }` or `gpt-5.6-sol { "reasoningEffort": "none" }` — both are great options, but watch out for token burn.
 
 3. **On a budget?** Use `gpt-5.6-luna { "reasoningEffort": "max" }` with a tightly focused prompt. It might take a while, and it's more prone to hallucinations (especially with broad prompts), but the actual extractions are still great quality.
 
