@@ -809,6 +809,20 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
 )
 
 
+def _filter_page_urls(urls: list[str] | None) -> tuple[list[str] | None, int]:
+    """Drop entries that are not absolute http(s) URLs before anything tries to
+    navigate to them — a malformed value here (``"null"``, a fragment, a bare
+    word) opens a garbage tab and can corrupt tab state for the whole run.
+    Returns (kept, dropped); None passes through (meaning "use saved links").
+    """
+    if urls is None:
+        return None, 0
+    kept = [
+        u for u in urls if isinstance(u, str) and u.startswith(("http://", "https://"))
+    ]
+    return kept, len(urls) - len(kept)
+
+
 def _saved_links_sans_offhost(clipboard: dict[str, Any] | None) -> tuple[list[str], int]:
     """The last find_links result minus links flagged as pointing off-site, plus
     how many were skipped — so a no-args bulk read covers the list page without
@@ -1411,7 +1425,7 @@ def register_fetch_tool(tools: Tools) -> None:
         url: str,
         file_system: FileSystem,
         method: str = "GET",
-        headers: str | dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         body: str | None = None,
     ) -> ActionResult:
         """Make an HTTP request.
@@ -1420,17 +1434,10 @@ def register_fetch_tool(tools: Tools) -> None:
             url: The URL to request
             file_system: Injected by browser-use — must be named exactly this
             method: HTTP method (GET, POST, PUT, DELETE, PATCH)
-            headers: JSON string of headers, e.g. '{"Authorization": "Bearer ..."}'
+            headers: Object of header/value pairs, e.g. {"Authorization": "Bearer ..."}
             body: Request body as string (for POST/PUT/PATCH)
         """
-        parsed_headers: dict[str, str] = {}
-        if isinstance(headers, dict):
-            parsed_headers = headers
-        elif headers:
-            try:
-                parsed_headers = json.loads(headers)
-            except json.JSONDecodeError:
-                return ActionResult(error="Invalid JSON in headers parameter")
+        parsed_headers: dict[str, str] = headers or {}
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -2315,12 +2322,16 @@ def register_tab_tools(
     async def read_pages(
         browser_session: BrowserSession,
         file_system: FileSystem,
-        urls: list[str] | str | None = None,
+        urls: list[str] | None = None,
         frame_url_contains: str | None = None,
     ) -> ActionResult:
-        urls = _tolerate_json_list(urls)
-        if isinstance(urls, str):
-            urls = [urls]
+        urls, non_url_dropped = _filter_page_urls(urls)
+        if non_url_dropped and not urls:
+            return ActionResult(
+                error=f"None of the {non_url_dropped} given entries are absolute "
+                "http(s) URLs. Pass real page links — a find_links call saves "
+                "them so read_pages() with no arguments reads them all."
+            )
         try:
             offhost_skipped = 0
             if not urls:
@@ -2429,6 +2440,12 @@ def register_tab_tools(
                 f"Read {ok_count} of {len(pages)} pages"
                 + (f"; full content saved to '{saved}'" if saved else "")
                 + (
+                    f"; skipped {non_url_dropped} entr(y/ies) that were not "
+                    "absolute http(s) URLs"
+                    if non_url_dropped
+                    else ""
+                )
+                + (
                     f"; skipped {offhost_skipped} off-site link(s) flagged by "
                     "find_links (pass urls explicitly to include them)"
                     if offhost_skipped
@@ -2467,10 +2484,14 @@ def register_tab_tools(
         "you just need each page's content — it covers every found link in one step; "
         "use tabs when you must interact with the pages."
     )
-    async def open_tabs(urls: list[str] | str | None = None) -> ActionResult:
-        urls = _tolerate_json_list(urls)
-        if isinstance(urls, str):
-            urls = [urls]
+    async def open_tabs(urls: list[str] | None = None) -> ActionResult:
+        urls, non_url_dropped = _filter_page_urls(urls)
+        if non_url_dropped and not urls:
+            return ActionResult(
+                error=f"None of the {non_url_dropped} given entries are absolute "
+                "http(s) URLs. Pass real page links — a find_links call saves "
+                "them so open_tabs() with no arguments queues them all."
+            )
         try:
             if not urls:
                 urls, _ = _saved_links_sans_offhost(clipboard)
@@ -2479,6 +2500,8 @@ def register_tab_tools(
                         error="No urls given and no saved found_links — run find_links first."
                     )
             note = await tab_manager.open_tabs(urls)
+            if non_url_dropped:
+                note += f" Skipped {non_url_dropped} entr(y/ies) that were not absolute http(s) URLs."
             note += (
                 " Next: walk them — goto_tab(0), read the detail page, update_item that "
                 "item, then goto_tab(1), and so on. Do NOT add items from the list page alone."
@@ -2553,15 +2576,9 @@ def register_tab_tools(
         href_regex: str | None = None,
         frame_url_contains: str | None = None,
         container_index: int | None = None,
-        attr: dict[str, str] | str | None = None,
+        attr: dict[str, str] | None = None,
         visible_only: bool = False,
     ) -> ActionResult:
-        attr = _tolerate_json_dict(attr)
-        if isinstance(attr, str):
-            return ActionResult(
-                error="attr must be a JSON object of attribute/value pairs, "
-                'e.g. {"class": "posting"}.'
-            )
         if not (
             href_contains
             or href_regex
@@ -2962,39 +2979,59 @@ def register_output_guard_overrides(tools: Tools) -> None:
         _install(name, False)
 
 
-def _param_kind(annotation: Any) -> str | None:
-    """Classify an action param annotation for transport-level shape coercion:
-    'list'/'dict' when the type (or any union arm) wants that container, and
-    'nullable' for an optional non-string scalar, where ''/'null' can only mean
-    None. Plain and optional strings return None — a string param must never
-    have its content reinterpreted.
-    """
-    origin = get_origin(annotation)
-    if origin in (list, dict):
-        return "list" if origin is list else "dict"
-    if origin in (Union, UnionType):
-        args = get_args(annotation)
-        for arm in args:
-            arm_origin = get_origin(arm)
-            if arm_origin in (list, dict):
-                return "list" if arm_origin is list else "dict"
-        non_none = [a for a in args if a is not type(None)]
-        if (
-            type(None) in args
-            and non_none
-            and str not in non_none
-            and all(a in (int, float, bool) for a in non_none)
-        ):
-            return "nullable"
+def _elem_kind(arm: Any) -> str | None:
+    args = get_args(arm)
+    if not args:
+        return None
+    first = args[0]
+    if first is str:
+        return "str"
+    if first is int:
+        return "int"
+    if get_origin(first) is dict or first is dict:
+        return "dict"
     return None
 
 
-def action_param_kinds(tools: Tools) -> dict[str, dict[str, str]]:
-    """A ``{action: {param: kind}}`` map over the full registry (our actions and
-    browser-use built-ins alike), consumed by the transport-level repair that
-    unwraps JSON-serialised argument values before validation.
+def _param_kind(annotation: Any) -> dict[str, Any] | None:
+    """Describe an action param annotation for the boundary normaliser:
+    the container it wants (list/dict, with the list's element kind), whether
+    it is optional (so ``"null"`` can only mean None), and whether its only
+    real type is a plain string (whose content must never be reinterpreted,
+    beyond the explicit ``"null"`` token when optional).
     """
-    kinds: dict[str, dict[str, str]] = {}
+    origin = get_origin(annotation)
+    if origin is list:
+        return {"container": "list", "elem": _elem_kind(annotation), "optional": False}
+    if origin is dict:
+        return {"container": "dict", "elem": None, "optional": False}
+    if origin in (Union, UnionType):
+        args = get_args(annotation)
+        optional = type(None) in args
+        for arm in args:
+            arm_origin = get_origin(arm)
+            if arm_origin is list:
+                return {
+                    "container": "list",
+                    "elem": _elem_kind(arm),
+                    "optional": optional,
+                }
+            if arm_origin is dict:
+                return {"container": "dict", "elem": None, "optional": optional}
+        non_none = [a for a in args if a is not type(None)]
+        if optional and non_none == [str]:
+            return {"container": None, "elem": None, "optional": True, "plain_str": True}
+        if optional and non_none and all(a in (int, float, bool) for a in non_none):
+            return {"container": None, "elem": None, "optional": True}
+    return None
+
+
+def action_param_kinds(tools: Tools) -> dict[str, dict[str, dict[str, Any]]]:
+    """A ``{action: {param: spec}}`` map over the full registry (our actions and
+    browser-use built-ins alike), consumed by the boundary normaliser that
+    repairs argument shapes before validation.
+    """
+    kinds: dict[str, dict[str, dict[str, Any]]] = {}
     for name, entry in tools.registry.registry.actions.items():
         param_model = getattr(entry, "param_model", None)
         if param_model is None:
@@ -3594,22 +3631,6 @@ def _tolerate_json_list(value: Any) -> Any:
     return value
 
 
-def _tolerate_json_dict(value: Any) -> Any:
-    """Dict twin of ``_tolerate_json_list``: unwrap a dict argument that
-    arrived as its own JSON text; any other string passes through.
-    """
-    if isinstance(value, str):
-        text = value.strip()
-        if text.startswith("{") and text.endswith("}"):
-            try:
-                parsed = json.loads(text)
-            except ValueError:
-                return value
-            if isinstance(parsed, dict):
-                return parsed
-    return value
-
-
 def _absence_unearned(
     store: OutputStore, clipboard: dict[str, Any] | None, field: str
 ) -> str | None:
@@ -3804,12 +3825,8 @@ def register_output_store_tools(
         "this over a run of single update_item calls."
     )
     async def update_items(
-        updates: list[dict[str, Any]] | dict[str, Any] | str, file_system: FileSystem
+        updates: list[dict[str, Any]], file_system: FileSystem
     ) -> ActionResult:
-        updates = _tolerate_json_list(updates)
-        updates = _tolerate_json_dict(updates)
-        if isinstance(updates, dict):
-            updates = [updates]
         _refresh_read_items(store, clipboard)
         ok, msg = store.update_many(updates)
         if not ok:
@@ -3827,16 +3844,8 @@ def register_output_store_tools(
         "any follow-up update_item calls."
     )
     async def remove_items(
-        indices: list[int] | int | str, reason: str, file_system: FileSystem
+        indices: list[int], reason: str, file_system: FileSystem
     ) -> ActionResult:
-        indices = _tolerate_json_list(indices)
-        if isinstance(indices, (int, str)):
-            try:
-                indices = [int(indices)]
-            except ValueError:
-                return ActionResult(
-                    error="indices must be a JSON array of 0-based item numbers, e.g. [3, 7]."
-                )
         ok, msg = store.remove_items(indices)
         if not ok:
             return ActionResult(error=msg)
@@ -3901,11 +3910,8 @@ def register_output_store_tools(
         offset: int = 0,
         limit: int | None = None,
         index: int | None = None,
-        fields: list[str] | str | None = None,
+        fields: list[str] | None = None,
     ) -> ActionResult:
-        fields = _tolerate_json_list(fields)
-        if isinstance(fields, str):
-            fields = [fields]
         return ActionResult(
             extracted_content=(
                 f"{store.coverage_summary()}\n\n"

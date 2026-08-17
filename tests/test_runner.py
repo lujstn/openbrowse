@@ -988,3 +988,17 @@ async def test_invoke_repair_names_mistyped_arguments():
     correction = calls[1][-1].content
     assert "action.0.read_pages.urls" in correction
     assert "no executable" not in correction
+
+
+def test_friendly_error_clips_to_first_sentence():
+    from app.agent.runner import _friendly_error
+
+    long = (
+        "'[\"companyName\", \"companyUrl\"]' is not a schema field. Fields: "
+        + ", ".join(f"field{i}" for i in range(40))
+    )
+    short = _friendly_error(long)
+    assert short.endswith("…")
+    assert len(short) < 160
+    assert "is not a schema field" in short
+    assert _friendly_error("tiny error") == "tiny error"

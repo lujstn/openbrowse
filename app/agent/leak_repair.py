@@ -339,16 +339,63 @@ def is_missing_action_error(exc: BaseException) -> bool:
     return mistyped_action_params(exc) is None
 
 
+def _normalise_one_value(value: Any, spec: dict[str, Any]) -> tuple[Any, bool]:
+    """Apply the family rule to one argument: decode a string iff the decoded
+    value fits the declared type, promote a bare single value where a list is
+    declared, and read ``"null"``/``"none"`` as None for any optional param.
+    Returns (new_value, changed).
+    """
+    container = spec.get("container")
+    elem = spec.get("elem")
+    optional = spec.get("optional")
+    if isinstance(value, str):
+        text = value.strip()
+        if optional and text.lower() in ("null", "none"):
+            return None, True
+        if optional and text == "" and spec.get("plain_str") is not True:
+            return None, True
+        if container == "list":
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    parsed = json.loads(text)
+                except ValueError:
+                    return value, False
+                if isinstance(parsed, list):
+                    return parsed, True
+            if text and elem == "str":
+                return [value], True
+            if text and elem == "int":
+                try:
+                    return [int(text)], True
+                except ValueError:
+                    return value, False
+        elif container == "dict":
+            if text.startswith("{") and text.endswith("}"):
+                try:
+                    parsed = json.loads(text)
+                except ValueError:
+                    return value, False
+                if isinstance(parsed, dict):
+                    return parsed, True
+        return value, False
+    if container == "list":
+        if isinstance(value, int) and not isinstance(value, bool) and elem == "int":
+            return [value], True
+        if isinstance(value, dict) and elem == "dict":
+            return [value], True
+    return value, False
+
+
 def coerce_action_param_shapes(
-    tool_input: dict, param_kinds: dict[str, dict[str, str]]
+    tool_input: dict, param_kinds: dict[str, dict[str, dict[str, Any]]]
 ) -> bool:
-    """Unwrap JSON-serialised argument values inside an action list, guided by
-    the registry's declared types: a param whose annotation wants a list/dict
-    but holds a string of that JSON shape is parsed; a nullable non-string
-    param holding ``""``/``"null"``/``"none"`` becomes None. Content that does
-    not match the declared type's JSON shape is never touched, so a legitimate
-    string that merely looks like JSON survives in genuinely-string params.
-    Mutates in place; returns True if anything changed.
+    """Normalise the argument shapes models actually send back into the shapes
+    the registry declares, one family rule instead of per-symptom patches: a
+    string is decoded iff its JSON content fits the declared type, a lone value
+    is promoted into a declared list, and ``"null"`` means None for optionals.
+    A well-typed reply passes through untouched, so providers that already
+    emit correct shapes are provably unaffected. Mutates in place; returns
+    True if anything changed.
     """
     actions = tool_input.get("action")
     if not isinstance(actions, list):
@@ -360,24 +407,13 @@ def coerce_action_param_shapes(
         ((name, params),) = entry.items()
         if not isinstance(params, dict):
             continue
-        kinds = param_kinds.get(name) or {}
+        specs = param_kinds.get(name) or {}
         for pname, value in list(params.items()):
-            kind = kinds.get(pname)
-            if not isinstance(value, str):
+            spec = specs.get(pname)
+            if not spec:
                 continue
-            text = value.strip()
-            if kind in ("list", "dict"):
-                open_ch, close_ch = ("[", "]") if kind == "list" else ("{", "}")
-                if text.startswith(open_ch) and text.endswith(close_ch):
-                    try:
-                        parsed = json.loads(text)
-                    except ValueError:
-                        continue
-                    expected = list if kind == "list" else dict
-                    if isinstance(parsed, expected):
-                        params[pname] = parsed
-                        changed = True
-            elif kind == "nullable" and text.lower() in ("", "null", "none"):
-                params[pname] = None
+            new_value, did = _normalise_one_value(value, spec)
+            if did:
+                params[pname] = new_value
                 changed = True
     return changed

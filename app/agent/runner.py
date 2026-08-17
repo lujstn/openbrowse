@@ -1102,7 +1102,15 @@ def _action_detail(actions: list) -> tuple[str, bool]:
 
 
 def _friendly_error(error: str) -> str:
-    return " ".join((error or "").split())[:200]
+    """First sentence of an error, clipped — the row is a headline, and the
+    step card carries the full text for anyone who expands it.
+    """
+    text = " ".join((error or "").split())
+    for stop in (". ", "; "):
+        cut = text.find(stop)
+        if 0 < cut < 140:
+            return text[: cut + 1] + "…"
+    return text[:140] + ("…" if len(text) > 140 else "")
 
 
 def _primary_action_name(actions: list) -> str | None:

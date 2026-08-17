@@ -337,23 +337,62 @@ def test_coerce_action_param_shapes():
     from app.agent.leak_repair import coerce_action_param_shapes
 
     kinds = {
-        "read_pages": {"urls": "list"},
-        "find_links": {"attr": "dict", "container_index": "nullable"},
+        "read_pages": {
+            "urls": {"container": "list", "elem": "str", "optional": True},
+            "frame_url_contains": {"container": None, "elem": None, "optional": True, "plain_str": True},
+        },
+        "find_links": {
+            "attr": {"container": "dict", "elem": None, "optional": True},
+            "container_index": {"container": None, "elem": None, "optional": True},
+        },
+        "remove_items": {"indices": {"container": "list", "elem": "int", "optional": False}},
+        "update_items": {"updates": {"container": "list", "elem": "dict", "optional": False}},
         "navigate": {},
     }
     ti = {
         "thinking": "go",
         "action": [
-            {"read_pages": {"urls": '["https://a", "https://b"]'}},
+            {"read_pages": {"urls": '["https://a", "https://b"]', "frame_url_contains": "null"}},
             {"find_links": {"attr": '{"class": "posting"}', "container_index": "null"}},
             {"navigate": {"url": '["not-coerced"]'}},
+            {"read_pages": {"urls": "https://single.example/page"}},
+            {"remove_items": {"indices": 3}},
+            {"update_items": {"updates": {"index": 0, "fields": {"title": "T"}}}},
         ],
     }
     assert coerce_action_param_shapes(ti, kinds) is True
-    assert ti["action"][0]["read_pages"]["urls"] == ["https://a", "https://b"]
-    assert ti["action"][1]["find_links"]["attr"] == {"class": "posting"}
-    assert ti["action"][1]["find_links"]["container_index"] is None
-    assert ti["action"][2]["navigate"]["url"] == '["not-coerced"]'
+    a = ti["action"]
+    assert a[0]["read_pages"]["urls"] == ["https://a", "https://b"]
+    assert a[0]["read_pages"]["frame_url_contains"] is None
+    assert a[1]["find_links"]["attr"] == {"class": "posting"}
+    assert a[1]["find_links"]["container_index"] is None
+    assert a[2]["navigate"]["url"] == '["not-coerced"]'
+    assert a[3]["read_pages"]["urls"] == ["https://single.example/page"]
+    assert a[4]["remove_items"]["indices"] == [3]
+    assert a[5]["update_items"]["updates"] == [{"index": 0, "fields": {"title": "T"}}]
+
+
+def test_coerce_is_noop_on_well_typed_reply():
+    import copy
+
+    from app.agent.leak_repair import coerce_action_param_shapes
+
+    kinds = {
+        "read_pages": {
+            "urls": {"container": "list", "elem": "str", "optional": True},
+            "frame_url_contains": {"container": None, "elem": None, "optional": True, "plain_str": True},
+        }
+    }
+    ti = {
+        "thinking": "well formed",
+        "action": [
+            {"read_pages": {"urls": ["https://a"], "frame_url_contains": "ashby"}},
+            {"set_field": {"key": "careersPageUrl", "value": "https://a/jobs"}},
+        ],
+    }
+    before = copy.deepcopy(ti)
+    assert coerce_action_param_shapes(ti, kinds) is False
+    assert ti == before
 
 
 def test_merge_drops_unknown_action_names():

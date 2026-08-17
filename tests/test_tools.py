@@ -3373,15 +3373,21 @@ async def test_search_page_flow_wrapper() -> None:
     assert "run_code_file" in second.extracted_content
 
 
-async def test_read_output_fields_accepts_json_string() -> None:
-    from app.agent.tools import register_output_store_tools
+async def test_read_output_fields_json_string_normalised_at_boundary() -> None:
+    """The strict signature rejects a stringified list; the boundary normaliser
+    repairs it before validation, so the pair must round-trip."""
+    from app.agent.leak_repair import coerce_action_param_shapes
+    from app.agent.tools import action_param_kinds, register_output_store_tools
 
     tools = Tools()
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
     register_output_store_tools(tools, store, {})
+    kinds = action_param_kinds(tools)
+    ti = {"action": [{"read_output": {"index": 0, "fields": '["title"]'}}]}
+    assert coerce_action_param_shapes(ti, kinds) is True
     entry = tools.registry.registry.actions["read_output"]
-    params = entry.param_model(index=0, fields='["title"]')
+    params = entry.param_model(**ti["action"][0]["read_output"])
     result = await entry.function(params=params, file_system=_FakeFileSystem())
     assert not result.error, result.error
     assert "A" in (result.extracted_content or "")
@@ -3393,13 +3399,19 @@ def test_action_param_kinds_map() -> None:
     tools = Tools()
     register_output_store_tools(tools, _items_store(), {})
     kinds = action_param_kinds(tools)
-    assert kinds["mark_absent"]["field"] == "list"
-    assert kinds["read_output"]["fields"] == "list"
-    assert _param_kind(list[str]) == "list"
-    assert _param_kind(dict[str, str] | None) == "dict"
-    assert _param_kind(int | None) == "nullable"
-    assert _param_kind(str | None) is None
+    assert kinds["mark_absent"]["field"]["container"] == "list"
+    assert kinds["read_output"]["fields"]["container"] == "list"
+    assert _param_kind(list[str]) == {"container": "list", "elem": "str", "optional": False}
+    assert _param_kind(dict[str, str] | None) == {"container": "dict", "elem": None, "optional": True}
+    assert _param_kind(int | None) == {"container": None, "elem": None, "optional": True}
+    assert _param_kind(str | None) == {
+        "container": None,
+        "elem": None,
+        "optional": True,
+        "plain_str": True,
+    }
     assert _param_kind(str) is None
+    assert _param_kind(list[int]) == {"container": "list", "elem": "int", "optional": False}
 
 
 async def test_remember_rejects_reserved_keys() -> None:
@@ -3426,32 +3438,15 @@ def test_saved_links_survive_corruption() -> None:
     assert kept == ["https://a", "https://b"]
 
 
-def test_tolerate_json_dict_shapes() -> None:
-    from app.agent.tools import _tolerate_json_dict
+def test_filter_page_urls() -> None:
+    from app.agent.tools import _filter_page_urls
 
-    assert _tolerate_json_dict('{"class": "posting"}') == {"class": "posting"}
-    assert _tolerate_json_dict("plain") == "plain"
-    assert _tolerate_json_dict({"a": 1}) == {"a": 1}
-
-
-async def test_update_items_accepts_stringified_and_single_forms() -> None:
-    from app.agent.tools import register_output_store_tools
-
-    tools = Tools()
-    store = _items_store()
-    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
-    register_output_store_tools(tools, store, {})
-    entry = tools.registry.registry.actions["update_items"]
-    params = entry.param_model(
-        updates='[{"index": 0, "fields": {"description": "long enough text"}}]'
-    )
-    result = await entry.function(params=params, file_system=_FakeFileSystem())
-    assert not result.error, result.error
-    params2 = entry.param_model(
-        updates={"index": 0, "fields": {"title": "A2"}}
-    )
-    result2 = await entry.function(params=params2, file_system=_FakeFileSystem())
-    assert not result2.error, result2.error
+    kept, dropped = _filter_page_urls(["null", "https://x.com/a", "jobs", "http://y.com"])
+    assert kept == ["https://x.com/a", "http://y.com"] and dropped == 2
+    kept, dropped = _filter_page_urls(None)
+    assert kept is None and dropped == 0
+    kept, dropped = _filter_page_urls(["null"])
+    assert kept == [] and dropped == 1
 
 
 def test_coerce_scalar_unwraps_json_strings_for_container_fields() -> None:
