@@ -23,14 +23,17 @@ async def setup(tmp_path, monkeypatch):
         dashboard_user="admin",
         dashboard_password="",
         allow_insecure_no_auth=False,
+        cloud_max_cost_factor=1.0,
     )
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)
     monkeypatch.setattr("app.auth.settings", test_settings)
+    monkeypatch.setattr("app.api.sessions.settings", test_settings)
     monkeypatch.setattr("app.dashboard.routes.settings", test_settings)
     monkeypatch.setattr("app.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
+    return test_settings
 
 
 @pytest.fixture
@@ -377,3 +380,30 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
         data={"task": "x"},
     )
     assert resp.status_code == 409
+
+
+@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monkeypatch):
+    import asyncio
+
+    from app.dashboard import routes
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post(
+        "/run",
+        data={
+            "task": "Go to example.com",
+            "model": "claude-sonnet-5",
+            "max_cost_usd": "3",
+        },
+        headers=_basic("admin", "secret-key"),
+    )
+    assert resp.status_code == 303
+    sid = resp.headers["location"].rsplit("/", 1)[-1]
+    stored = await crud.get_session(sid)
+    assert stored["max_cost_usd"] == 3.0
+    if routes._dispatched_tasks:
+        await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
