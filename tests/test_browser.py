@@ -24,7 +24,14 @@ async def test_allocate_display(mock_popen, manager):
 
 
 @patch("app.browser.factory.subprocess.Popen")
-async def test_allocate_multiple(mock_popen, manager):
+async def test_allocate_multiple(mock_popen, manager, monkeypatch):
+    from dataclasses import replace
+
+    import app.browser.factory as factory_mod
+
+    monkeypatch.setattr(
+        factory_mod, "settings", replace(settings, max_concurrent_sessions=5)
+    )
     mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
     s1 = await manager.allocate()
     s2 = await manager.allocate()

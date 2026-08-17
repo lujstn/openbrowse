@@ -85,7 +85,15 @@ def test_model_provider_labels():
     assert model_provider(None) == "Anthropic"
 
 
-def test_live_sessions_filters_running_with_url_and_caps():
+def test_live_sessions_filters_running_with_url_and_caps(monkeypatch):
+    from dataclasses import replace
+
+    from app.config import settings
+    from app.dashboard import routes as routes_mod
+
+    monkeypatch.setattr(
+        routes_mod, "settings", replace(settings, max_concurrent_sessions=5)
+    )
     sessions = [
         {"id": "a", "status": "running", "live_url": "/vnc/a/vnc.html"},
         {"id": "b", "status": "running", "live_url": None},

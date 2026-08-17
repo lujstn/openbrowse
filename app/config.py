@@ -42,7 +42,7 @@ class Settings:
         default_factory=lambda: _BASE / "data" / "screenshots"
     )
     max_concurrent_sessions: int = field(
-        default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_SESSIONS", "2"))
+        default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_SESSIONS", "1"))
     )
     default_model: str = "claude-sonnet-5"
     stale_session_minutes: int = 15

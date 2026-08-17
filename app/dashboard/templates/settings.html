@@ -1,0 +1,158 @@
+{% extends "base.html" %} {% block title %}Settings — OpenBrowse{% endblock %}
+{% block head %}
+<style>
+  .settings-wrap {
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  .settings-card {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .env-row {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  .env-row:last-of-type {
+    border-bottom: none;
+  }
+  .env-key {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    color: #9ca3af;
+  }
+  .env-key .unset {
+    color: #555;
+    font-family: inherit;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+  .env-row input {
+    background: #0a0a0a;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  .env-row input:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .env-row input.env-new-key {
+    color: #9ca3af;
+  }
+  .reveal-btn {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 6px;
+  }
+  .reveal-btn:hover {
+    color: #e5e5e5;
+  }
+  .env-value-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .settings-note {
+    color: #666;
+    font-size: 12px;
+    margin-top: 14px;
+    line-height: 1.5;
+  }
+  .settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .save-btn {
+    background: #60a5fa;
+    color: #0a0a0a;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px 22px;
+    cursor: pointer;
+  }
+  .save-btn:hover {
+    background: #7db8fb;
+  }
+  .saved-banner {
+    background: #0d1f16;
+    border: 1px solid #1d4029;
+    color: #34d399;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .section-sub {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 18px 0 6px;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="settings-wrap">
+  <h1>Settings</h1>
+  {% if saved %}
+  <div class="saved-banner">Saved. Changes take effect after the service restarts.</div>
+  {% endif %}
+  <form class="settings-card" method="post" action="/settings">
+    {% for row in rows %}
+    <div class="env-row">
+      <span class="env-key">{{ row.key }}{% if not row.present %}<span class="unset">not set</span>{% endif %}</span>
+      <span class="env-value-wrap">
+        <input type="hidden" name="key" value="{{ row.key }}" />
+        {% if row.secret %}
+        <input
+          type="password"
+          name="value"
+          value=""
+          autocomplete="off"
+          placeholder="{{ 'hidden — leave blank to keep' if row.present else 'not set' }}"
+        />
+        <button type="button" class="reveal-btn" title="Show/hide">👁</button>
+        {% else %}
+        <input type="text" name="value" value="{{ row.value }}" autocomplete="off" />
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+    <div class="section-sub">Add a variable</div>
+    <div class="env-row" style="border-bottom: none">
+      <input class="env-new-key" type="text" name="key" value="" placeholder="NAME" autocomplete="off" />
+      <input type="text" name="value" value="" placeholder="value" autocomplete="off" />
+    </div>
+    <div class="settings-actions">
+      <span class="settings-note">Values are written to .env. A service restart is needed for changes to apply.</span>
+      <button class="save-btn" type="submit">Save</button>
+    </div>
+  </form>
+</div>
+<script>
+  document.querySelectorAll(".reveal-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = btn.parentElement.querySelector("input[name=value]");
+      input.type = input.type === "password" ? "text" : "password";
+    });
+  });
+</script>
+{% endblock %}

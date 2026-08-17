@@ -93,18 +93,38 @@
     display: flex;
     gap: 8px;
   }
-  .actions .btn {
+  .actions .btn-edit {
     opacity: 0;
     pointer-events: none;
   }
-  tbody tr:hover .actions .btn,
-  tbody tr:focus-within .actions .btn {
+  tbody tr:hover .actions .btn-edit,
+  tbody tr:focus-within .actions .btn-edit {
     opacity: 1;
     pointer-events: auto;
+  }
+  .edit-actions {
+    display: none;
+    gap: 8px;
+  }
+  tr.editing .edit-actions {
+    display: flex;
+  }
+  tr.editing .btn-edit {
+    display: none;
+  }
+  tr.editing .cell-input {
+    border-color: #333;
+    background: #0a0a0a;
+  }
+  .cell-input[readonly] {
+    cursor: default;
   }
   .btn-save:hover {
     border-color: #60a5fa;
     color: #60a5fa;
+  }
+  .btn-cancel {
+    padding: 7px 10px;
   }
   tbody tr {
     transition: background 0.12s ease;
@@ -129,21 +149,60 @@
   .domains .muted {
     color: #555;
   }
+  .np-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .np-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+    background: #0d0d0d;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: border-color 0.12s ease;
+    text-decoration: none;
+  }
+  .np-tile:hover {
+    border-color: #60a5fa;
+    text-decoration: none;
+  }
+  .np-name {
+    color: #e5e5e5;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .np-sub {
+    color: #737373;
+    font-size: 12px;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Profiles <span class="badge">{{ total }}</span></h1>
 
-<p style="margin-bottom: 16px;">
-  <a class="btn btn-primary" href="/profiles/import">Import from BU Cloud →</a>
-</p>
-
-<form class="create-card" method="post" action="/profiles/create">
-  <div class="field">
-    <label for="new-name">Name</label>
-    <input id="new-name" name="name" placeholder="My profile" />
+<div class="create-card" style="flex-direction: column; align-items: stretch; gap: 10px">
+  <span style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em">New profile</span>
+  <div class="np-tiles">
+    <button type="button" class="np-tile" id="np-create-tile">
+      <span class="np-name">Create new profile</span>
+      <span class="np-sub">Start with an empty cookie jar and log in during a session</span>
+    </button>
+    <a class="np-tile" href="/profiles/import">
+      <span class="np-name">Import from BU Cloud</span>
+      <span class="np-sub">Bring an existing profile's cookies and localStorage</span>
+    </a>
   </div>
-  <button class="btn btn-primary" type="submit">Create profile</button>
-</form>
+  <form id="np-create-form" method="post" action="/profiles/create" hidden style="display: flex; gap: 10px; align-items: center">
+    <input name="name" placeholder="Profile name (optional)" autocomplete="off" style="flex: 1" />
+    <button class="btn btn-primary" type="submit">Create</button>
+    <button class="btn" type="button" id="np-create-cancel">✕</button>
+  </form>
+</div>
 
 <p class="hint">
   Editing an ID rewrites the profile's stored cookie file and repoints every
@@ -175,6 +234,7 @@
           form="edit-{{ p.id }}"
           name="new_id"
           value="{{ p.id }}"
+          readonly
         />
       </td>
       <td>
@@ -183,6 +243,7 @@
           form="edit-{{ p.id }}"
           name="name"
           value="{{ p.name or '' }}"
+          readonly
         />
       </td>
       <td class="domains" title="{{ p.cookie_domains | join(', ') }}">
@@ -192,21 +253,55 @@
       <td>{{ format_relative(p.created_at) }}</td>
       <td>
         <div class="actions">
-          <button class="btn btn-save" form="edit-{{ p.id }}" type="submit">
-            Save
-          </button>
-          <button
-            class="btn btn-danger"
-            form="del-{{ p.id }}"
-            type="submit"
-            onclick="return confirm('Delete this profile? Sessions that used it will keep their history but lose the profile link.');"
-          >
-            Delete
-          </button>
+          <button class="btn btn-edit" type="button" onclick="enterEdit(this)">Edit</button>
+          <span class="edit-actions">
+            <button class="btn btn-save" form="edit-{{ p.id }}" type="submit">Save</button>
+            <button
+              class="btn btn-danger"
+              form="del-{{ p.id }}"
+              type="submit"
+              onclick="return confirm('Delete this profile? Sessions that used it will keep their history but lose the profile link.');"
+            >
+              Delete
+            </button>
+            <button class="btn btn-cancel" type="button" onclick="cancelEdit(this)" title="Cancel">✕</button>
+          </span>
         </div>
       </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+<script>
+  function enterEdit(btn) {
+    var tr = btn.closest("tr");
+    tr.classList.add("editing");
+    tr.querySelectorAll(".cell-input").forEach(function (i) {
+      i.removeAttribute("readonly");
+    });
+    tr.querySelector(".cell-input").focus();
+  }
+  function cancelEdit(btn) {
+    var tr = btn.closest("tr");
+    tr.classList.remove("editing");
+    tr.querySelectorAll(".cell-input").forEach(function (i) {
+      i.value = i.defaultValue;
+      i.setAttribute("readonly", "");
+    });
+  }
+  (function () {
+    var tile = document.getElementById("np-create-tile");
+    var form = document.getElementById("np-create-form");
+    var cancel = document.getElementById("np-create-cancel");
+    tile.addEventListener("click", function () {
+      form.hidden = false;
+      form.style.display = "flex";
+      form.querySelector("input").focus();
+    });
+    cancel.addEventListener("click", function () {
+      form.hidden = true;
+      form.style.display = "none";
+    });
+  })();
+</script>
 {% endblock %}

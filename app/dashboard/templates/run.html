@@ -35,6 +35,18 @@ block head %}
   .capacity.cap-full .cap-dot {
     background: #f59e0b;
   }
+  .capacity.cap-idle {
+    color: #555;
+    border-color: #1a1a1a;
+    background: transparent;
+  }
+  .capacity.cap-idle .cap-dot {
+    background: #444;
+  }
+  .capacity.cap-idle strong {
+    color: #777;
+    font-weight: 500;
+  }
   .capacity strong {
     color: #e5e5e5;
     font-weight: 600;
@@ -187,7 +199,7 @@ block head %}
 <div class="run-wrap">
   <div class="run-head">
     <h1>Run a task</h1>
-    <span class="capacity{% if active_count >= max_concurrent %} cap-full{% endif %}">
+    <span class="capacity{% if active_count >= max_concurrent %} cap-full{% elif active_count == 0 %} cap-idle{% endif %}">
       <span class="cap-dot"></span>
       <strong>{{ active_count }}</strong>&nbsp;of {{ max_concurrent }} browser{{ 's' if max_concurrent != 1 else '' }} in use
     </span>

@@ -36,6 +36,34 @@ from app.profiles.storage import cookie_domains, read_state_file
 
 logger = logging.getLogger(__name__)
 
+_ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
+_KNOWN_ENV_VARS = [
+    "API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "CAPSOLVER_API_KEY",
+    "DASHBOARD_USER",
+    "DASHBOARD_PASSWORD",
+    "MAX_CONCURRENT_SESSIONS",
+    "DEFAULT_MODEL",
+]
+_SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
+
+
+def _is_secret_var(key: str) -> bool:
+    return any(m in key.upper() for m in _SECRET_MARKERS)
+
+
+def _read_env_file() -> dict[str, str]:
+    entries: dict[str, str] = {}
+    if _ENV_PATH.exists():
+        for line in _ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                entries[k.strip()] = v
+    return entries
+
 _template_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_template_dir))
 
@@ -194,7 +222,7 @@ def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     if spec.can_disable:
         options.append(("none", decorate("none", "None")))
     for level in spec.efforts:
-        label = "XHigh" if level == "xhigh" else level.capitalize()
+        label = "Extra High" if level == "xhigh" else level.capitalize()
         options.append((level, decorate(level, label)))
     return {"options": options, "default": recommended or spec.default}
 
@@ -449,6 +477,43 @@ async def dashboard_stop_session(session_id: str):
     await pool.cancel(session_id)
     await crud.update_session(session_id, status="stopped")
     return JSONResponse({"ok": True, "action": "stop"})
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    entries = _read_env_file()
+    keys = list(entries) + [k for k in _KNOWN_ENV_VARS if k not in entries]
+    rows = [
+        {
+            "key": k,
+            "value": "" if _is_secret_var(k) else entries.get(k, ""),
+            "present": k in entries,
+            "secret": _is_secret_var(k),
+        }
+        for k in keys
+    ]
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        context={"rows": rows, "saved": request.query_params.get("saved") == "1"},
+    )
+
+
+@router.post("/settings")
+async def settings_save(request: Request):
+    form = await request.form()
+    entries = _read_env_file()
+    new: dict[str, str] = {}
+    for k, v in zip(form.getlist("key"), form.getlist("value")):
+        k, v = str(k).strip(), str(v).strip()
+        if not k:
+            continue
+        if _is_secret_var(k) and not v and k in entries:
+            new[k] = entries[k]
+        elif v:
+            new[k] = v
+    _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @router.get("/profiles", response_class=HTMLResponse)
