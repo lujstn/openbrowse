@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Restarting · OpenBrowse</title>
+    <link rel="icon" href="/static/openbrowse.ico" />
+    <meta http-equiv="refresh" content="10;url=/settings?saved=1" />
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #0a0a0a;
+        color: #e5e5e5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      .logo {
+        color: #fff;
+        animation: breathe 1.8s ease-in-out infinite;
+      }
+      @keyframes breathe {
+        0%, 100% { opacity: 0.35; transform: scale(0.96); }
+        50% { opacity: 1; transform: scale(1); }
+      }
+      h1 {
+        font-size: 17px;
+        font-weight: 600;
+        margin: 0;
+      }
+      p {
+        color: #888;
+        font-size: 13px;
+        margin: 0;
+      }
+      .bar {
+        width: 220px;
+        height: 3px;
+        border-radius: 2px;
+        background: #1a1a1a;
+        overflow: hidden;
+      }
+      .bar span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: #60a5fa;
+        animation: fill 10s linear forwards;
+      }
+      @keyframes fill {
+        to { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="logo" width="52" height="52" viewBox="0 0 512 512" fill="none" aria-hidden="true">
+      <g fill="none" stroke="currentColor" stroke-width="31.847" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M290.705 369.914C290.705 369.914 210.213 396.956 210.213 396.956C206.233 398.293 201.92 398.257 197.962 396.856C148.001 379.164 115.992 340.272 102.051 289.137C88.11 238.002 100.116 183.282 134.184 142.681"></path>
+        <path d="M323.368 335.617C323.368 335.617 323.368 197.851 323.368 197.851C323.368 189.565 317.701 182.353 309.65 180.395C309.65 180.395 209.618 156.063 209.618 156.063C198.308 153.312 187.407 161.879 187.407 173.519C187.407 173.519 187.407 386.246 187.407 386.246"></path>
+        <path d="M227.468 87.842C290.827 75.641 355.374 102.279 391.688 155.613C428.002 208.947 429.129 278.765 394.556 333.244"></path>
+        <path d="M297.945 429.25C324.428 425.197 350.031 416.68 373.665 404.061"></path>
+      </g>
+    </svg>
+    <h1>Restarting OpenBrowse</h1>
+    <p>Applying your settings. This page will refresh in a few seconds.</p>
+    <div class="bar"><span></span></div>
+    <script>
+      setTimeout(function () {
+        window.location.href = "/settings?saved=1";
+      }, 10000);
+    </script>
+  </body>
+</html>

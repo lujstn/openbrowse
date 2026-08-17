@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -501,6 +503,26 @@ async def settings_page(request: Request):
     )
 
 
+def _schedule_restart() -> None:
+    async def _go() -> None:
+        await asyncio.sleep(0.7)
+        try:
+            subprocess.Popen(
+                ["sudo", "-n", "systemctl", "restart", "browser-use.service"]
+            )
+        except Exception:
+            logger.warning("systemctl restart failed", exc_info=True)
+        # @nonobvious(forced-by): under systemd a non-zero exit revives the
+        # service even where sudo is unavailable; without systemd the process
+        # simply stops, which is what "restart" honestly means there.
+        await asyncio.sleep(5)
+        os._exit(1)
+
+    task = asyncio.get_running_loop().create_task(_go())
+    _dispatched_tasks.add(task)
+    task.add_done_callback(_dispatched_tasks.discard)
+
+
 @router.post("/settings")
 async def settings_save(request: Request):
     form = await request.form()
@@ -510,7 +532,8 @@ async def settings_save(request: Request):
         if k and v:
             new[k] = v
     _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
-    return RedirectResponse("/settings?saved=1", status_code=303)
+    _schedule_restart()
+    return templates.TemplateResponse(request, "restarting.html")
 
 
 @router.get("/profiles", response_class=HTMLResponse)

@@ -125,6 +125,10 @@
   .save-btn:disabled:hover {
     background: #60a5fa;
   }
+  .restart-note {
+    border-left: 2px solid #f59e0b;
+    padding-left: 10px;
+  }
   .saved-banner {
     background: #0d1f16;
     border: 1px solid #1d4029;
@@ -178,8 +182,11 @@
       </div>
     </div>
     <div class="settings-actions">
-      <span class="settings-note">Values are written to .env; clearing a value removes the variable. A service restart applies the changes.</span>
-      <button class="save-btn" type="submit" disabled>Save</button>
+      <span class="settings-note restart-note">
+        Values are written to .env; clearing a value removes the variable.
+        Saving restarts the server, which interrupts any sessions currently running.
+      </span>
+      <button class="save-btn" type="submit" disabled>Save and restart</button>
     </div>
   </form>
 </div>

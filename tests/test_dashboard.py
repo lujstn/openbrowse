@@ -270,6 +270,10 @@ async def test_settings_save_updates_and_removes_values(client, tmp_path, monkey
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\nOLD_VAR=x\n")
     monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    restarts = []
+    monkeypatch.setattr(
+        "app.dashboard.routes._schedule_restart", lambda: restarts.append(1)
+    )
     resp = await client.post(
         "/settings",
         headers=_basic("admin", "secret-key"),
@@ -278,7 +282,9 @@ async def test_settings_save_updates_and_removes_values(client, tmp_path, monkey
             "value": ["supersecret", "1", "", "hello"],
         },
     )
-    assert resp.status_code == 303
+    assert resp.status_code == 200
+    assert "Restarting OpenBrowse" in resp.text
+    assert restarts == [1]
     text = env.read_text()
     assert "API_KEY=supersecret" in text
     assert "MAX_CONCURRENT_SESSIONS=1" in text
