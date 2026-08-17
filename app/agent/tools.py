@@ -3188,6 +3188,11 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
                 break
 
     extra_field, extra_kind = _extra_style_field(store)
+    # @nonobvious(mirrors): a loose additionalProperties schema accepts keys it
+    # never declares; the platform convention for those (matching the cloud's
+    # output shape) is an 'extra' list of {key, value} pairs.
+    if extra_field is None and model.model_config.get("extra") == "allow":
+        extra_field, extra_kind = "extra", "undeclared"
     if extra_field and extra_field not in row:
         leftovers = {
             k: v
@@ -3208,7 +3213,11 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             if residue:
                 leftovers["listing_row"] = " • ".join(residue)[:500]
         if leftovers:
-            if extra_kind == "kv":
+            if extra_kind == "undeclared":
+                row[extra_field] = [
+                    {"key": k, "value": str(v)[:500]} for k, v in leftovers.items()
+                ]
+            elif extra_kind == "kv":
                 for key_name in ("key", "name"):
                     shaped = [
                         {key_name: k, "value": str(v)[:500]} for k, v in leftovers.items()

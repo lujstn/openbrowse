@@ -2932,4 +2932,54 @@ def test_draft_row_rejected_enum_value_never_pollutes_weaker_field() -> None:
 
     row = _draft_row(store, page)
     assert row.get("location") == "London"
-    assert "TELECOMMUTE" not in _json.dumps(row)
+    assert "locationType" not in row
+    declared = {k: v for k, v in row.items() if k != "extra"}
+    assert "TELECOMMUTE" not in _json.dumps(declared)
+
+
+def test_draft_row_harvests_undeclared_extra_when_schema_allows() -> None:
+    import json as _json
+
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                    "additionalProperties": {},
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema))
+    page = {
+        "url": "https://x.com/p?id=1",
+        "title": "Role One",
+        "text": "t" * 500,
+        "jsonld": {
+            "@type": "JobPosting",
+            "title": "Role One",
+            "employmentType": "FullTime",
+            "workplaceType": "Hybrid",
+        },
+    }
+    row = _draft_row(store, page)
+    extra = row.get("extra")
+    assert isinstance(extra, list) and extra
+    keys = {e["key"] for e in extra}
+    assert "employmentType" in keys or "workplaceType" in keys
+
+    ok, msg = store.add_item(row)
+    assert ok, msg
+    stored = _json.loads(store.read_output())["items"][0]
+    assert stored.get("extra")
