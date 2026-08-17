@@ -600,3 +600,12 @@ async def test_followup_composer_replaces_the_hidden_input(client):
     assert 'id="followup-input"' in resp.text
     assert "OpenBrowseAgents.PromptInput" in resp.text
     assert 'style="display: none"' not in resp.text.split('id="followup-form"')[1][:200]
+
+
+async def test_codeview_uses_the_shared_renderer(client):
+    resp = await client.get("/codeview")
+    assert resp.status_code == 200
+    assert '<link rel="stylesheet" href="/static/openbrowse.css" />' in resp.text
+    assert '<script defer src="/static/agents.js"></script>' in resp.text
+    assert "agents.renderCode(code, 'python')" in resp.text
+    assert "outerHTML" not in resp.text

@@ -433,16 +433,6 @@ OpenBrowse{% endblock %} {% block head %}
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .j-pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin: 0;
-  }
-  .j-key { color: #60a5fa; }
-  .j-str { color: #a3e635; }
-  .j-num { color: #f59e0b; }
-  .j-bool { color: #f472b6; }
-  .j-null { color: #94a3b8; }
   @keyframes statpulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
   .status-d-running .status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); animation: statpulse 1.6s ease-in-out infinite; }
   .status-d-queued .status-dot { background: #9ca3af; }
@@ -816,25 +806,6 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  function highlightJson(obj) {
-    let json = JSON.stringify(obj, null, 2);
-    json = json.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return json.replace(
-      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
-      function (match) {
-        let cls = "j-num";
-        if (/^"/.test(match)) {
-          cls = /:$/.test(match) ? "j-key" : "j-str";
-        } else if (/^(true|false)$/.test(match)) {
-          cls = "j-bool";
-        } else if (/^null$/.test(match)) {
-          cls = "j-null";
-        }
-        return '<span class="' + cls + '">' + match + "</span>";
-      }
-    );
-  }
-
   function prettyOutput(text) {
     try {
       const p = JSON.parse(text);
@@ -859,8 +830,8 @@ document.addEventListener("DOMContentLoaded", function () {
       try { parsed = JSON.parse(currentOutput); } catch (e) {}
       const body =
         parsed !== null && typeof parsed === "object"
-          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
-          : "<pre>" + esc(currentOutput) + "</pre>";
+          ? OpenBrowseAgents.renderCode(JSON.stringify(parsed, null, 2), "json")
+          : OpenBrowseAgents.renderCode(currentOutput, "text", { lineNumbers: false });
       html += '<div class="cc-out">' + body + "</div>";
     }
     completionCard.innerHTML = html;

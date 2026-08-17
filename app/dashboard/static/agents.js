@@ -326,6 +326,78 @@
     }, 400);
   }
 
+  var PY_RE = new RegExp(
+    [
+      "(#[^\\n]*)",
+      "(\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*')",
+      "(@[A-Za-z_]\\w*)",
+      "\\b(False|None|True|and|as|assert|async|await|break|class|continue|def|del|" +
+        "elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|" +
+        "not|or|pass|raise|return|try|while|with|yield)\\b",
+      "\\b(\\d+\\.?\\d*)\\b",
+    ].join("|"),
+    "g"
+  );
+
+  var JSON_RE = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+
+  function highlightPython(code) {
+    var out = "";
+    var last = 0;
+    var m;
+    PY_RE.lastIndex = 0;
+    while ((m = PY_RE.exec(code)) !== null) {
+      if (m.index > last) out += escapeHtml(code.slice(last, m.index));
+      var cls = m[1] ? "com" : m[2] ? "str" : m[3] ? "dec" : m[4] ? "kw" : "num";
+      out += '<span class="ob-t-' + cls + '">' + escapeHtml(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+    return out + escapeHtml(code.slice(last));
+  }
+
+  function highlightJson(code) {
+    var out = "";
+    var last = 0;
+    var m;
+    JSON_RE.lastIndex = 0;
+    while ((m = JSON_RE.exec(code)) !== null) {
+      if (m.index > last) out += escapeHtml(code.slice(last, m.index));
+      if (m[1]) {
+        out += '<span class="ob-t-' + (m[2] ? "key" : "str") + '">' + escapeHtml(m[1]) + "</span>";
+        if (m[2]) out += escapeHtml(m[2]);
+      } else if (m[3]) {
+        out += '<span class="ob-t-lit">' + escapeHtml(m[3]) + "</span>";
+      } else {
+        out += '<span class="ob-t-num">' + escapeHtml(m[4]) + "</span>";
+      }
+      last = m.index + m[0].length;
+    }
+    return out + escapeHtml(code.slice(last));
+  }
+
+  function highlight(code, lang) {
+    if (lang === "python") return highlightPython(code);
+    if (lang === "json") return highlightJson(code);
+    return escapeHtml(code);
+  }
+
+  // @nonobvious(means): each line is highlighted on its own, so a half-written
+  // line arriving mid-stream degrades to plain text instead of miscolouring
+  // everything after it, and no re-parse of the whole buffer is needed per frame.
+  // The cost is that a string spanning several lines is not carried across them.
+  function renderCode(code, lang, opts) {
+    opts = opts || {};
+    var lines = String(code == null ? "" : code).split("\n");
+    var body = lines
+      .map(function (line, i) {
+        var num = opts.lineNumbers === false ? "" : '<span class="ob-code-num">' + (i + 1) + "</span>";
+        return '<span class="ob-code-line">' + num + '<span class="ob-code-text">' +
+          (highlight(line, lang) || "&nbsp;") + "</span></span>";
+      })
+      .join("");
+    return '<pre class="ob-code"><code>' + body + "</code></pre>";
+  }
+
   var SEND_ICON =
     '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
     'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -483,6 +555,8 @@
     Typewriter: Typewriter,
     StreamingResponse: StreamingResponse,
     PromptInput: PromptInput,
+    renderCode: renderCode,
+    highlight: highlight,
     handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
   };
 })(window);

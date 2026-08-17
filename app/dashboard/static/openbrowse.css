@@ -310,6 +310,56 @@
   padding: 6px 4px 0 12px;
 }
 
+.ob-code {
+  margin: 0;
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ob-text);
+  background: none;
+  overflow: auto;
+}
+.ob-code code {
+  display: block;
+}
+.ob-code-line {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr);
+  column-gap: 10px;
+}
+.ob-code-num {
+  color: #4b5563;
+  text-align: right;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.ob-code-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ob-t-com {
+  color: #6b7280;
+  font-style: italic;
+}
+.ob-t-str {
+  color: #a5d6a7;
+}
+.ob-t-kw {
+  color: #c792ea;
+}
+.ob-t-num {
+  color: #f6c177;
+}
+.ob-t-dec {
+  color: var(--ob-accent);
+}
+.ob-t-key {
+  color: var(--ob-accent);
+}
+.ob-t-lit {
+  color: #f78c6c;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,

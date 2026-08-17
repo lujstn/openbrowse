@@ -851,24 +851,44 @@ async def sse_session_messages(request: Request, session_id: str):
 
 _CODEVIEW_HTML = """<!doctype html>
 <title>Code</title>
-<body style="margin:0;min-height:100vh;background:#0d1117;color:#e6edf3;font-family:ui-monospace,monospace">
-<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;background:#161b22;border-bottom:1px solid #30363d">
-  <span id="fn" style="color:#8b949e">script.py</span>
-  <span id="st" style="margin-left:auto;padding:3px 12px;border-radius:12px;background:#1f6feb;color:#fff;font-size:13px">Writing&hellip;</span>
-  <span id="sp" style="display:none;width:16px;height:16px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:s .8s linear infinite"></span>
+<link rel="stylesheet" href="/static/openbrowse.css" />
+<script defer src="/static/agents.js"></script>
+<style>
+  body { margin: 0; min-height: 100vh; background: #0d1117; color: #e6edf3;
+         font-family: ui-monospace, monospace; }
+  .cv-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px;
+             background: #161b22; border-bottom: 1px solid #30363d; }
+  #fn { color: #8b949e; }
+  #st { margin-left: auto; padding: 3px 12px; border-radius: 12px;
+        background: #1f6feb; color: #fff; font-size: 13px; }
+  #sp { display: none; width: 16px; height: 16px; border: 3px solid #30363d;
+        border-top-color: #58a6ff; border-radius: 50%; animation: s .8s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg) } }
+  .cv-body { padding: 20px; white-space: pre-wrap; word-break: break-word; }
+  .cv-body .ob-code { font-size: 14px; }
+</style>
+<body>
+<div class="cv-head">
+  <span id="fn">script.py</span>
+  <span id="st">Writing&hellip;</span>
+  <span id="sp"></span>
 </div>
-<style>@keyframes s{to{transform:rotate(360deg)}} .caret{display:inline-block;width:8px;background:#58a6ff;animation:b 1s steps(1) infinite} @keyframes b{50%{opacity:0}}</style>
-<pre style="margin:0;padding:20px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word"><span id="c"></span><span id="caret" class="caret">&nbsp;</span></pre>
+<div class="cv-body" id="c"></div>
 <script>
-window.__setCode = function(name, code, status){
+window.__setCode = function (name, code, status) {
   document.getElementById('fn').textContent = name;
-  document.getElementById('c').textContent = code;
-  var st = document.getElementById('st');
+  var host = document.getElementById('c');
+  var agents = window.OpenBrowseAgents;
+  if (agents) {
+    host.innerHTML = agents.renderCode(code, 'python');
+  } else {
+    host.textContent = code;
+  }
   var running = status === 'Running';
-  st.textContent = running ? 'Running\\u2026' : 'Writing\\u2026';
+  var st = document.getElementById('st');
+  st.textContent = running ? 'Running\u2026' : 'Writing\u2026';
   st.style.background = running ? '#238636' : '#1f6feb';
   document.getElementById('sp').style.display = running ? 'inline-block' : 'none';
-  document.getElementById('caret').style.display = running ? 'none' : 'inline-block';
   window.scrollTo(0, document.body.scrollHeight);
 };
 </script>
