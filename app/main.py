@@ -14,11 +14,12 @@ from contextlib import asynccontextmanager
 # stay above read_pages' own 420s budget and below the 520s step_timeout.
 os.environ.setdefault("BROWSER_USE_ACTION_TIMEOUT_S", "480")
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import system_metrics
+from app.auth import require_api_key
 from app.agent.pool import pool
 from app.api.profiles import router as profiles_router
 from app.api.sessions import router as sessions_router
@@ -108,6 +109,11 @@ app.include_router(dashboard_vnc_router)
 
 @app.get("/health")
 async def health():
+    return {"status": "ok"}
+
+
+@app.get("/health/details")
+async def health_details(_: str = Depends(require_api_key)):
     return {"status": "ok", "active_sessions": pool.active_count}
 
 
