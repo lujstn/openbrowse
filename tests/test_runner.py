@@ -473,7 +473,66 @@ async def test_gemini_mid_stream_failure_propagates_instead_of_re_issuing(monkey
             model="gemini-3.7-flash", contents=[], config={}
         )
     assert models.plain_calls == 0
-    assert models.plain_calls == 1
+
+
+def test_gemini_schema_anchor_only_when_the_last_message_is_not_text(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use.llm.messages import ContentPartTextParam, UserMessage
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    vision = [UserMessage(content=[ContentPartTextParam(text="state")])]
+    anchored = llm._with_schema_anchor(vision, dict)
+    assert len(anchored) == 2
+    assert isinstance(anchored[-1].content, str)
+
+    plain = [UserMessage(content="already text")]
+    assert llm._with_schema_anchor(plain, dict) is plain
+    assert llm._with_schema_anchor(vision, None) is vision
+
+
+async def test_gemini_merge_extracts_json_when_a_schema_is_expected(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    noisy = 'Here you go:\n```json\n{"a": 1}\n```\nHope that helps.'
+
+    async def _merged(expect_json):
+        # @nonobvious(must-hold): a fresh chunk per call — the merge rewrites
+        # the response parts in place, so a reused chunk carries the last result.
+        models = _FakeStreamModels([_gemini_chunk([(noisy, False)])])
+        collected = await llm._consume_stream(models, "gemini-3.7-flash", [], {})
+        llm._expect_json = expect_json
+        return llm._merge_stream(*collected).text
+
+    assert await _merged(True) == '{"a": 1}'
+    assert await _merged(False) == noisy
+
+
+async def test_gemini_empty_generation_is_returned_not_re_issued(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use import ChatGoogle
+    from google.genai import types as genai_types
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    blocked = genai_types.GenerateContentResponse(
+        candidates=[{"finish_reason": "MAX_TOKENS"}]
+    )
+    models = _FakeStreamModels([blocked])
+    client = types.SimpleNamespace(aio=types.SimpleNamespace(models=models))
+    monkeypatch.setattr(ChatGoogle, "get_client", lambda self: client)
+
+    proxied = llm.get_client()
+    result = await proxied.aio.models.generate_content(
+        model="gemini-3.7-flash", contents=[], config={}
+    )
+    assert result is blocked
+    assert models.plain_calls == 0
 
 
 async def test_gemini_harvests_thought_summary_into_the_feed(monkeypatch):
@@ -515,6 +574,15 @@ def test_free_form_dict_params_cannot_survive_a_gemini_response_schema():
     item = schema["properties"]["item"]
     assert item["type"] == "object"
     assert not item.get("properties")
+
+
+def test_models_that_cannot_disable_reasoning_are_flagged():
+    import app.agent.runner as runner
+
+    for model in ("gemini-3.7-flash", "claude-fable-5", "claude-mythos-5"):
+        assert runner.model_reasoning(model).can_disable is False
+    for model in ("claude-sonnet-5", "gpt-5.6-terra"):
+        assert runner.model_reasoning(model).can_disable is True
 
 
 def test_cap_output_tokens_picks_the_name_each_client_declares(monkeypatch):

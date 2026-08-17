@@ -3,11 +3,10 @@
 Prompt caching is provider-managed and always on: browser-use marks the system prompt and the
 latest state message as ``cache=True`` for Anthropic (prefix caching) and the structured-output
 tool schema is cached unconditionally, while OpenAI and Gemini cache automatically server-side.
-Gemini reports implicit cache hits but never a cache-write count, so its write rates are zero. Tool
-schemas,
-tool_use/tool_result blocks, fetched page content, python-sandbox output, and screenshot vision
-tokens are all counted inside the API-returned token totals, so costing from real usage prices every
-tool and fetch at model rates with nothing extra to add.
+Gemini reports implicit cache hits but never a cache-write count, so its write rates are zero.
+Tool schemas, tool_use/tool_result blocks, fetched page content, python-sandbox output, and
+screenshot vision tokens are all counted inside the API-returned token totals, so costing from real
+usage prices every tool and fetch at model rates with nothing extra to add.
 """
 
 from __future__ import annotations

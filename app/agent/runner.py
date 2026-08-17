@@ -852,6 +852,18 @@ class _ThinkingChatGoogle(ChatGoogle):
             self._last_thoughts = ""
         return super()._get_usage(response)
 
+    @staticmethod
+    def _with_schema_anchor(messages: Any, output_format: Any) -> Any:
+        # @nonobvious(forced-by): the library appends the output schema to the
+        # last message only when that message is plain text, and a vision step
+        # ends with an image part, so the schema would be dropped silently. A
+        # trailing text message gives it somewhere to land.
+        if output_format is None or not messages:
+            return messages
+        if isinstance(getattr(messages[-1], "content", None), str):
+            return messages
+        return list(messages) + [UserMessage(content="Reply with JSON only.")]
+
     def get_client(self) -> Any:
         client = super().get_client()
         inner = client.aio.models
@@ -918,29 +930,38 @@ class _ThinkingChatGoogle(ChatGoogle):
                         answer.append(text)
         return last, usage, answer, thoughts
 
-    @staticmethod
     def _merge_stream(
-        last: Any, usage: Any, answer: list[str], thoughts: list[str]
+        self, last: Any, usage: Any, answer: list[str], thoughts: list[str]
     ) -> Any:
         """Rebuild the streamed chunks into the one whole response the library
         expects, keeping the reasoning in its own part so it stays out of the text.
         """
         from google.genai import types as genai_types
 
-        if last is None or not getattr(last, "candidates", None):
-            raise ValueError("stream produced no candidates")
-        content = last.candidates[0].content
-        if content is None:
-            raise ValueError("stream produced no content")
-
-        parts = [genai_types.Part(text="".join(answer))]
-        if thoughts:
-            parts.append(genai_types.Part(text="".join(thoughts), thought=True))
-        content.parts = parts
+        if last is None:
+            raise ValueError("stream produced no chunks")
         # @nonobvious(forced-by): only the closing chunks carry usage totals, and
         # a response without them prices the whole call at zero.
         if usage is not None:
             last.usage_metadata = usage
+
+        candidates = getattr(last, "candidates", None)
+        content = candidates[0].content if candidates else None
+        if content is None:
+            # @nonobvious(must-hold): a blocked or exhausted generation is the
+            # provider's answer, not a merge fault — returning it lets the
+            # library's own truncation handling run instead of paying twice.
+            return last
+
+        text = "".join(answer)
+        if getattr(self, "_expect_json", False):
+            # @nonobvious(forced-by): the library parses this text with a strict
+            # json.loads, so prose either side of the object would kill the step.
+            text = _first_json_object(text) or text
+        parts = [genai_types.Part(text=text)]
+        if thoughts:
+            parts.append(genai_types.Part(text="".join(thoughts), thought=True))
+        content.parts = parts
         return last
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
@@ -950,9 +971,11 @@ class _ThinkingChatGoogle(ChatGoogle):
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True)
 
+        self._expect_json = output_format is not None
+
         async def _call(msgs: Any) -> Any:
             return await super(_ThinkingChatGoogle, self).ainvoke(
-                msgs, output_format, **kwargs
+                self._with_schema_anchor(msgs, output_format), output_format, **kwargs
             )
 
         try:
@@ -1220,6 +1243,19 @@ def _strip_json_fence(text: str) -> str:
         if t.endswith("```"):
             t = t[:-3]
     return t.strip()
+
+
+def _first_json_object(text: str) -> str | None:
+    """The first balanced JSON object in *text*, or None if there is none."""
+    cleaned = _strip_json_fence(text)
+    start = cleaned.find("{")
+    if start < 0:
+        return None
+    try:
+        _, end = json.JSONDecoder().raw_decode(cleaned[start:])
+    except ValueError:
+        return None
+    return cleaned[start : start + end]
 
 
 async def _coerce_to_schema(output: Any, model: type, llm: Any) -> tuple[str, bool]:
@@ -1498,9 +1534,13 @@ async def run_agent_session(session_id: str) -> None:
 
     north_star_task: asyncio.Task | None = None
     try:
-        preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
+        can_disable = model_reasoning(requested_model).can_disable
+        preflight_effort = "none" if can_disable else "default"
         _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
-        _cap_output_tokens(preflight_llm, 300)
+        # @nonobvious(forced-by): reasoning tokens count against the output cap,
+        # so a model that cannot switch reasoning off spends the whole budget
+        # thinking and returns nothing at all under a tight cap.
+        _cap_output_tokens(preflight_llm, 300 if can_disable else 8192)
         north_star_task = asyncio.create_task(_derive_north_star(preflight_llm, task))
     except Exception:
         logger.debug("North Star pre-flight setup failed", exc_info=True)
