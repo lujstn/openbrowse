@@ -479,9 +479,9 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ):
                     parts.append(getattr(event, "delta", "") or "")
                     now = loop.time()
-                    if now - last_push > 0.4:
+                    text = " ".join("".join(parts).split())
+                    if now - last_push > 0.4 and len(text) >= 24:
                         last_push = now
-                        text = " ".join("".join(parts).split())
                         set_activity(sid, f"💭 {text[-140:]}", spin=True)
             return await stream.get_final_response()
 
@@ -756,9 +756,11 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 if chunk:
                     think_parts.append(chunk)
                     now = loop.time()
-                    if now - last_push > 0.4:
+                    text = " ".join("".join(think_parts).split())
+                    # @nonobvious(forced-by): the first delta is often a single
+                    # character, and a ticker reading "💭 I" looks broken.
+                    if now - last_push > 0.4 and len(text) >= 24:
                         last_push = now
-                        text = " ".join("".join(think_parts).split())
                         set_activity(sid, f"💭 {text[-140:]}", spin=True)
             if observer is None:
                 continue
