@@ -2769,8 +2769,15 @@ def test_system_metrics_pressure_levels(monkeypatch) -> None:
     level, s = sm.pressure()
     assert level == "saturated"
     assert s["loadPerCore"] == 1.375
+
+    monkeypatch.setattr(sm, "_baseline_level", "saturated")
     note = sm.pressure_note()
     assert "saturated" in note and "environmental" in note
+
+    monkeypatch.setattr(sm, "_baseline_level", "ok")
+    note = sm.pressure_note()
+    assert "own browser work" in note
+    assert "environmental" not in note
 
     monkeypatch.setattr(sm.os, "getloadavg", lambda: (4.2, 4.0, 4.0))
     assert sm.pressure()[0] == "elevated"
@@ -2808,7 +2815,7 @@ async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
     await tools_mod._read_pages_impl(session, urls, None, {}, progress=progress)
     stamped = [m for m in progress_msgs if "host CPU saturated" in m]
     assert stamped, progress_msgs
-    assert "environmental" in stamped[0]
+    assert "own browser work" in stamped[0]
 
 
 async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
@@ -3060,3 +3067,63 @@ def test_draft_row_background_upgrades_visual_only_when_richer() -> None:
     row = _draft_row(store, page)
     assert row.get("category") == "Home Office"
     assert row.get("location") == "London"
+
+
+async def test_read_pages_targets_sole_embed_host_without_frame_filter(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+
+    seen_filters: list = []
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        seen_filters.append(url_contains)
+        return {
+            "url": url,
+            "text": "panel content " * 30,
+            "jsonld": None,
+            "links": [],
+            "frame_matched": True,
+        }
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+
+    async def one_host(session_):
+        return ["panel.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", one_host)
+    progress_msgs: list[str] = []
+
+    async def progress(msg):
+        progress_msgs.append(msg)
+
+    await tools_mod._read_pages_impl(
+        session, ["https://x.com/a"], None, {}, progress=progress
+    )
+    assert seen_filters == ["panel.example.com"]
+    assert any("single cross-origin panel host" in m for m in progress_msgs)
+
+
+async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    seen_filters: list = []
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        seen_filters.append(url_contains)
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+
+    async def two_hosts(session_):
+        return ["a.example.com", "b.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", two_hosts)
+    await tools_mod._read_pages_impl(session, ["https://x.com/a"], None, {})
+    assert seen_filters == [None]

@@ -1345,7 +1345,7 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
-        pressure_level, pressure_sample = system_metrics.pressure()
+        pressure_level, pressure_sample = system_metrics.mark_baseline()
         if pressure_level != "ok":
             await crud.create_message(
                 session_id=session_id,

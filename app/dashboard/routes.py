@@ -182,7 +182,7 @@ def message_display(m: dict) -> dict:
     }
     label = action or category
     if action == "done":
-        category, label, cleaned = "judge", "reviewer", "Submitted for review"
+        category, label, cleaned = "judge", "review", "Submitted for review"
     return {
         "category": category,
         "label": label,

@@ -78,14 +78,35 @@ def pressure() -> tuple[str, dict[str, Any]]:
     return "ok", s
 
 
+_baseline_level = "ok"
+
+
+def mark_baseline() -> tuple[str, dict[str, Any]]:
+    """Record the host's pressure at session launch. The mid-run stamps use it
+    to tell outside contention apart from the run's own browser work — a wave
+    of rendering tabs legitimately saturates a small host by itself, and
+    calling that "environmental" would mislead every audit.
+    """
+    global _baseline_level
+    level, s = pressure()
+    _baseline_level = level
+    return level, s
+
+
 def pressure_note() -> str:
-    """One-line environmental stamp for telemetry, empty when the host is fine."""
+    """One-line pressure stamp for telemetry, empty when the host is fine."""
     level, s = pressure()
     if level == "ok":
         return ""
+    if _baseline_level == "ok":
+        return (
+            f" [host CPU {level} (largely this run's own browser work): load "
+            f"{s['load1']} on {s['cores']} cores — timing-sensitive embed reads "
+            "may need the retry passes]"
+        )
     return (
-        f" [host CPU {level}: load {s['load1']} on {s['cores']} cores — "
-        "timing-sensitive embed reads are degraded; treat failures as "
+        f" [host CPU {level} since launch: load {s['load1']} on {s['cores']} "
+        "cores — timing-sensitive embed reads are degraded; treat failures as "
         "environmental, not site changes]"
     )
 

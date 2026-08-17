@@ -762,6 +762,21 @@ async def _read_pages_impl(
     marked visited and dead ones recorded as read-failures.
     """
     concurrency = max(1, min(int(concurrency or 6), 8))
+    if not url_contains:
+        # @nonobvious(means): a sole cross-origin embed host on the launching
+        # page names where the linked pages render their content too; targeting
+        # it in the first pass reads panels directly instead of collecting every
+        # page's shell and re-reading. Multiple hosts stay untargeted — picking
+        # wrong would poll an unrelated frame on every page.
+        probed = await _dom_iframe_hosts(browser_session)
+        if len(probed) == 1:
+            url_contains = probed[0]
+            await _emit_progress(
+                progress,
+                "read_pages: no frame filter was carried, but the launching page "
+                f"embeds a single cross-origin panel host ({url_contains}) — "
+                "reading inside that panel from the start",
+            )
     baseline = {t["targetId"] for t in await _iframe_targets(browser_session)}
     home_target = getattr(browser_session, "agent_focus_target_id", None)
     results: dict[str, dict[str, Any]] = {}
