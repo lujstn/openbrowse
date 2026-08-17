@@ -407,32 +407,35 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True)
-        summary = ""
+        summary_box = {"text": ""}
+
+        async def _once(msgs: Any) -> Any:
+            params = self._build_request(msgs, output_format)
+            response = await self._create_with_summary_fallback(params)
+            self._raise_if_truncated(response)
+            text = self._output_text(response)
+            usage = self._usage_from_responses(response)
+            summary_box["text"] = self._reasoning_summary(response)
+            stop_reason = getattr(response, "status", None)
+            if output_format is None:
+                return ChatInvokeCompletion(
+                    completion=text or "", usage=usage, stop_reason=stop_reason
+                )
+            if not text:
+                raise ModelProviderError(
+                    message="Failed to parse structured output from model response",
+                    status_code=500,
+                    model=self.name,
+                )
+            return ChatInvokeCompletion(
+                completion=self._parse_structured(text, output_format),
+                usage=usage,
+                stop_reason=stop_reason,
+            )
+
         try:
-            params = self._build_request(messages, output_format)
             try:
-                response = await self._create_with_summary_fallback(params)
-                self._raise_if_truncated(response)
-                text = self._output_text(response)
-                usage = self._usage_from_responses(response)
-                summary = self._reasoning_summary(response)
-                stop_reason = getattr(response, "status", None)
-                if output_format is None:
-                    result: Any = ChatInvokeCompletion(
-                        completion=text or "", usage=usage, stop_reason=stop_reason
-                    )
-                else:
-                    if not text:
-                        raise ModelProviderError(
-                            message="Failed to parse structured output from model response",
-                            status_code=500,
-                            model=self.name,
-                        )
-                    result = ChatInvokeCompletion(
-                        completion=self._parse_structured(text, output_format),
-                        usage=usage,
-                        stop_reason=stop_reason,
-                    )
+                result = await _invoke_with_action_repair(_once, messages, output_format)
             except (ModelProviderError, ModelOutputTruncatedError):
                 raise
             except RateLimitError as e:
@@ -446,6 +449,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         finally:
             if sid:
                 set_activity(sid, "Running actions")
+        summary = summary_box["text"]
         if summary:
             self._last_model_reasoning = summary
             if sid:
@@ -468,6 +472,44 @@ _MISSING_ACTION_FINAL = (
     'the "action" list — e.g. {"thinking": "...", "action": [{"<action_name>": '
     "{<parameters>}}]}. Nothing you write executes without it."
 )
+
+
+async def _invoke_with_action_repair(
+    invoke: Any, messages: Any, output_format: Any
+) -> Any:
+    """Run ``invoke(messages)`` and, when the reply omits the executable action
+    field, retry up to twice with corrective user messages appended. A third
+    failure raises a short instructive error instead of the raw pydantic dump.
+    Shared by the Anthropic and OpenAI clients — the failure mode is identical.
+    """
+    try:
+        return await invoke(list(messages))
+    except Exception as e:
+        if output_format is None or not is_missing_action_error(e):
+            raise
+        logger.info("Retrying LLM call after missing/malformed action")
+        correction = UserMessage(content=_MISSING_ACTION_CORRECTION)
+        try:
+            return await invoke(list(messages) + [correction])
+        except Exception as e2:
+            if not is_missing_action_error(e2):
+                raise
+            logger.info("Second corrective retry after missing action")
+            insist = UserMessage(content=_MISSING_ACTION_FINAL)
+            try:
+                return await invoke(list(messages) + [correction, insist])
+            except Exception as e3:
+                if is_missing_action_error(e3):
+                    # @nonobvious(forced-by): the raw pydantic dump would
+                    # be replayed into every later step's context; a short
+                    # instructive error keeps the failure cheap.
+                    raise ValueError(
+                        "Your reply omitted the executable 'action' field "
+                        "three times, so this step was abandoned. Nothing "
+                        "runs without \"action\": [{\"<action_name>\": "
+                        "{...params}}] — include it in your next reply."
+                    ) from e3
+                raise
 
 
 class _RepairingChatAnthropic(ChatAnthropic):
@@ -536,53 +578,26 @@ class _RepairingChatAnthropic(ChatAnthropic):
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True)
+        async def _call(msgs: Any) -> Any:
+            return await super(_RepairingChatAnthropic, self).ainvoke(
+                msgs, output_format, **kwargs
+            )
+
         try:
             try:
-                return await super().ainvoke(messages, output_format, **kwargs)
-            except Exception as e:
-                if output_format is not None and is_missing_action_error(e):
-                    logger.info("Retrying LLM call after missing/malformed action")
-                    correction = UserMessage(content=_MISSING_ACTION_CORRECTION)
-                    try:
-                        return await super().ainvoke(
-                            list(messages) + [correction], output_format, **kwargs
-                        )
-                    except Exception as e2:
-                        if not is_missing_action_error(e2):
-                            raise
-                        logger.info("Second corrective retry after missing action")
-                        insist = UserMessage(content=_MISSING_ACTION_FINAL)
-                        try:
-                            return await super().ainvoke(
-                                list(messages) + [correction, insist],
-                                output_format,
-                                **kwargs,
-                            )
-                        except Exception as e3:
-                            if is_missing_action_error(e3):
-                                # @nonobvious(forced-by): the raw pydantic dump would
-                                # be replayed into every later step's context; a short
-                                # instructive error keeps the failure cheap.
-                                raise ValueError(
-                                    "Your reply omitted the executable 'action' field "
-                                    "three times, so this step was abandoned. Nothing "
-                                    "runs without \"action\": [{\"<action_name>\": "
-                                    "{...params}}] — include it in your next reply."
-                                ) from e3
-                            raise
-                if isinstance(e, ModelOutputTruncatedError):
-                    logger.info("Output truncated; retrying with streaming + max_tokens=64000")
-                    prev_mt, prev_to = self.max_tokens, self.timeout
-                    self._force_stream = True
-                    self.max_tokens = 64000
-                    self.timeout = 600
-                    try:
-                        return await super().ainvoke(messages, output_format, **kwargs)
-                    finally:
-                        self.max_tokens = prev_mt
-                        self.timeout = prev_to
-                        self._force_stream = False
-                raise
+                return await _invoke_with_action_repair(_call, messages, output_format)
+            except ModelOutputTruncatedError:
+                logger.info("Output truncated; retrying with streaming + max_tokens=64000")
+                prev_mt, prev_to = self.max_tokens, self.timeout
+                self._force_stream = True
+                self.max_tokens = 64000
+                self.timeout = 600
+                try:
+                    return await _call(messages)
+                finally:
+                    self.max_tokens = prev_mt
+                    self.timeout = prev_to
+                    self._force_stream = False
         finally:
             if sid:
                 set_activity(sid, "Running actions")

@@ -667,3 +667,59 @@ async def test_responses_tolerant_parse_still_raises_on_junk(monkeypatch):
     _patch_client(monkeypatch, llm, _fake_response(output_text="no json here at all"))
     with pytest.raises(Exception):
         await llm.ainvoke(_messages(), output_format=Out)
+
+
+def _missing_action_response(n_failures: int):
+    good = '{"action": "click"}'
+    bad = '{"thinking": "x"}'
+    state = {"calls": 0}
+
+    def next_text():
+        state["calls"] += 1
+        return bad if state["calls"] <= n_failures else good
+
+    return state, next_text
+
+
+async def test_responses_action_repair_retries_then_succeeds(monkeypatch):
+    from pydantic import BaseModel, Field
+
+    class Out(BaseModel):
+        action: str = Field(...)
+
+    llm = _responses_llm(monkeypatch, "low")
+    state, next_text = _missing_action_response(2)
+    sent_messages = []
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            sent_messages.append(kwargs["input"])
+            return _fake_response(output_text=next_text())
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+    result = await llm.ainvoke(_messages(), output_format=Out)
+    assert result.completion.action == "click"
+    assert state["calls"] == 3
+    assert len(sent_messages[1]) == 3 and len(sent_messages[2]) == 4
+
+
+async def test_responses_action_repair_three_failures_short_error(monkeypatch):
+    from pydantic import BaseModel, Field
+
+    class Out(BaseModel):
+        action: str = Field(...)
+
+    llm = _responses_llm(monkeypatch, "low")
+    _, next_text = _missing_action_response(99)
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            return _fake_response(output_text=next_text())
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+    with pytest.raises(ValueError) as exc:
+        await llm.ainvoke(_messages(), output_format=Out)
+    text = str(exc.value)
+    assert "abandoned" in text and len(text) < 400
