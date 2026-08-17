@@ -455,6 +455,16 @@ _READ_PAGES_MIN_WAVE_S = 30.0
 # what lets pacing add no budget accounting of its own.
 _STAGGER_PER_TAB_MAX_S = 0.8
 _STAGGER_TOTAL_MAX_S = 8.0
+# @nonobvious(means): measured live — heavy pages need ~15s to render an embed.
+_PAGE_READY_TIMEOUT_S = 25.0
+_FRAME_MATCH_GRACE_S = 6.0
+# @nonobvious(must-hold): bounds the DOM-evidence wait — an iframe that is in
+# the DOM but whose panel never attaches (a consent frame, a dead embed) must
+# not hold every page to the full deadline.
+_PANEL_EVIDENCE_EXTRA_S = 8.0
+_MIN_PAGE_TEXT_CHARS = 200
+_JUDGE_ANSWER_CAP = 8000
+_JSONLD_GRACE_S = 3.0
 
 
 def _wave_stagger_gap_s(wave_len: int) -> float:
@@ -472,16 +482,6 @@ def _wave_stagger_gap_s(wave_len: int) -> float:
 
 async def _stagger_pause(seconds: float) -> None:
     await asyncio.sleep(seconds)
-# @nonobvious(means): measured live — heavy pages need ~15s to render an embed.
-_PAGE_READY_TIMEOUT_S = 25.0
-_FRAME_MATCH_GRACE_S = 6.0
-# @nonobvious(must-hold): bounds the DOM-evidence wait — an iframe that is in
-# the DOM but whose panel never attaches (a consent frame, a dead embed) must
-# not hold every page to the full deadline.
-_PANEL_EVIDENCE_EXTRA_S = 8.0
-_MIN_PAGE_TEXT_CHARS = 200
-_JUDGE_ANSWER_CAP = 8000
-_JSONLD_GRACE_S = 3.0
 
 
 async def _read_one_page(
