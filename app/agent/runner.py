@@ -160,6 +160,20 @@ class BudgetExceededError(Exception):
 
 _MAX_REVIEW_ROUNDS = 3
 _MAX_REVIEW_JUSTIFICATIONS = 2
+_REVIEW_REASON_CAP = 4000
+
+
+def _inject_followup_task(agent: Any, message: str) -> None:
+    """Queue a follow-up task on an agent between runs, preferring the public
+    add_new_task (which also resets follow-up/stopped/paused state and the event
+    bus) with the private message-manager as the older-version fallback. Not for
+    mid-run injection: a live run must keep its control-flow state, so mid-run
+    nudges call the message manager directly instead.
+    """
+    try:
+        agent.add_new_task(message)
+    except AttributeError:
+        agent._message_manager.add_new_task(message)
 
 
 def _last_judgement(history: Any) -> Any:
@@ -215,7 +229,7 @@ async def _run_with_review(
             break
         reason = " ".join(
             (judgement.failure_reason or judgement.reasoning or "").split()
-        )[:4000]
+        )[:_REVIEW_REASON_CAP]
         if not reason:
             break
         await crud.create_message(
@@ -234,13 +248,10 @@ async def _run_with_review(
         steps_before = len(getattr(history, "history", []) or [])
         replies_left = _MAX_REVIEW_JUSTIFICATIONS - justifications
         message = _review_message(reason, replies_left)
-        try:
-            agent.add_new_task(message)
-        except AttributeError:
-            agent._message_manager.add_new_task(message)
+        _inject_followup_task(agent, message)
         history = await run_agent()
         # @nonobvious(must-hold): a round that added no steps means the agent
-        # could not act at all (dead browser, wedged loop) — re-judging the
+        # could not act at all (dead browser, wedged loop); re-judging the
         # unchanged trajectory can only repeat the same verdict, so burning
         # the remaining rounds on it is pure cost.
         if len(getattr(history, "history", []) or []) <= steps_before:
@@ -593,7 +604,9 @@ _MISSING_ACTION_CORRECTION = (
     'NOTHING — only the "action" list runs. Respond again with the same content plus '
     '"action": [{"<action_name>": {<parameters>}}]. Do not put action parameters at '
     'the top level: to run code, that is '
-    '"action": [{"run_code_file": {"name": "script.py", "code": "..."}}].'
+    '"action": [{"run_code_file": {"name": "script.py", "code": "..."}}]. If you '
+    "sent several separate tool calls, that is the error: send exactly ONE tool "
+    'call whose "action" array lists every action in order.'
 )
 _MISSING_ACTION_FINAL = (
     'Rejected again: still no valid "action" field. Reply now with minimal prose and '
@@ -640,15 +653,26 @@ async def _invoke_with_action_repair(
 
 
 class _RepairingChatAnthropic(ChatAnthropic):
-    """ChatAnthropic hardened three ways: (1) recover the action list Claude
+    """ChatAnthropic hardened four ways: (1) recover the action list Claude
     sometimes serialises into the AgentOutput ``thinking`` field so the forced
     tool call validates without dropping ``thinking``; (2) retry once with a
     correction if a leak can't be salvaged; (3) recover from output truncation by
     retrying once with streaming + a higher ``max_tokens`` (the non-streaming API
-    refuses >~16k, and browser-use's own retry re-runs at the same cap forever).
+    refuses >~16k, and browser-use's own retry re-runs at the same cap forever);
+    (4) forbid parallel tool calls under auto tool choice, and merge them back
+    into one structured call if the model still splits.
     """
 
     async def _create_message(self, **params: Any) -> Any:
+        tool_choice = params.get("tool_choice")
+        if isinstance(tool_choice, dict) and tool_choice.get("type") == "auto":
+            # @nonobvious(forced-by): extended thinking forces auto tool choice,
+            # under which Claude may split its reply into parallel tool_use
+            # blocks; only the first is validated downstream, so the rest would
+            # fail the step or silently drop actions.
+            params["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
+        tools = params.get("tools") or []
+        output_tool = tools[0].get("name") if tools else None
         if (
             getattr(self, "_force_stream", False)
             or getattr(self, "stream_observer", None) is not None
@@ -658,7 +682,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         else:
             response = await super()._create_message(**params)
         try:
-            repair_anthropic_message(response)
+            repair_anthropic_message(response, output_tool_name=output_tool)
         except Exception:
             logger.debug("action-leak repair pass failed", exc_info=True)
         return response
@@ -1259,7 +1283,7 @@ async def run_agent_session(session_id: str) -> None:
             cross_origin_iframes=True,
         )
         # @nonobvious(forced-by): agent.run() kills the browser at run end
-        # unless the profile says keep_alive — the review loop re-runs the
+        # unless the profile says keep_alive, because the review loop re-runs the
         # agent, and a reviewer round against a dead browser silently re-judges
         # the same trajectory. Chrome's real teardown is ours (stop_chrome).
         browser_session.browser_profile.keep_alive = True
@@ -1444,6 +1468,9 @@ async def run_agent_session(session_id: str) -> None:
 
             if north_star and step_count % 10 == 0:
                 try:
+                    # @nonobvious(deliberately-missing): not _inject_followup_task,
+                    # because the public add_new_task resets stopped/paused state and
+                    # the event bus, which must not happen mid-run.
                     agent_instance._message_manager.add_new_task(
                         f"GOAL: {north_star} Not done until this is met."
                     )
@@ -1707,7 +1734,7 @@ async def run_agent_session(session_id: str) -> None:
             own_word = "success" if is_successful else "failure"
             reason = " ".join(
                 (judgement.failure_reason or judgement.reasoning or "").split()
-            )[:4000]
+            )[:_REVIEW_REASON_CAP]
             await crud.create_message(
                 session_id=session_id,
                 role="ai",

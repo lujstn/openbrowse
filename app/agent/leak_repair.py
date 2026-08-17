@@ -190,7 +190,59 @@ def scrub_tag_bleed(tool_input: dict) -> bool:
     return changed
 
 
-def repair_anthropic_message(response: object) -> int:
+def merge_parallel_tool_calls(response: object, output_tool_name: str | None) -> int:
+    """Fold parallel ``tool_use`` blocks back into one structured output call.
+
+    Claude under auto tool choice (forced by extended thinking) sometimes splits
+    its reply into several tool_use blocks — either extra calls to the output
+    tool, or calls "invoking" individual actions by name with that action's bare
+    parameters as the input. The caller validates only the FIRST block, so the
+    split either fails validation or silently drops actions. This merges every
+    block's actions, in order, into the first block. Returns the number of
+    blocks absorbed (0 when there was nothing to merge).
+    """
+    content = getattr(response, "content", None) or []
+    blocks = [b for b in content if getattr(b, "type", None) == "tool_use"]
+    if len(blocks) < 2 and (
+        not blocks
+        or output_tool_name is None
+        or getattr(blocks[0], "name", None) == output_tool_name
+    ):
+        return 0
+    merged: list[dict] = []
+    host_fields: dict = {}
+    absorbed = 0
+    for block in blocks:
+        tool_input = getattr(block, "input", None)
+        name = getattr(block, "name", None)
+        if not isinstance(tool_input, dict):
+            return 0
+        actions = tool_input.get("action")
+        if isinstance(actions, list) and actions:
+            for key, value in tool_input.items():
+                if key != "action" and key not in host_fields:
+                    host_fields[key] = value
+            merged.extend(a for a in actions if isinstance(a, dict))
+            absorbed += 1
+        elif name and name != output_tool_name:
+            merged.append({name: tool_input})
+            absorbed += 1
+        else:
+            logger.warning(
+                "parallel tool_use merge dropped an output-tool block with no "
+                "action list (name=%r): %r",
+                name,
+                {k: (v[:200] if isinstance(v, str) else v) for k, v in tool_input.items()},
+            )
+    if not merged:
+        return 0
+    blocks[0].input = {**host_fields, "action": merged}
+    return absorbed
+
+
+def repair_anthropic_message(
+    response: object, output_tool_name: str | None = None
+) -> int:
     """Scrub card-field tag-bleed and hoist leaked actions out of every ``tool_use``
     block in an Anthropic message. Returns the number of blocks whose action was
     hoisted back into place.
@@ -210,11 +262,23 @@ def repair_anthropic_message(response: object) -> int:
             continue
         if hoist_leaked_action(tool_input):
             repaired += 1
-        else:
-            snippet = {
-                k: (v[:200] if isinstance(v, str) else v) for k, v in tool_input.items()
-            }
-            logger.warning("action-leak repair could not salvage tool input: %r", snippet)
+    merge_parallel_tool_calls(response, output_tool_name)
+    # @nonobvious(forced-by): only the first tool_use block is validated by the
+    # caller, so it alone decides whether the reply survives — trailing blocks
+    # are ignored either way and warning on them would be pure noise.
+    first = next(
+        (b for b in content if getattr(b, "type", None) == "tool_use"), None
+    )
+    tool_input = getattr(first, "input", None) if first else None
+    if isinstance(tool_input, dict) and not tool_input.get("action"):
+        snippet = {
+            k: (v[:200] if isinstance(v, str) else v) for k, v in tool_input.items()
+        }
+        logger.warning(
+            "action-leak repair could not salvage tool input (tool_use name=%r): %r",
+            getattr(first, "name", None),
+            snippet,
+        )
     return repaired
 
 

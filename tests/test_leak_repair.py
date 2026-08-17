@@ -217,3 +217,100 @@ def test_html_tags_in_prose_are_not_treated_as_leaks():
     msg = _Msg([_Blk("tool_use", dict(before))])
     assert repair_anthropic_message(msg) == 0
     assert msg.content[0].input["thinking"] == prose
+
+
+class _NamedBlk:
+    def __init__(self, type, input=None, name=None):
+        self.type = type
+        self.input = input
+        self.name = name
+
+
+def test_merge_action_named_parallel_blocks():
+    """Today's observed shape: several tool_use blocks each invoking one action
+    by name with that action's bare parameters as the input."""
+    msg = _Msg(
+        [
+            _NamedBlk("thinking"),
+            _NamedBlk(
+                "tool_use",
+                {"key": "careersPageUrl", "value": "https://x/jobs"},
+                name="set_field",
+            ),
+            _NamedBlk(
+                "tool_use", {"frame_url_contains": "ashby"}, name="find_links"
+            ),
+        ]
+    )
+    repair_anthropic_message(msg, output_tool_name="AgentOutput")
+    first = msg.content[1]
+    assert first.input["action"] == [
+        {"set_field": {"key": "careersPageUrl", "value": "https://x/jobs"}},
+        {"find_links": {"frame_url_contains": "ashby"}},
+    ]
+
+
+def test_merge_valid_output_block_plus_stragglers():
+    """A valid AgentOutput first block must absorb trailing parallel action
+    calls instead of silently dropping them."""
+    msg = _Msg(
+        [
+            _NamedBlk(
+                "tool_use",
+                {"thinking": "go", "action": [{"navigate": {"url": "https://x"}}]},
+                name="AgentOutput",
+            ),
+            _NamedBlk("tool_use", {"name": "rows_draft.json"}, name="add_items_from_file"),
+        ]
+    )
+    repair_anthropic_message(msg, output_tool_name="AgentOutput")
+    first = msg.content[0]
+    assert first.input["thinking"] == "go"
+    assert first.input["action"] == [
+        {"navigate": {"url": "https://x"}},
+        {"add_items_from_file": {"name": "rows_draft.json"}},
+    ]
+
+
+def test_single_action_named_block_wrapped():
+    msg = _Msg(
+        [_NamedBlk("tool_use", {"name": "rows_draft.json"}, name="add_items_from_file")]
+    )
+    repair_anthropic_message(msg, output_tool_name="AgentOutput")
+    assert msg.content[0].input["action"] == [
+        {"add_items_from_file": {"name": "rows_draft.json"}}
+    ]
+
+
+def test_bare_output_named_blocks_stay_unsalvageable():
+    """Blocks named as the output tool with bare params carry no recoverable
+    action name — the reply must still fail validation, not guess."""
+    msg = _Msg(
+        [
+            _NamedBlk("tool_use", {"key": "a", "value": "b"}, name="AgentOutput"),
+            _NamedBlk("tool_use", {"file_name": "rows.json"}, name="AgentOutput"),
+        ]
+    )
+    repair_anthropic_message(msg, output_tool_name="AgentOutput")
+    assert "action" not in msg.content[0].input
+
+
+def test_single_valid_output_block_untouched():
+    msg = _Msg(
+        [
+            _NamedBlk(
+                "tool_use",
+                {"thinking": "ok", "action": [{"done": {"success": True}}]},
+                name="AgentOutput",
+            )
+        ]
+    )
+    repair_anthropic_message(msg, output_tool_name="AgentOutput")
+    assert msg.content[0].input["action"] == [{"done": {"success": True}}]
+
+
+def test_merge_conservative_without_tool_name():
+    """With no output tool name known, a lone odd block is left alone."""
+    msg = _Msg([_NamedBlk("tool_use", {"name": "x"}, name="add_items_from_file")])
+    repair_anthropic_message(msg)
+    assert "action" not in msg.content[0].input
