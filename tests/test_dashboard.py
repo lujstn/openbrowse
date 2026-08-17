@@ -691,11 +691,15 @@ def test_a_scripted_source_url_never_becomes_a_link():
                 "category": "read",
                 "action": "read_pages",
                 "sources": [
-                    {"url": "javascript:alert(document.cookie)", "title": "Trap"}
+                    {"url": "javascript:alert(document.cookie)", "title": "Trap"},
+                    {"url": "https://bbc.co.uk/news/one", "title": "Real"},
                 ],
             }),
         }],
         format_relative=_format_relative_time,
     )
-    assert "href=" not in html
-    assert "javascript:alert" not in html.replace("&#34;", '"').split("ob-cite-title")[0]
+    assert 'href="javascript' not in html
+    assert 'href="https://bbc.co.uk/news/one"' in html
+    assert html.count("href=") == 1
+    assert 'class="msg-cards" inert' in html
+    assert 'aria-expanded="false"' in html
