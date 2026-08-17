@@ -28,12 +28,17 @@ from app.agent import cost
 from app import system_metrics
 from app.agent.code_stream import CodeStreamObserver
 from app.agent.activity import clear_activity, set_activity
-from app.agent.leak_repair import is_missing_action_error, repair_anthropic_message
+from app.agent.leak_repair import (
+    is_missing_action_error,
+    mistyped_action_params,
+    repair_anthropic_message,
+)
 from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
 from app.agent.tools import (
     TabManager,
     _eval_js,
+    action_param_kinds,
     register_capsolver_tool,
     register_clipboard_tools,
     register_code_tools,
@@ -41,6 +46,7 @@ from app.agent.tools import (
     register_fetch_tool,
     register_output_guard_overrides,
     register_output_store_tools,
+    register_search_page_flow,
     register_tab_tools,
 )
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
@@ -615,41 +621,64 @@ _MISSING_ACTION_FINAL = (
 )
 
 
+def _mistyped_correction(detail: str) -> str:
+    return (
+        "Your reply was rejected because these action ARGUMENTS had the wrong "
+        f"type: {detail}. The action itself was present — resend the same reply "
+        "with each argument as its real JSON type: a list must be a JSON array "
+        "(not that array quoted as a string), an object a JSON object, a number "
+        "a bare number."
+    )
+
+
 async def _invoke_with_action_repair(
     invoke: Any, messages: Any, output_format: Any
 ) -> Any:
     """Run ``invoke(messages)`` and, when the reply omits the executable action
-    field, retry up to twice with corrective user messages appended. A third
-    failure raises a short instructive error instead of the raw pydantic dump.
-    Shared by the Anthropic and OpenAI clients — the failure mode is identical.
+    field or types an action argument wrongly, retry up to twice with a
+    corrective user message naming the actual defect. A third failure raises a
+    short instructive error instead of the raw pydantic dump. Shared by the
+    Anthropic and OpenAI clients — the failure modes are identical.
     """
-    try:
-        return await invoke(list(messages))
-    except Exception as e:
-        if output_format is None or not is_missing_action_error(e):
-            raise
-        logger.info("Retrying LLM call after missing/malformed action")
-        correction = UserMessage(content=_MISSING_ACTION_CORRECTION)
+    extra: list[Any] = []
+    last_detail = ""
+    for attempt in range(3):
         try:
-            return await invoke(list(messages) + [correction])
-        except Exception as e2:
-            if not is_missing_action_error(e2):
+            return await invoke(list(messages) + extra)
+        except Exception as e:
+            if output_format is None:
                 raise
-            logger.info("Second corrective retry after missing action")
-            insist = UserMessage(content=_MISSING_ACTION_FINAL)
-            try:
-                return await invoke(list(messages) + [correction, insist])
-            except Exception as e3:
-                if is_missing_action_error(e3):
-                    # @nonobvious(forced-by): the raw pydantic dump would replay
-                    # into every later step's context; keep the failure cheap.
+            detail = mistyped_action_params(e)
+            if detail:
+                last_detail = detail
+                correction = _mistyped_correction(detail)
+            elif is_missing_action_error(e):
+                correction = (
+                    _MISSING_ACTION_CORRECTION if attempt == 0 else _MISSING_ACTION_FINAL
+                )
+            else:
+                raise
+            if attempt == 2:
+                # @nonobvious(forced-by): the raw pydantic dump would replay
+                # into every later step's context; keep the failure cheap.
+                if last_detail:
                     raise ValueError(
-                        "Your reply omitted the executable 'action' field "
-                        "three times, so this step was abandoned. Nothing "
-                        "runs without \"action\": [{\"<action_name>\": "
-                        "{...params}}] — include it in your next reply."
-                    ) from e3
-                raise
+                        "This step was abandoned after three replies whose "
+                        f"action arguments were mis-typed: {last_detail}. Send "
+                        "each argument as its real JSON type."
+                    ) from e
+                raise ValueError(
+                    "Your reply omitted the executable 'action' field "
+                    "three times, so this step was abandoned. Nothing "
+                    "runs without \"action\": [{\"<action_name>\": "
+                    "{...params}}] — include it in your next reply."
+                ) from e
+            logger.info(
+                "Retrying LLM call after %s (attempt %d)",
+                "mis-typed action arguments" if detail else "missing/malformed action",
+                attempt + 1,
+            )
+            extra.append(UserMessage(content=correction))
 
 
 class _RepairingChatAnthropic(ChatAnthropic):
@@ -682,7 +711,12 @@ class _RepairingChatAnthropic(ChatAnthropic):
         else:
             response = await super()._create_message(**params)
         try:
-            repair_anthropic_message(response, output_tool_name=output_tool)
+            repair_anthropic_message(
+                response,
+                output_tool_name=output_tool,
+                action_names=getattr(self, "_action_names", None),
+                param_kinds=getattr(self, "_action_param_kinds", None),
+            )
         except Exception:
             logger.debug("action-leak repair pass failed", exc_info=True)
         return response
@@ -1355,6 +1389,12 @@ async def run_agent_session(session_id: str) -> None:
             register_completeness_gate(tools, store, _on_incomplete_done, clipboard)
 
         register_output_guard_overrides(tools)
+        register_search_page_flow(tools, clipboard)
+        try:
+            llm._action_param_kinds = action_param_kinds(tools)
+            llm._action_names = set(tools.registry.registry.actions)
+        except Exception:
+            logger.debug("action param kind map build failed", exc_info=True)
 
         north_star = ""
         if north_star_task is not None:
@@ -1500,11 +1540,13 @@ async def run_agent_session(session_id: str) -> None:
                     elif mo.action:
                         summary, is_code = _action_detail(mo.action)
 
+            full_error = ""
             if step.result:
                 for result in step.result:
                     if result.error:
                         msg_type = "browser_action_error"
                         summary = f"Error: {_friendly_error(result.error)}"
+                        full_error = str(result.error)
                         is_code = False
                     elif result.extracted_content:
                         msg_type = "result"
@@ -1538,6 +1580,8 @@ async def run_agent_session(session_id: str) -> None:
                 "action": action_name,
                 "code": is_code,
             }
+            if full_error and len(full_error) > len(summary):
+                row_data["error_full"] = full_error[:6000]
             if action_name == "done" and review_state["round"]:
                 changed = bool(
                     store is not None

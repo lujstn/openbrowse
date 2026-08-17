@@ -162,3 +162,27 @@ def test_message_display_reasoning_event_row():
     md = message_display(row)
     assert md["category"] == "reasoning"
     assert md["reasoning"] == "**Full** text"
+
+
+def test_message_display_error_full_card():
+    import json as _json
+
+    from app.dashboard.routes import message_display
+
+    row = {
+        "type": "browser_action_error",
+        "summary": "Error: '[\"companyName\", ...]' is not a schema field",
+        "data": _json.dumps(
+            {
+                "step": 18,
+                "category": "schema",
+                "action": "mark_absent",
+                "error_full": "'[\"companyName\", \"companyUrl\"]' is not a schema field. Fields: title, description",
+                "thinking": "settling absent fields",
+            }
+        ),
+    }
+    md = message_display(row)
+    assert md["category"] == "error"
+    assert "Fields: title, description" in md["error_full"]
+    assert md["thinking"] == "settling absent fields"

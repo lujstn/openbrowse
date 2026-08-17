@@ -147,7 +147,18 @@ def message_display(m: dict) -> dict:
     if t == "user_message":
         return {"category": "user", "label": "user", "summary": summary, "code": False}
     if t == "browser_action_error":
-        return {"category": "error", "label": "error", "summary": summary, "code": False}
+        data = _safe_fromjson(m.get("data") or "")
+        out = {
+            "category": "error",
+            "label": "error",
+            "summary": summary,
+            "code": False,
+            "error_full": data.get("error_full") or "",
+        }
+        for k in ("see", "plan", "next", "thinking"):
+            if data.get(k):
+                out[k] = data[k]
+        return out
     if t == "planning":
         return {"category": "planning", "label": "planning", "summary": summary, "code": False}
     if t == "completion":

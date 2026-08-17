@@ -83,6 +83,18 @@ def _coerce_scalar(value: Any, annotation: Any) -> Any:
     if not isinstance(value, str):
         return value
     value = value.strip()
+    peeled = _peel_optional(annotation)
+    peeled_origin = get_origin(peeled)
+    if peeled_origin in (list, dict):
+        open_ch, close_ch = ("[", "]") if peeled_origin is list else ("{", "}")
+        if value.startswith(open_ch) and value.endswith(close_ch):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                if isinstance(parsed, list if peeled_origin is list else dict):
+                    return parsed
     choices = _literal_choices(annotation)
     if choices and value not in choices:
         folded = value.lower()

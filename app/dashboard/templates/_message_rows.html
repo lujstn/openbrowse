@@ -2,7 +2,7 @@
 {% for m in messages %}
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}
-{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning %}
+{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning or md.error_full %}
 <div class="msg-row{% if has_cards %} has-cards{% endif %}" data-type="{{ m.type }}">
   <span class="msg-left">
     <span class="msg-time" data-ts="{{ m.created_at }}"></span>
@@ -19,6 +19,7 @@
     {% if md.next %}<div class="card card-next"><div class="card-head">➡️ My next step</div><div class="card-text">{{ md.next }}</div></div>{% endif %}
     {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.model_reasoning }}</div></div>{% endif %}
     {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
+    {% if md.error_full %}<div class="card card-error"><div class="card-head">⚠️ Full error</div><div class="card-text">{{ md.error_full }}</div></div>{% endif %}
   </div>
   {% endif %}
 </div>

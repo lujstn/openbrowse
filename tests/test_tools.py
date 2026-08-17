@@ -2771,11 +2771,11 @@ def test_system_metrics_pressure_levels(monkeypatch) -> None:
     assert level == "saturated"
     assert s["loadPerCore"] == 1.375
 
-    monkeypatch.setattr(sm, "_baseline_level", "saturated")
+    token = sm._baseline_level.set("saturated")
     note = sm.pressure_note()
     assert "saturated" in note and "environmental" in note
 
-    monkeypatch.setattr(sm, "_baseline_level", "ok")
+    sm._baseline_level.reset(token)
     note = sm.pressure_note()
     assert "own browser work" in note
     assert "environmental" not in note
@@ -2786,6 +2786,37 @@ def test_system_metrics_pressure_levels(monkeypatch) -> None:
     monkeypatch.setattr(sm.os, "getloadavg", lambda: (0.4, 0.5, 0.5))
     assert sm.pressure()[0] == "ok"
     assert sm.pressure_note() == ""
+
+
+async def test_pressure_baseline_is_task_scoped(monkeypatch) -> None:
+    import asyncio
+
+    import app.system_metrics as sm
+
+    monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
+    load = {"v": 0.2}
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (load["v"],) * 3)
+
+    quiet_marked = asyncio.Event()
+    busy_marked = asyncio.Event()
+    notes: dict[str, str] = {}
+
+    async def quiet_launch_session():
+        sm.mark_baseline()
+        quiet_marked.set()
+        await busy_marked.wait()
+        notes["quiet"] = sm.pressure_note()
+
+    async def busy_launch_session():
+        await quiet_marked.wait()
+        load["v"] = 6.0
+        sm.mark_baseline()
+        busy_marked.set()
+        notes["busy"] = sm.pressure_note()
+
+    await asyncio.gather(quiet_launch_session(), busy_launch_session())
+    assert "own browser work" in notes["quiet"]
+    assert "environmental" in notes["busy"]
 
 
 async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
@@ -2892,6 +2923,51 @@ async def test_gate_bounce_has_no_termination_vocabulary() -> None:
     assert "stop early" not in text
     assert "Do the work above first" in text
     assert text.index("Do the work above first") > text.index("mark_absent")
+
+
+def test_draft_row_rejected_visible_label_never_pollutes_weaker_field() -> None:
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+    from app.agent.tools import _draft_row, _labelled_pairs
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "locationType": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["ONSITE", "HYBRID", "REMOTE"]},
+                                {"type": "null"},
+                            ]
+                        },
+                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    store = OutputStore(json_schema_to_pydantic(schema))
+    text = "Location Type\nFully Flexible Setup\n" + "body filler " * 60
+    assert _labelled_pairs(text).get("Location Type") == "Fully Flexible Setup"
+    page = {
+        "url": "https://x.com/jobs?id=2",
+        "title": "Role Two",
+        "text": text,
+        "jsonld": None,
+    }
+    import json as _json
+
+    row = _draft_row(store, page)
+    assert "locationType" not in row
+    assert row.get("location") != "Fully Flexible Setup"
+    declared = {k: v for k, v in row.items() if k != "extra"}
+    assert "Fully Flexible" not in _json.dumps(declared)
 
 
 def test_draft_row_rejected_enum_value_never_pollutes_weaker_field() -> None:
@@ -3095,7 +3171,7 @@ async def test_read_pages_targets_sole_embed_host_without_frame_filter(
     async def one_host(session_):
         return ["panel.example.com"]
 
-    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", one_host)
+    monkeypatch.setattr(tools_mod, "_dom_panel_iframe_hosts", one_host)
     progress_msgs: list[str] = []
 
     async def progress(msg):
@@ -3106,6 +3182,32 @@ async def test_read_pages_targets_sole_embed_host_without_frame_filter(
     )
     assert seen_filters == ["panel.example.com"]
     assert any("single cross-origin panel host" in m for m in progress_msgs)
+
+
+async def test_read_pages_ignores_sole_widget_sized_frame(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    seen_filters: list = []
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        seen_filters.append(url_contains)
+        return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+
+    async def chat_widget_only(session_):
+        return ["widget.chat-vendor.com"]
+
+    async def no_panel_hosts(session_):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", chat_widget_only)
+    monkeypatch.setattr(tools_mod, "_dom_panel_iframe_hosts", no_panel_hosts)
+    await tools_mod._read_pages_impl(session, ["https://x.com/a"], None, {})
+    assert seen_filters == [None]
 
 
 async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> None:
@@ -3125,7 +3227,7 @@ async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> N
     async def two_hosts(session_):
         return ["a.example.com", "b.example.com"]
 
-    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", two_hosts)
+    monkeypatch.setattr(tools_mod, "_dom_panel_iframe_hosts", two_hosts)
     await tools_mod._read_pages_impl(session, ["https://x.com/a"], None, {})
     assert seen_filters == [None]
 
@@ -3205,3 +3307,157 @@ async def test_read_one_page_keeps_filter_when_needle_only_in_query(
     assert page.get("frame_matched") is True
     assert not page.get("frame_skipped_own_host")
     assert not page.get("error")
+
+
+def test_tolerate_json_list_shapes() -> None:
+    from app.agent.tools import _tolerate_json_list
+
+    assert _tolerate_json_list('["a", "b"]') == ["a", "b"]
+    assert _tolerate_json_list(["a"]) == ["a"]
+    assert _tolerate_json_list("plainField") == "plainField"
+    assert _tolerate_json_list("[not json") == "[not json"
+    assert _tolerate_json_list(None) is None
+
+
+async def test_mark_absent_accepts_json_string_list() -> None:
+    """Claude's observed wire drift: a list argument serialised as its JSON
+    text must settle every named field, not bounce as one unknown field."""
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard = {"_visited": {"https://x.com/a"}}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    register_output_store_tools(tools, store, clipboard)
+    entry = tools.registry.registry.actions["mark_absent"]
+    params = entry.param_model(
+        field='["description"]', reason="never published anywhere"
+    )
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert not result.error, result.error
+    assert "description" in store.absent_fields
+    assert '["description"]' not in store.absent_fields
+
+
+async def test_search_page_flow_wrapper() -> None:
+    from types import SimpleNamespace
+
+    from browser_use import ActionResult
+
+    from app.agent.tools import register_search_page_flow
+
+    calls = []
+
+    async def fake_search(params=None, **kwargs):
+        calls.append(params.css_scope)
+        return ActionResult(extracted_content="2 matches found")
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("search_page")
+    if entry is None:
+        import pytest
+
+        pytest.skip("browser-use build has no search_page action")
+    entry.function = fake_search
+    clipboard = {"_visited": {"https://x.com/a"}}
+    register_search_page_flow(tools, clipboard)
+
+    params = SimpleNamespace(pattern="salary|equity", css_scope="null")
+    first = await entry.function(params=params)
+    assert calls[-1] is None
+    assert "pages.json" in first.extracted_content
+
+    params2 = SimpleNamespace(pattern="salary|equity", css_scope=None)
+    second = await entry.function(params=params2)
+    assert "searched 2 times" in second.extracted_content
+    assert "run_code_file" in second.extracted_content
+
+
+async def test_read_output_fields_accepts_json_string() -> None:
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    register_output_store_tools(tools, store, {})
+    entry = tools.registry.registry.actions["read_output"]
+    params = entry.param_model(index=0, fields='["title"]')
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert not result.error, result.error
+    assert "A" in (result.extracted_content or "")
+
+
+def test_action_param_kinds_map() -> None:
+    from app.agent.tools import _param_kind, action_param_kinds, register_output_store_tools
+
+    tools = Tools()
+    register_output_store_tools(tools, _items_store(), {})
+    kinds = action_param_kinds(tools)
+    assert kinds["mark_absent"]["field"] == "list"
+    assert kinds["read_output"]["fields"] == "list"
+    assert _param_kind(list[str]) == "list"
+    assert _param_kind(dict[str, str] | None) == "dict"
+    assert _param_kind(int | None) == "nullable"
+    assert _param_kind(str | None) is None
+    assert _param_kind(str) is None
+
+
+async def test_remember_rejects_reserved_keys() -> None:
+    from app.agent.tools import register_clipboard_tools
+
+    tools = Tools()
+    clipboard = {"found_links": ["https://x.com/a"]}
+    register_clipboard_tools(tools, clipboard)
+    entry = tools.registry.registry.actions["remember"]
+    params = entry.param_model(key="found_links", value="oops")
+    result = await entry.function(params=params)
+    assert result.error and "internal session key" in result.error
+    assert clipboard["found_links"] == ["https://x.com/a"]
+
+
+def test_saved_links_survive_corruption() -> None:
+    from app.agent.tools import _saved_links_sans_offhost
+
+    kept, skipped = _saved_links_sans_offhost({"found_links": "https://x.com/a"})
+    assert kept == [] and skipped == 0
+    kept, _ = _saved_links_sans_offhost(
+        {"found_links": ["https://a", "https://b"], "found_links_offhost": "https"}
+    )
+    assert kept == ["https://a", "https://b"]
+
+
+def test_tolerate_json_dict_shapes() -> None:
+    from app.agent.tools import _tolerate_json_dict
+
+    assert _tolerate_json_dict('{"class": "posting"}') == {"class": "posting"}
+    assert _tolerate_json_dict("plain") == "plain"
+    assert _tolerate_json_dict({"a": 1}) == {"a": 1}
+
+
+async def test_update_items_accepts_stringified_and_single_forms() -> None:
+    from app.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    register_output_store_tools(tools, store, {})
+    entry = tools.registry.registry.actions["update_items"]
+    params = entry.param_model(
+        updates='[{"index": 0, "fields": {"description": "long enough text"}}]'
+    )
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert not result.error, result.error
+    params2 = entry.param_model(
+        updates={"index": 0, "fields": {"title": "A2"}}
+    )
+    result2 = await entry.function(params=params2, file_system=_FakeFileSystem())
+    assert not result2.error, result2.error
+
+
+def test_coerce_scalar_unwraps_json_strings_for_container_fields() -> None:
+    from app.agent.output_store import _coerce_scalar
+
+    assert _coerce_scalar('["a", "b"]', list[str]) == ["a", "b"]
+    assert _coerce_scalar('{"k": "v"}', dict[str, str]) == {"k": "v"}
+    assert _coerce_scalar('["a"]', str) == '["a"]'
+    assert _coerce_scalar("plain", list[str]) == "plain"

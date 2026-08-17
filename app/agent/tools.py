@@ -7,7 +7,8 @@ import logging
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -269,6 +270,33 @@ async def _dom_iframe_hosts(browser_session: BrowserSession) -> list[str]:
     return [h for h in val if isinstance(h, str) and h]
 
 
+_PANEL_IFRAME_HOSTS_JS = (
+    "(function(){var own=location.host.toLowerCase();var out=[];"
+    "var vw=window.innerWidth||1,vh=window.innerHeight||1;"
+    "document.querySelectorAll('iframe').forEach(function(f){"
+    "try{var r=f.getBoundingClientRect();"
+    "if(r.width<vw*0.45||r.height<vh*0.4)return;"
+    "var h=new URL(f.src,location.href).host.toLowerCase();"
+    "if(h&&h!==own&&out.indexOf(h)<0)out.push(h)}catch(e){}});return out;})()"
+)
+
+
+async def _dom_panel_iframe_hosts(browser_session: BrowserSession) -> list[str]:
+    """Cross-origin hosts of iframes large enough to be the page's content panel.
+    Ordinary pages carry exactly one small third-party frame (chat bubble,
+    CAPTCHA badge, consent widget) far more often than exactly one content
+    panel, so a sole-host signal is only trustworthy after this size gate.
+    """
+    try:
+        val = await _eval_js(browser_session, _PANEL_IFRAME_HOSTS_JS)
+    except Exception:
+        logger.debug("_dom_panel_iframe_hosts failed", exc_info=True)
+        return []
+    if not isinstance(val, list):
+        return []
+    return [h for h in val if isinstance(h, str) and h]
+
+
 def _url_discriminators(url: str) -> set[str]:
     """Long, distinctive tokens from a page URL (query values and path segments)
     that can re-identify the page's own embed among many — an embedded panel's URL
@@ -492,7 +520,7 @@ async def _read_one_page(
     deadline = loop.time() + _PAGE_READY_TIMEOUT_S
 
     # @nonobvious(forced-by): a page ON the panel provider's own host IS the
-    # panel content — no inner frame exists there, and waiting burns the whole
+    # panel content; no inner frame exists there, and waiting burns the whole
     # timeout. Host-scoped deliberately: the needle appearing elsewhere in the
     # URL (an id query param naming the provider) must NOT drop the filter, or
     # every wave read silently degrades to the embedding shell.
@@ -526,7 +554,7 @@ async def _read_one_page(
                         break
                 elif loop.time() >= frame_grace_end:
                     # @nonobvious(forced-by): the DOM shows a matching iframe
-                    # long before its CDP target attaches — when the panel is
+                    # long before its CDP target attaches; when the panel is
                     # demonstrably in the page, keep waiting for it instead of
                     # falling back to the shell (cold embeds under load attach
                     # after the grace; reading the shell wastes the whole pass).
@@ -763,14 +791,37 @@ def _scan_link_map(
     ), anchors_seen, iframe_present
 
 
+_RESERVED_CLIPBOARD_KEYS = frozenset(
+    {
+        "found_links",
+        "found_links_offhost",
+        "found_links_frame",
+        "found_links_meta",
+        "_visited",
+        "_read_items",
+        "_read_failed",
+        "_read_failed_frame",
+        "_evidence_corpus",
+        "_dom_embed_hosts",
+        "_settle_frameless",
+        "_page_search_counts",
+    }
+)
+
+
 def _saved_links_sans_offhost(clipboard: dict[str, Any] | None) -> tuple[list[str], int]:
     """The last find_links result minus links flagged as pointing off-site, plus
     how many were skipped — so a no-args bulk read covers the list page without
     dragging in navigation/branding pages.
     """
     cb = clipboard or {}
-    urls = list(cb.get("found_links") or [])
-    off = cb.get("found_links_offhost") or set()
+    stored = cb.get("found_links")
+    # @nonobvious(forced-by): a corrupted non-list value would iterate as
+    # characters and turn into single-letter "URLs" downstream.
+    urls = [u for u in stored if isinstance(u, str)] if isinstance(stored, list) else []
+    off = cb.get("found_links_offhost")
+    if not isinstance(off, (set, frozenset, list, tuple)):
+        off = set()
     kept = [u for u in urls if u not in off]
     return kept, len(urls) - len(kept)
 
@@ -793,12 +844,12 @@ async def _read_pages_impl(
     """
     concurrency = max(1, min(int(concurrency or 6), 8))
     if not url_contains:
-        # @nonobvious(means): a sole cross-origin embed host on the launching
-        # page names where the linked pages render their content too; targeting
-        # it in the first pass reads panels directly instead of collecting every
-        # page's shell and re-reading. Multiple hosts stay untargeted — picking
-        # wrong would poll an unrelated frame on every page.
-        probed = await _dom_iframe_hosts(browser_session)
+        # @nonobvious(means): a sole panel-sized cross-origin embed host on the
+        # launching page names where the linked pages render their content too.
+        # Multiple hosts stay untargeted, and so do small frames (chat bubbles,
+        # consent widgets), because latching wrong reads an unrelated frame on
+        # every page of the batch.
+        probed = await _dom_panel_iframe_hosts(browser_session)
         if len(probed) == 1:
             url_contains = probed[0]
             await _emit_progress(
@@ -1360,7 +1411,7 @@ def register_fetch_tool(tools: Tools) -> None:
         url: str,
         file_system: FileSystem,
         method: str = "GET",
-        headers: str | None = None,
+        headers: str | dict[str, str] | None = None,
         body: str | None = None,
     ) -> ActionResult:
         """Make an HTTP request.
@@ -1373,7 +1424,9 @@ def register_fetch_tool(tools: Tools) -> None:
             body: Request body as string (for POST/PUT/PATCH)
         """
         parsed_headers: dict[str, str] = {}
-        if headers:
+        if isinstance(headers, dict):
+            parsed_headers = headers
+        elif headers:
             try:
                 parsed_headers = json.loads(headers)
             except json.JSONDecodeError:
@@ -1810,7 +1863,10 @@ def register_code_tools(
     ) -> ActionResult:
         fname = _normalise_py_name(name)
         path = _scripts_dir(file_system) / fname
-        if code is not None:
+        # @nonobvious(forced-by): models send code="" meaning "no new code";
+        # writing it would destroy a previously saved script and then report
+        # success, indistinguishable from a script that saved nothing.
+        if code is not None and code.strip():
             try:
                 path.write_text(code)
             except Exception as e:
@@ -1848,6 +1904,11 @@ def register_code_tools(
             raise FileNotFoundError(f"No saved file named {name!r}")
 
         def _remember(key: str, value: Any) -> str:
+            if str(key) in _RESERVED_CLIPBOARD_KEYS:
+                raise ValueError(
+                    f"'{key}' is an internal session key and cannot be overwritten "
+                    "— pick another name."
+                )
             clipboard[str(key)] = value
             return str(key)
 
@@ -1992,6 +2053,11 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
         "and is shared with the code sandbox (remember/recall)."
     )
     async def remember(key: str, value: str) -> ActionResult:
+        if str(key) in _RESERVED_CLIPBOARD_KEYS:
+            return ActionResult(
+                error=f"'{key}' is an internal session key and cannot be "
+                "overwritten — pick another name."
+            )
         clipboard[str(key)] = value
         return ActionResult(
             extracted_content=f"Remembered {key}", long_term_memory=f"remember({key})"
@@ -2249,9 +2315,12 @@ def register_tab_tools(
     async def read_pages(
         browser_session: BrowserSession,
         file_system: FileSystem,
-        urls: list[str] | None = None,
+        urls: list[str] | str | None = None,
         frame_url_contains: str | None = None,
     ) -> ActionResult:
+        urls = _tolerate_json_list(urls)
+        if isinstance(urls, str):
+            urls = [urls]
         try:
             offhost_skipped = 0
             if not urls:
@@ -2398,7 +2467,10 @@ def register_tab_tools(
         "you just need each page's content — it covers every found link in one step; "
         "use tabs when you must interact with the pages."
     )
-    async def open_tabs(urls: list[str] | None = None) -> ActionResult:
+    async def open_tabs(urls: list[str] | str | None = None) -> ActionResult:
+        urls = _tolerate_json_list(urls)
+        if isinstance(urls, str):
+            urls = [urls]
         try:
             if not urls:
                 urls, _ = _saved_links_sans_offhost(clipboard)
@@ -2481,9 +2553,15 @@ def register_tab_tools(
         href_regex: str | None = None,
         frame_url_contains: str | None = None,
         container_index: int | None = None,
-        attr: dict[str, str] | None = None,
+        attr: dict[str, str] | str | None = None,
         visible_only: bool = False,
     ) -> ActionResult:
+        attr = _tolerate_json_dict(attr)
+        if isinstance(attr, str):
+            return ActionResult(
+                error="attr must be a JSON object of attribute/value pairs, "
+                'e.g. {"class": "posting"}.'
+            )
         if not (
             href_contains
             or href_regex
@@ -2566,7 +2644,7 @@ def register_tab_tools(
                     return False, "", links
                 if href_contains or href_regex:
                     frame_links, _, _, _ = await _scan(href=None, regex=None)
-                    # @nonobvious(must-hold): only a list-shaped salvage counts —
+                    # @nonobvious(must-hold): only a list-shaped salvage counts;
                     # swapping one branding anchor for another helps nobody.
                     if len(frame_links) > max(2, len(links)):
                         kept_hrefs = {link["href"] for link in links}
@@ -2884,6 +2962,100 @@ def register_output_guard_overrides(tools: Tools) -> None:
         _install(name, False)
 
 
+def _param_kind(annotation: Any) -> str | None:
+    """Classify an action param annotation for transport-level shape coercion:
+    'list'/'dict' when the type (or any union arm) wants that container, and
+    'nullable' for an optional non-string scalar, where ''/'null' can only mean
+    None. Plain and optional strings return None — a string param must never
+    have its content reinterpreted.
+    """
+    origin = get_origin(annotation)
+    if origin in (list, dict):
+        return "list" if origin is list else "dict"
+    if origin in (Union, UnionType):
+        args = get_args(annotation)
+        for arm in args:
+            arm_origin = get_origin(arm)
+            if arm_origin in (list, dict):
+                return "list" if arm_origin is list else "dict"
+        non_none = [a for a in args if a is not type(None)]
+        if (
+            type(None) in args
+            and non_none
+            and str not in non_none
+            and all(a in (int, float, bool) for a in non_none)
+        ):
+            return "nullable"
+    return None
+
+
+def action_param_kinds(tools: Tools) -> dict[str, dict[str, str]]:
+    """A ``{action: {param: kind}}`` map over the full registry (our actions and
+    browser-use built-ins alike), consumed by the transport-level repair that
+    unwraps JSON-serialised argument values before validation.
+    """
+    kinds: dict[str, dict[str, str]] = {}
+    for name, entry in tools.registry.registry.actions.items():
+        param_model = getattr(entry, "param_model", None)
+        if param_model is None:
+            continue
+        per_param = {
+            pname: kind
+            for pname, field in param_model.model_fields.items()
+            if (kind := _param_kind(field.annotation))
+        }
+        if per_param:
+            kinds[name] = per_param
+    return kinds
+
+
+def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
+    """Wrap the built-in ``search_page`` so it survives the shapes models
+    actually send and steers away from unproductive repeats: a ``css_scope``
+    of ``"null"``/``"none"``/empty text becomes no scope instead of a literal
+    selector lookup that always fails; the first search after pages have been
+    read points at the one-step pages.json sweep; an exact repeated pattern is
+    told its result will not change.
+    """
+    entry = tools.registry.registry.actions.get("search_page")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def wrapped(params: Any = None, **kwargs: Any) -> Any:
+        scope = getattr(params, "css_scope", None)
+        if isinstance(scope, str) and scope.strip().lower() in ("", "null", "none"):
+            try:
+                params.css_scope = None
+            except Exception:
+                pass
+        result = await original(params=params, **kwargs)
+        pattern = str(getattr(params, "pattern", "") or "")
+        counts = clipboard.setdefault("_page_search_counts", {})
+        n = counts.get(pattern, 0) + 1
+        counts[pattern] = n
+        notes: list[str] = []
+        if n == 1 and clipboard.get("_visited"):
+            notes.append(
+                "the full text of every page read this session is saved in "
+                "pages.json — one run_code_file script can search ALL of them "
+                "for ALL fields at once; search_page only covers the page "
+                "currently on screen."
+            )
+        elif n >= 2:
+            notes.append(
+                f"this exact pattern has now been searched {n} times — if the "
+                "page on screen has not changed, the result will not change "
+                "either. To check every read page in one step, search "
+                "pages.json with run_code_file."
+            )
+        if notes and isinstance(result, ActionResult) and result.extracted_content:
+            result.extracted_content += " NOTE: " + " ".join(notes)
+        return result
+
+    entry.function = wrapped
+
+
 def _describe_item_fields(store: OutputStore) -> str:
     model = store.item_model
     if model is None:
@@ -3080,6 +3252,27 @@ def _strong_overlap(a: set[str], b: set[str]) -> bool:
     return len(common) >= 2
 
 
+def _top_tied_candidates(tokens: set[str], fields: dict) -> list[tuple[int, str]]:
+    """Schema fields whose names overlap the tokens, restricted to the equal
+    top-score ties. When the tie-winner rejects a value (enum mismatch) an
+    equally-close field gets its chance, but a lower-score field is semantically
+    farther and would be polluted (a location-type constant landing in
+    'location').
+    """
+    candidates = sorted(
+        (
+            (len(_name_tokens(fname) & tokens), fname)
+            for fname in fields
+            if _strong_overlap(_name_tokens(fname), tokens)
+        ),
+        key=lambda pair: -pair[0],
+    )
+    if candidates:
+        top_score = candidates[0][0]
+        candidates = [c for c in candidates if c[0] == top_score]
+    return candidates
+
+
 def _labelled_pairs(text: str) -> dict[str, str]:
     """Visible label/value pairs from the top of a page's rendered text — a short
     label line followed by a short value line, the way labelled specs render
@@ -3154,7 +3347,7 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     elif desc_field and (page.get("text") or "").strip():
         _try_set(desc_field, (page.get("text") or "")[:20000])
 
-    # @nonobvious(must-hold): the rendered page outranks background data — a
+    # @nonobvious(must-hold): the rendered page outranks background data: a
     # value the page explicitly labels on screen fills its field FIRST, and
     # structured/background data only fills the gaps afterwards or upgrades a
     # visual value it strictly extends (visual "Home" -> background "Home
@@ -3164,18 +3357,7 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         label_tokens = _name_tokens(label)
         if not label_tokens:
             continue
-        label_candidates = sorted(
-            (
-                (len(_name_tokens(fname) & label_tokens), fname)
-                for fname in fields
-                if _strong_overlap(_name_tokens(fname), label_tokens)
-            ),
-            key=lambda pair: -pair[0],
-        )
-        if label_candidates:
-            top_score = label_candidates[0][0]
-            label_candidates = [c for c in label_candidates if c[0] == top_score]
-        for _score, fname in label_candidates:
+        for _score, fname in _top_tied_candidates(label_tokens, fields):
             if _try_set(fname, value):
                 visual_fields.add(fname)
                 break
@@ -3196,22 +3378,7 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         key_tokens = _name_tokens(path.replace(".", " "))
         if not key_tokens:
             continue
-        # @nonobvious(forced-by): equal-score ties only — when the tie-winner
-        # rejects a value (enum mismatch) an equally-close field gets its
-        # chance, but a lower-score field is semantically farther and would be
-        # polluted (a location-type constant landing in 'location').
-        candidates = sorted(
-            (
-                (len(_name_tokens(fname) & key_tokens), fname)
-                for fname in fields
-                if _strong_overlap(_name_tokens(fname), key_tokens)
-            ),
-            key=lambda pair: -pair[0],
-        )
-        if candidates:
-            top_score = candidates[0][0]
-            candidates = [c for c in candidates if c[0] == top_score]
-        for _score, fname in candidates:
+        for _score, fname in _top_tied_candidates(key_tokens, fields):
             # @nonobvious(forced-by): a page boolean may only fill a boolean
             # field — string coercion would store true as a junk "true" string.
             if isinstance(flat[path], bool) and _peel_optional(
@@ -3407,6 +3574,42 @@ def _remap_read_items(clipboard: dict[str, Any] | None, removed: list[int]) -> N
     }
 
 
+def _tolerate_json_list(value: Any) -> Any:
+    """Unwrap a list argument that arrived as its own JSON text.
+
+    Claude sometimes serialises a ``list`` tool argument as the STRING
+    ``'["a", "b"]'``; a ``str | list`` union accepts the string arm and the
+    call then fails downstream as one nonsense value. Only a string that
+    parses to a JSON array is unwrapped — any other string passes through.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return value
+            if isinstance(parsed, list):
+                return parsed
+    return value
+
+
+def _tolerate_json_dict(value: Any) -> Any:
+    """Dict twin of ``_tolerate_json_list``: unwrap a dict argument that
+    arrived as its own JSON text; any other string passes through.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return value
+            if isinstance(parsed, dict):
+                return parsed
+    return value
+
+
 def _absence_unearned(
     store: OutputStore, clipboard: dict[str, Any] | None, field: str
 ) -> str | None:
@@ -3509,12 +3712,17 @@ def _store_bridge(
             _mirror()
         return _AwaitableStr(msg)
 
-    def mark_absent(field: str, reason: str) -> str:
-        unearned = _absence_unearned(store, clipboard, field)
-        if unearned:
-            return _AwaitableStr(unearned)
-        _, msg = store.mark_absent(field, reason)
-        return _AwaitableStr(msg)
+    def mark_absent(field: str | list[str], reason: str) -> str:
+        field = _tolerate_json_list(field)
+        parts: list[str] = []
+        for name in field if isinstance(field, list) else [field]:
+            unearned = _absence_unearned(store, clipboard, name)
+            if unearned:
+                parts.append(unearned)
+                continue
+            _, msg = store.mark_absent(name, reason)
+            parts.append(msg)
+        return _AwaitableStr(" ".join(parts))
 
     def remove_items(indices: list[int], reason: str = "") -> str:
         ok, msg = store.remove_items(indices)
@@ -3596,8 +3804,12 @@ def register_output_store_tools(
         "this over a run of single update_item calls."
     )
     async def update_items(
-        updates: list[dict[str, Any]], file_system: FileSystem
+        updates: list[dict[str, Any]] | dict[str, Any] | str, file_system: FileSystem
     ) -> ActionResult:
+        updates = _tolerate_json_list(updates)
+        updates = _tolerate_json_dict(updates)
+        if isinstance(updates, dict):
+            updates = [updates]
         _refresh_read_items(store, clipboard)
         ok, msg = store.update_many(updates)
         if not ok:
@@ -3615,8 +3827,16 @@ def register_output_store_tools(
         "any follow-up update_item calls."
     )
     async def remove_items(
-        indices: list[int], reason: str, file_system: FileSystem
+        indices: list[int] | int | str, reason: str, file_system: FileSystem
     ) -> ActionResult:
+        indices = _tolerate_json_list(indices)
+        if isinstance(indices, (int, str)):
+            try:
+                indices = [int(indices)]
+            except ValueError:
+                return ActionResult(
+                    error="indices must be a JSON array of 0-based item numbers, e.g. [3, 7]."
+                )
         ok, msg = store.remove_items(indices)
         if not ok:
             return ActionResult(error=msg)
@@ -3644,10 +3864,14 @@ def register_output_store_tools(
         "in one call) plus a one-line reason saying where you looked. Settled "
         "fields stop counting as unfinished work and done() accepts them empty. A "
         "field found on SOME pages needs no marking — partial is complete once "
-        "every page is read."
+        "every page is read. Verifying absence needs no extra browsing: every read "
+        "page's full text is in pages.json, searchable in one run_code_file step."
     )
     async def mark_absent(field: str | list[str], reason: str) -> ActionResult:
-        field_names = field if isinstance(field, list) else [field]
+        field = _tolerate_json_list(field)
+        field_names = (
+            [str(f) for f in field] if isinstance(field, list) else [field]
+        )
         messages: list[str] = []
         errors: list[str] = []
         for name in field_names:
@@ -3677,8 +3901,11 @@ def register_output_store_tools(
         offset: int = 0,
         limit: int | None = None,
         index: int | None = None,
-        fields: list[str] | None = None,
+        fields: list[str] | str | None = None,
     ) -> ActionResult:
+        fields = _tolerate_json_list(fields)
+        if isinstance(fields, str):
+            fields = [fields]
         return ActionResult(
             extracted_content=(
                 f"{store.coverage_summary()}\n\n"
@@ -3901,7 +4128,11 @@ def register_completeness_gate(
                         f"{field_list}\n\nFor each field, either fill it (update_items "
                         "in bulk, or go back to the page that shows it) or, if you "
                         "have looked where it should be and the site genuinely does "
-                        "not publish it, settle it with mark_absent(field, reason)."
+                        "not publish it, settle it with mark_absent(field, reason). "
+                        "mark_absent takes a LIST of fields, so one call can settle "
+                        "several at once, and pages.json already holds every read "
+                        "page's full text — one run_code_file search across it "
+                        "verifies absence for all pages without more browsing."
                     )
                 if deficit:
                     parts.append(deficit)

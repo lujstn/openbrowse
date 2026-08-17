@@ -966,3 +966,25 @@ def test_browser_sessions_keep_alive_for_review_rounds() -> None:
 
     src = inspect.getsource(runner_mod.run_agent_session)
     assert "browser_session.browser_profile.keep_alive = True" in src
+
+
+async def test_invoke_repair_names_mistyped_arguments():
+    from app.agent.runner import _invoke_with_action_repair
+
+    calls = []
+
+    async def fake_invoke(messages):
+        calls.append(messages)
+        if len(calls) == 1:
+            raise ValueError(
+                "1 validation error for AgentOutput\n"
+                "action.0.read_pages.urls\n"
+                "  Input should be a valid list [type=list_type]"
+            )
+        return "ok"
+
+    result = await _invoke_with_action_repair(fake_invoke, [], object)
+    assert result == "ok"
+    correction = calls[1][-1].content
+    assert "action.0.read_pages.urls" in correction
+    assert "no executable" not in correction

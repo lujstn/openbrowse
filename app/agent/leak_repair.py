@@ -190,7 +190,11 @@ def scrub_tag_bleed(tool_input: dict) -> bool:
     return changed
 
 
-def merge_parallel_tool_calls(response: object, output_tool_name: str | None) -> int:
+def merge_parallel_tool_calls(
+    response: object,
+    output_tool_name: str | None,
+    action_names: set[str] | None = None,
+) -> int:
     """Fold parallel ``tool_use`` blocks back into one structured output call.
 
     Claude under auto tool choice (forced by extended thinking) sometimes splits
@@ -224,9 +228,20 @@ def merge_parallel_tool_calls(response: object, output_tool_name: str | None) ->
                     host_fields[key] = value
             merged.extend(a for a in actions if isinstance(a, dict))
             absorbed += 1
-        elif name and name != output_tool_name:
+        elif (
+            name
+            and name != output_tool_name
+            and (action_names is None or name in action_names)
+        ):
             merged.append({name: tool_input})
             absorbed += 1
+        elif name and name != output_tool_name:
+            logger.warning(
+                "parallel tool_use merge dropped a block invoking unknown "
+                "action %r: %r",
+                name,
+                {k: (v[:200] if isinstance(v, str) else v) for k, v in tool_input.items()},
+            )
         else:
             logger.warning(
                 "parallel tool_use merge dropped an output-tool block with no "
@@ -241,7 +256,10 @@ def merge_parallel_tool_calls(response: object, output_tool_name: str | None) ->
 
 
 def repair_anthropic_message(
-    response: object, output_tool_name: str | None = None
+    response: object,
+    output_tool_name: str | None = None,
+    action_names: set[str] | None = None,
+    param_kinds: dict[str, dict[str, str]] | None = None,
 ) -> int:
     """Scrub card-field tag-bleed and hoist leaked actions out of every ``tool_use``
     block in an Anthropic message. Returns the number of blocks whose action was
@@ -262,7 +280,14 @@ def repair_anthropic_message(
             continue
         if hoist_leaked_action(tool_input):
             repaired += 1
-    merge_parallel_tool_calls(response, output_tool_name)
+    merge_parallel_tool_calls(response, output_tool_name, action_names)
+    if param_kinds:
+        for block in content:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            tool_input = getattr(block, "input", None)
+            if isinstance(tool_input, dict):
+                coerce_action_param_shapes(tool_input, param_kinds)
     # @nonobvious(forced-by): only the first tool_use block is validated by the
     # caller, so it alone decides whether the reply survives — trailing blocks
     # are ignored either way and warning on them would be pure noise.
@@ -282,7 +307,77 @@ def repair_anthropic_message(
     return repaired
 
 
+_NESTED_ACTION_LOC_RE = re.compile(
+    r"^(action\.\d+[^\n]*)\n\s+([^\n]+?)(?:\s+\[type=[^\]]+\][^\n]*)?$", re.MULTILINE
+)
+
+
+def mistyped_action_params(exc: BaseException) -> str | None:
+    """The distilled pydantic detail when the failure is mis-typed action
+    ARGUMENTS (``action.0.read_pages.urls: Input should be a valid list``)
+    rather than a missing action list, else None. Telling the model it "sent
+    no action" when one argument had the wrong type points it at the wrong
+    repair and discards the only clue it could act on.
+    """
+    text = str(exc)
+    if "validation error" not in text.lower():
+        return None
+    pairs = [
+        f"{m.group(1)}: {m.group(2).strip()}"
+        for m in _NESTED_ACTION_LOC_RE.finditer(text)
+    ]
+    return "; ".join(pairs) or None
+
+
 def is_missing_action_error(exc: BaseException) -> bool:
     """True if *exc* looks like the AgentOutput ``action: Field required`` failure."""
     text = str(exc).lower()
-    return "action" in text and ("field required" in text or "validation error" in text)
+    if "action" not in text or (
+        "field required" not in text and "validation error" not in text
+    ):
+        return False
+    return mistyped_action_params(exc) is None
+
+
+def coerce_action_param_shapes(
+    tool_input: dict, param_kinds: dict[str, dict[str, str]]
+) -> bool:
+    """Unwrap JSON-serialised argument values inside an action list, guided by
+    the registry's declared types: a param whose annotation wants a list/dict
+    but holds a string of that JSON shape is parsed; a nullable non-string
+    param holding ``""``/``"null"``/``"none"`` becomes None. Content that does
+    not match the declared type's JSON shape is never touched, so a legitimate
+    string that merely looks like JSON survives in genuinely-string params.
+    Mutates in place; returns True if anything changed.
+    """
+    actions = tool_input.get("action")
+    if not isinstance(actions, list):
+        return False
+    changed = False
+    for entry in actions:
+        if not isinstance(entry, dict) or len(entry) != 1:
+            continue
+        ((name, params),) = entry.items()
+        if not isinstance(params, dict):
+            continue
+        kinds = param_kinds.get(name) or {}
+        for pname, value in list(params.items()):
+            kind = kinds.get(pname)
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if kind in ("list", "dict"):
+                open_ch, close_ch = ("[", "]") if kind == "list" else ("{", "}")
+                if text.startswith(open_ch) and text.endswith(close_ch):
+                    try:
+                        parsed = json.loads(text)
+                    except ValueError:
+                        continue
+                    expected = list if kind == "list" else dict
+                    if isinstance(parsed, expected):
+                        params[pname] = parsed
+                        changed = True
+            elif kind == "nullable" and text.lower() in ("", "null", "none"):
+                params[pname] = None
+                changed = True
+    return changed

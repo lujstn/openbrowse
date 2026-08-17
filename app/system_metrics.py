@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from collections import deque
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,10 @@ def pressure() -> tuple[str, dict[str, Any]]:
     return "ok", s
 
 
-_baseline_level = "ok"
+# @nonobvious(means): a ContextVar, not a module global, because sessions run
+# concurrently in one process, and a later launch's baseline must not rewrite
+# how an earlier session's stamps attribute its own contention.
+_baseline_level: ContextVar[str] = ContextVar("pressure_baseline", default="ok")
 
 
 def mark_baseline() -> tuple[str, dict[str, Any]]:
@@ -87,9 +91,8 @@ def mark_baseline() -> tuple[str, dict[str, Any]]:
     of rendering tabs legitimately saturates a small host by itself, and
     calling that "environmental" would mislead every audit.
     """
-    global _baseline_level
     level, s = pressure()
-    _baseline_level = level
+    _baseline_level.set(level)
     return level, s
 
 
@@ -98,7 +101,7 @@ def pressure_note() -> str:
     level, s = pressure()
     if level == "ok":
         return ""
-    if _baseline_level == "ok":
+    if _baseline_level.get() == "ok":
         return (
             f" [host CPU {level} (largely this run's own browser work): load "
             f"{s['load1']} on {s['cores']} cores — timing-sensitive embed reads "

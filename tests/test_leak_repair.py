@@ -314,3 +314,58 @@ def test_merge_conservative_without_tool_name():
     msg = _Msg([_NamedBlk("tool_use", {"name": "x"}, name="add_items_from_file")])
     repair_anthropic_message(msg)
     assert "action" not in msg.content[0].input
+
+
+def test_mistyped_vs_missing_action_errors():
+    from app.agent.leak_repair import mistyped_action_params
+
+    missing = Exception("1 validation error for AgentOutput\naction\n  Field required")
+    mistyped = Exception(
+        "1 validation error for AgentOutput\n"
+        "action.0.read_pages.urls\n"
+        "  Input should be a valid list [type=list_type, input_value='[\"a\"]', input_type=str]"
+    )
+    assert is_missing_action_error(missing)
+    assert mistyped_action_params(missing) is None
+    assert not is_missing_action_error(mistyped)
+    detail = mistyped_action_params(mistyped)
+    assert "action.0.read_pages.urls" in detail
+    assert "valid list" in detail
+
+
+def test_coerce_action_param_shapes():
+    from app.agent.leak_repair import coerce_action_param_shapes
+
+    kinds = {
+        "read_pages": {"urls": "list"},
+        "find_links": {"attr": "dict", "container_index": "nullable"},
+        "navigate": {},
+    }
+    ti = {
+        "thinking": "go",
+        "action": [
+            {"read_pages": {"urls": '["https://a", "https://b"]'}},
+            {"find_links": {"attr": '{"class": "posting"}', "container_index": "null"}},
+            {"navigate": {"url": '["not-coerced"]'}},
+        ],
+    }
+    assert coerce_action_param_shapes(ti, kinds) is True
+    assert ti["action"][0]["read_pages"]["urls"] == ["https://a", "https://b"]
+    assert ti["action"][1]["find_links"]["attr"] == {"class": "posting"}
+    assert ti["action"][1]["find_links"]["container_index"] is None
+    assert ti["action"][2]["navigate"]["url"] == '["not-coerced"]'
+
+
+def test_merge_drops_unknown_action_names():
+    msg = _Msg(
+        [
+            _NamedBlk("tool_use", {"key": "a", "value": "b"}, name="set_field"),
+            _NamedBlk("tool_use", {"x": 1}, name="made_up_tool"),
+        ]
+    )
+    repair_anthropic_message(
+        msg, output_tool_name="AgentOutput", action_names={"set_field", "find_links"}
+    )
+    assert msg.content[0].input["action"] == [
+        {"set_field": {"key": "a", "value": "b"}}
+    ]
