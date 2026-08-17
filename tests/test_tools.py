@@ -1861,7 +1861,7 @@ async def test_find_links_retries_then_errors_honestly_when_frame_missing(
         file_system=_FakeFileSystem(),
         frame_url_contains="board.example.com",
     )
-    assert scans["n"] == 2
+    assert scans["n"] == 1 + tools_mod._FIND_LINKS_MAX_RETRIES
     assert result.error and "No embedded frame matching" in result.error
     assert "open them by index" in result.error
     assert any("matched 0 frame(s)" in m for m in progress_msgs)
@@ -2585,3 +2585,174 @@ async def test_store_bridge_remove_items() -> None:
     assert "1 item(s)" in msg
     assert [it["title"] for it in store.data["items"]] == ["B"]
     assert clipboard["_read_items"] == {0}
+
+
+async def test_find_links_retries_recover_late_rewritten_embed_links(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def no_dom_hosts(session):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", no_dom_hosts)
+
+    full_map = _embed_map(with_frame_doc=True)
+    vendor_only = dict(full_map)
+    for k in (11, 12):
+        vendor_only[k] = _link_node(k, f"https://x.com/other{k}", target="main")
+    vendor_link = _link_node(31, "https://board.example.com/", target="frame-1", text="Powered by")
+    vendor_only[31] = vendor_link
+    full_map = dict(full_map)
+    full_map[31] = vendor_link
+    maps = [vendor_only, full_map]
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return maps.pop(0) if len(maps) > 1 else maps[0]
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+    )
+    assert not result.error
+    import json as _json
+
+    found = _json.loads(result.extracted_content)
+    assert len(found) == 3
+    assert "WARNING" not in (result.long_term_memory or "")
+
+
+async def test_find_links_warns_when_matched_frame_stays_tiny(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def no_dom_hosts(session):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", no_dom_hosts)
+
+    selector_map = _embed_map(with_frame_doc=True)
+    for k in (11, 12):
+        selector_map[k] = _link_node(k, f"https://x.com/other{k}", target="main")
+    selector_map[31] = _link_node(
+        31, "https://board.example.com/", target="frame-1", text="Powered by"
+    )
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+    )
+    assert not result.error
+    note = result.long_term_memory or ""
+    assert "WARNING" in note
+    assert "unverified" in note
+    assert "re-run find_links" in note
+
+
+async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def no_dom_hosts(session):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", no_dom_hosts)
+
+    selector_map = _embed_map(with_frame_doc=True)
+    for offset, k in enumerate((11, 12)):
+        selector_map[k] = _link_node(
+            k,
+            f"https://x.com/jobs?src=board.example.com&jid={offset}",
+            target="other-frame",
+        )
+    selector_map[31] = _link_node(
+        31, "https://board.example.com/", target="frame-1", text="Powered by"
+    )
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    clipboard: dict = {}
+    tools_mod.register_tab_tools(tools, object(), clipboard, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+    )
+    assert not result.error
+    import json as _json
+
+    found = _json.loads(result.extracted_content)
+    hrefs = {l["href"] for l in found}
+    assert "https://x.com/jobs?src=board.example.com&jid=0" in hrefs
+    assert "https://x.com/jobs?src=board.example.com&jid=1" in hrefs
+    note = result.long_term_memory or ""
+    assert "recovered by matching hrefs" in note
+    assert clipboard["found_links_frame"] == "board.example.com"

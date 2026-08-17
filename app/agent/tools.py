@@ -635,6 +635,7 @@ class _FindLinksError(Exception):
 
 
 _FIND_LINKS_RETRY_DELAY_S = 3.0
+_FIND_LINKS_MAX_RETRIES = 3
 
 
 def _scan_link_map(
@@ -2434,7 +2435,10 @@ def register_tab_tools(
             )
             clipboard["_settle_frameless"] = settle_frameless
 
-            async def _scan() -> tuple[list[dict[str, Any]], int | None, int, bool]:
+            async def _scan(
+                href_override: str | None = None,
+                frame_override: str | None = "unset",
+            ) -> tuple[list[dict[str, Any]], int | None, int, bool]:
                 try:
                     await browser_session.get_browser_state_summary(
                         include_screenshot=False
@@ -2453,29 +2457,67 @@ def register_tab_tools(
                 return _scan_link_map(
                     selector_map,
                     current,
-                    href_contains=href_contains,
+                    href_contains=(
+                        href_contains if href_override is None else href_override
+                    ),
                     href_regex=href_regex,
-                    frame_url_contains=frame_url_contains,
+                    frame_url_contains=(
+                        frame_url_contains
+                        if frame_override == "unset"
+                        else frame_override
+                    ),
                     container=container,
                     attr=attr,
                     visible_only=visible_only,
                 )
 
+            def _suspicious(
+                links: list, frames_matched: int | None, anchors: int, iframe: bool
+            ) -> bool:
+                # @nonobvious(forced-by): OOPIF frame targets and embed-rewritten
+                # hrefs attach late on slow devices — a scan can see a bare main
+                # document, or a matched frame holding only its vendor anchor
+                # while the role links are still being rewritten; retrying
+                # recovers it instead of silently returning 0-2 footer links.
+                if frame_url_contains:
+                    if not frames_matched:
+                        return True
+                    return len(links) <= 2 and anchors > len(links)
+                return len(links) <= 2 and iframe
+
             links, frames_matched, anchors_seen, iframe_present = await _scan()
-            retried = False
-            # @nonobvious(forced-by): OOPIF frame targets and embed-rewritten
-            # hrefs attach late on slow devices — a first scan can see a bare
-            # main document, or a matched frame whose anchors are not rewritten
-            # yet; one settle retry recovers it instead of silently returning
-            # the footer links or an empty set.
-            if (
-                (frame_url_contains and not frames_matched)
-                or (frame_url_contains and frames_matched and not links and anchors_seen)
-                or (not frame_url_contains and len(links) <= 2 and iframe_present)
+            retries = 0
+            while retries < _FIND_LINKS_MAX_RETRIES and _suspicious(
+                links, frames_matched, anchors_seen, iframe_present
             ):
-                retried = True
+                retries += 1
                 await asyncio.sleep(_FIND_LINKS_RETRY_DELAY_S)
                 links, frames_matched, anchors_seen, iframe_present = await _scan()
+            retried = retries > 0
+
+            # @nonobvious(forced-by): the frame filter can be stably wrong — the
+            # role anchors can sit under a frame target the iframe map never
+            # links to — while the embed-rewritten hrefs carry the vendor's
+            # name (…?ashby_jid=…). Rescanning by href on the same needle
+            # recovers the listing the frame filter cannot see.
+            salvaged = False
+            if (
+                frame_url_contains
+                and not href_contains
+                and not href_regex
+                and frames_matched
+                and len(links) <= 2
+                and anchors_seen > len(links)
+            ):
+                s_links, _, _, _ = await _scan(
+                    href_override=frame_url_contains, frame_override=None
+                )
+                # @nonobvious(must-hold): only a listing-shaped salvage counts —
+                # matching just the vendor's own branding anchor would swap one
+                # useless result for another.
+                if len(s_links) > max(2, len(links)):
+                    links = s_links
+                    salvaged = True
         except _FindLinksError as e:
             return ActionResult(error=str(e))
         except Exception as e:
@@ -2489,7 +2531,13 @@ def register_tab_tools(
                 if frame_url_contains
                 else ""
             )
-            + (" (after one settle retry)" if retried else "")
+            + (f" (after {retries} settle retr{'y' if retries == 1 else 'ies'})" if retried else "")
+            + (
+                f"; frame filter caught too few so links matching hrefs "
+                f"containing '{frame_url_contains}' were returned instead"
+                if salvaged
+                else ""
+            )
         )
         await _emit_progress(progress, telemetry)
 
@@ -2570,13 +2618,26 @@ def register_tab_tools(
                 "explicit urls only if you DO want an offhost page."
             )
         unverified_hint = ""
-        if frame_url_contains and frames_matched and not links and anchors_seen:
+        if salvaged:
+            unverified_hint = (
+                f" NOTE: the '{frame_url_contains}' frame filter caught only the "
+                "embed's own anchor(s); these links were recovered by matching "
+                f"hrefs containing '{frame_url_contains}' instead, which is the "
+                "same listing."
+            )
+        elif (
+            frame_url_contains
+            and frames_matched
+            and len(links) <= 2
+            and anchors_seen > len(links)
+        ):
             unverified_hint = (
                 f" WARNING: the frame filter matched {frames_matched} frame(s) but "
-                f"0 of the page's {anchors_seen} anchor(s) belong to it — the "
-                "embed's links may not have finished rewriting, so this count is "
-                "unverified. Wait 2 seconds and re-run find_links before trusting "
-                "an empty result."
+                f"only {len(links)} of the page's {anchors_seen} anchor(s) belong "
+                "to it — the embed's links may not have finished rewriting, so "
+                "this count is unverified even after retries. If the page visibly "
+                "lists more items than this, wait 2 seconds and re-run find_links "
+                "before trusting this result."
             )
         elif settle_frameless:
             unverified_hint = (
