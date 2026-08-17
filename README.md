@@ -42,13 +42,9 @@ Given the same real-world extraction task (a careers page with 14 records behind
 | Live view | Replay | Real-time VNC of the actual browser, a step feed with the model's reasoning, and an IDE-style code tab that streams the agent's sandbox scripts live as they're written |
 | API | v3 REST | The same v3 REST surface: point `browser-use-sdk` at your box and change nothing but `baseUrl` and `apiKey` |
 
-Here's a snippet of our benchmark run, which shows `opus` taking agentic actions through parallel tabs and code written in an IDE that you can see:
+**See it in action: a snippet of our benchmark run, with `opus` taking agentic actions across parallel tabs while its code streams into a live IDE.**
 
-<p align="center">
-  <a href=".github/assets/demo.mp4">
-    <img src=".github/assets/demo-poster.jpg" width="720" alt="An OpenBrowse run in progress">
-  </a>
-</p>
+https://github.com/user-attachments/assets/c1330d77-67b6-4a7d-bd43-7cdfa230b9d1
 
 ## Model providers
 
