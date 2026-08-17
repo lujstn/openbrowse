@@ -120,9 +120,24 @@ def message_display(m: dict) -> dict:
     summary = m.get("summary") or ""
     if t == "event":
         data = _safe_fromjson(m.get("data") or "")
+        category = data.get("category", "memory")
+        label = data.get("action", "note")
+        # @nonobvious(forced-by): stored rows from old runs carry the previous
+        # vocabulary; normalising at render time keeps their history readable
+        # without a data migration.
+        if label == "northStar" or category == "goal":
+            category, label = "goal", "goal"
+            if summary.startswith("North Star: "):
+                summary = summary[len("North Star: ") :]
+        elif category == "memory":
+            summary = summary.replace(" saved → ", ": ", 1)
+        elif category == "judge":
+            label = "review"
+            if summary.startswith("Judge dissent: "):
+                summary = summary[len("Judge dissent: ") :]
         out = {
-            "category": data.get("category", "memory"),
-            "label": data.get("action", "note"),
+            "category": category,
+            "label": label,
             "summary": summary,
             "code": False,
         }
@@ -130,7 +145,7 @@ def message_display(m: dict) -> dict:
             out["reasoning"] = data["reasoning"]
         return out
     if t == "user_message":
-        return {"category": "user", "label": "you", "summary": summary, "code": False}
+        return {"category": "user", "label": "user", "summary": summary, "code": False}
     if t == "browser_action_error":
         return {"category": "error", "label": "error", "summary": summary, "code": False}
     if t == "planning":
@@ -165,9 +180,12 @@ def message_display(m: dict) -> dict:
         for k in ("see", "plan", "next", "thinking", "model_reasoning")
         if data.get(k)
     }
+    label = action or category
+    if action == "done":
+        label = "ready for review"
     return {
         "category": category,
-        "label": action or category,
+        "label": label,
         "summary": cleaned,
         "code": code,
         **cards,

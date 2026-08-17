@@ -1,4 +1,4 @@
-{% set CAT_ICON = {'navigation':'🧭','interaction':'⚙️','code':'</>','network':'⇅','read':'🔍','wait':'⏳','done':'✓','error':'⚠','planning':'📋','completion':'✓','action':'•','memory':'🗂️','schema':'🧩','reasoning':'🧠','user':'💬','judge':'⚖️'} %}
+{% set CAT_ICON = {'navigation':'🧭','interaction':'⚙️','code':'</>','network':'🌐','read':'🔍','wait':'⏳','done':'✓','error':'⚠','planning':'📋','completion':'✓','action':'•','memory':'🧠','schema':'🧩','reasoning':'💭','user':'👤','judge':'🧑‍🏫','goal':'🎯'} %}
 {% for m in messages %}
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}
@@ -10,16 +10,16 @@
   </span>
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
   <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>
-  <span class="msg-caret" aria-hidden="true">▾</span>
+  <button class="msg-caret" type="button" aria-label="Expand step details">▾</button>
   {% if d.step %}<span class="msg-step">#{{ d.step }}</span>{% endif %}
   {% if has_cards %}
   <div class="msg-cards">
-    {% if md.see %}<div class="card card-see"><span class="card-ico">👁️</span><span class="card-text">{{ md.see }}</span></div>{% endif %}
-    {% if md.plan %}<div class="card card-plan"><span class="card-ico">🛝</span><span class="card-text">{{ md.plan }}</span></div>{% endif %}
-    {% if md.next %}<div class="card card-next"><span class="card-ico">➡️</span><span class="card-text">{{ md.next }}</span></div>{% endif %}
-    {% if md.thinking %}<div class="card card-think"><span class="card-ico">💭</span><span class="card-text">{{ md.thinking }}</span></div>{% endif %}
-    {% if md.model_reasoning %}<div class="card card-model-reason"><span class="card-ico">🧠</span><span class="card-text">{{ md.model_reasoning }}</span></div>{% endif %}
-    {% if md.reasoning %}<div class="card card-model-reason"><span class="card-ico">🧠</span><span class="card-text">{{ md.reasoning | mdlite }}</span></div>{% endif %}
+    {% if md.see %}<div class="card card-see"><div class="card-head">🖼️ What I'm seeing</div><div class="card-text">{{ md.see }}</div></div>{% endif %}
+    {% if md.thinking %}<div class="card card-think"><div class="card-head">🧠 What I'm thinking</div><div class="card-text">{{ md.thinking }}</div></div>{% endif %}
+    {% if md.plan %}<div class="card card-plan"><div class="card-head">🛝 How I see things going</div><div class="card-text">{{ md.plan }}</div></div>{% endif %}
+    {% if md.next %}<div class="card card-next"><div class="card-head">➡️ My next step</div><div class="card-text">{{ md.next }}</div></div>{% endif %}
+    {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.model_reasoning }}</div></div>{% endif %}
+    {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
   </div>
   {% endif %}
 </div>

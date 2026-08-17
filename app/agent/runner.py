@@ -1239,8 +1239,8 @@ async def run_agent_session(session_id: str) -> None:
                 session_id=session_id,
                 role="ai",
                 msg_type="event",
-                data=json.dumps({"category": "memory", "action": "northStar"}),
-                summary=f"North Star: {north_star}",
+                data=json.dumps({"category": "goal", "action": "goal"}),
+                summary=north_star,
                 count_step=False,
             )
         if output_schema and output_model is None:
@@ -1260,7 +1260,7 @@ async def run_agent_session(session_id: str) -> None:
                 role="ai",
                 msg_type="event",
                 data=json.dumps({"category": "memory", "action": "startUrl"}),
-                summary=f"startUrl saved → {start_url}",
+                summary=f"startUrl: {start_url}",
                 count_step=False,
             )
 
@@ -1312,7 +1312,7 @@ async def run_agent_session(session_id: str) -> None:
                     role="ai",
                     msg_type="event",
                     data=json.dumps({"category": "memory", "action": "startUrl"}),
-                    summary=f"startUrl saved → {current_url}",
+                    summary=f"startUrl: {current_url}",
                     count_step=False,
                 )
 
@@ -1343,8 +1343,8 @@ async def run_agent_session(session_id: str) -> None:
                     session_id=session_id,
                     role="ai",
                     msg_type="event",
-                    data=json.dumps({"category": "memory", "action": "northStar"}),
-                    summary=f"North Star reminder (step {step_count})",
+                    data=json.dumps({"category": "goal", "action": "goal"}),
+                    summary=f"Goal reminder (step {step_count})",
                     count_step=False,
                 )
 
@@ -1595,11 +1595,16 @@ async def run_agent_session(session_id: str) -> None:
                 role="ai",
                 msg_type="event",
                 summary=(
-                    f"Judge review disagrees: {judge_word} vs recorded {own_word}"
-                    " — expand for its reasoning"
+                    reason
+                    or f"review outcome {judge_word} differs from recorded {own_word}"
                 ),
                 data=json.dumps(
-                    {"category": "judge", "action": "verdict", "reasoning": reason}
+                    {
+                        "category": "judge",
+                        "action": "review",
+                        "verdict": judge_word,
+                        "recorded": own_word,
+                    }
                 ),
                 count_step=False,
             )
