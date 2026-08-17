@@ -1478,3 +1478,135 @@ async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
     await tools_mod._read_pages_impl(session, urls, None, {}, progress=progress)
     assert any("3 wave(s) of up to 6 tabs" in e for e in events)
     assert any("(" in e and "s)" in e for e in events if "wave 1/3" in e)
+
+
+def test_mark_absent_allowed_after_source_url_rewrite() -> None:
+    from app.agent.tools import _absence_unearned, _refresh_read_items
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
+    clipboard = {"_visited": {"https://x.com/a", "https://x.com/b"}, "_read_failed": set()}
+
+    read = _refresh_read_items(store, clipboard)
+    assert read == {0, 1}
+
+    store.update_item(0, {"sourceUrl": "https://ats.example.com/a"})
+    store.update_item(1, {"sourceUrl": "https://ats.example.com/b"})
+
+    assert _absence_unearned(store, clipboard, "description") is None
+
+
+def test_gate_settles_partial_field_after_source_url_rewrite() -> None:
+    from app.agent.tools import _gate_empty_fields, _refresh_read_items
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
+    clipboard = {"_visited": {"https://x.com/a", "https://x.com/b"}, "_read_failed": set()}
+    _refresh_read_items(store, clipboard)
+
+    store.update_item(0, {"sourceUrl": "https://ats.example.com/a"})
+    store.update_item(1, {"sourceUrl": "https://ats.example.com/b"})
+
+    entries = _gate_empty_fields(store, clipboard)
+    assert not any(e.startswith("description") for e in entries)
+
+
+def test_unread_items_still_block_absence_after_rewrite_of_others() -> None:
+    from app.agent.tools import _absence_unearned, _refresh_read_items
+
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/never-read"})
+    clipboard = {"_visited": {"https://x.com/a"}, "_read_failed": set()}
+    _refresh_read_items(store, clipboard)
+    store.update_item(0, {"sourceUrl": "https://ats.example.com/a"})
+    msg = _absence_unearned(store, clipboard, "description")
+    assert msg is not None and "have not been read" in msg
+
+
+async def test_read_one_page_skips_frame_filter_on_panel_host(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    matched = {"called": False}
+
+    async def fake_match(*args, **kwargs):
+        matched["called"] = True
+        return None
+
+    async def fake_eval(session, tid, js):
+        if "readyState" in js:
+            return "complete"
+        if js is tools_mod._BODY_TEXT_JS or "innerText" in str(js):
+            return "role detail " * 50
+        return []
+
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    page = await tools_mod._read_one_page(
+        object(),
+        "https://jobs.ashbyhq.com/marshmallow/role-1",
+        "tid-main",
+        "jobs.ashbyhq.com",
+        set(),
+        set(),
+    )
+    assert not page.get("error")
+    assert matched["called"] is False
+    assert not page.get("frame_matched")
+
+
+async def test_read_one_page_falls_back_to_main_doc_when_no_frame(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def fake_match(*args, **kwargs):
+        return None
+
+    async def fake_eval(session, tid, js):
+        if "readyState" in js:
+            return "complete"
+        if js is tools_mod._BODY_TEXT_JS or "innerText" in str(js):
+            return "plain page content " * 50
+        return []
+
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_FRAME_MATCH_GRACE_S", 0.0)
+    page = await tools_mod._read_one_page(
+        object(),
+        "https://elsewhere.example.com/role-1",
+        "tid-main",
+        "jobs.ashbyhq.com",
+        set(),
+        set(),
+    )
+    assert not page.get("error")
+    assert not page.get("frame_matched")
+    assert "plain page content" in page.get("text", "")
+
+
+async def test_read_one_page_still_fails_on_hollow_main_doc(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def fake_match(*args, **kwargs):
+        return None
+
+    async def fake_eval(session, tid, js):
+        if "readyState" in js:
+            return "complete"
+        return ""
+
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_FRAME_MATCH_GRACE_S", 0.0)
+    monkeypatch.setattr(tools_mod, "_PAGE_READY_TIMEOUT_S", 0.6)
+    page = await tools_mod._read_one_page(
+        object(),
+        "https://elsewhere.example.com/role-1",
+        "tid-main",
+        "jobs.ashbyhq.com",
+        set(),
+        set(),
+    )
+    assert page.get("error")

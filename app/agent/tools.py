@@ -416,6 +416,7 @@ _READ_PAGES_MIN_WAVE_S = 30.0
 # @nonobvious(means): measured live — a heavy marketing page took ~12s to DOMContentLoaded
 # with its embed rendering ~2.5s later, so 18s left almost no margin.
 _PAGE_READY_TIMEOUT_S = 25.0
+_FRAME_MATCH_GRACE_S = 6.0
 _MIN_PAGE_TEXT_CHARS = 200
 _JSONLD_GRACE_S = 3.0
 
@@ -441,6 +442,16 @@ async def _read_one_page(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _PAGE_READY_TIMEOUT_S
 
+    # @nonobvious(forced-by): the frame filter carries over from the listing's
+    # embed, but a link pointing INTO the panel's own host is the panel content
+    # served as a plain page — there is no inner frame to find, and waiting for
+    # one burns the full per-page timeout on every such link.
+    if url_contains and url_contains.lower() in (url or "").lower():
+        url_contains = None
+
+    fallback_ok = False
+    frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
+
     def _substantial(txt: Any) -> bool:
         return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
 
@@ -460,6 +471,21 @@ async def _read_one_page(
                     txt = await _eval_on_target(browser_session, frame_tid, _BODY_TEXT_JS)
                     if _substantial(txt):
                         break
+                elif loop.time() >= frame_grace_end:
+                    # @nonobvious(forced-by): a page with no matching frame but a
+                    # substantial main document is a plain page, not a shell —
+                    # read it rather than failing; the shell-read detector still
+                    # catches genuine embed shells after the fact.
+                    ready = await _eval_on_target(
+                        browser_session, target_id, "document.readyState"
+                    )
+                    if ready in ("interactive", "complete"):
+                        txt = await _eval_on_target(
+                            browser_session, target_id, _BODY_TEXT_JS
+                        )
+                        if _substantial(txt):
+                            fallback_ok = True
+                            break
             else:
                 ready = await _eval_on_target(
                     browser_session, target_id, "document.readyState"
@@ -507,7 +533,7 @@ async def _read_one_page(
     except Exception as e:
         page["error"] = f"{type(e).__name__}: {e}"
         return page
-    if url_contains and not frame_tid:
+    if url_contains and not frame_tid and not fallback_ok:
         page["error"] = (
             "no embedded panel matching "
             f"'{url_contains}' rendered — the main document was NOT read in its place"
@@ -2783,6 +2809,35 @@ def _stub_block_msg(
     )
 
 
+def _refresh_read_items(
+    store: OutputStore, clipboard: dict[str, Any] | None
+) -> set[int]:
+    """Indices of items whose own page has ever been observed as read. Recorded
+    permanently the moment an item's URL-field value is in the visited/failed
+    sets, so later improving the URL (e.g. swapping an embed link for the direct
+    ATS link) can never make the item count as unread again. Called at the start
+    of every item mutation and inside the gate checks.
+    """
+    if clipboard is None:
+        return set()
+    read: set[int] = clipboard.setdefault("_read_items", set())
+    url_field = _item_url_field(store)
+    if store.item_model is None or not store.array_field or not url_field:
+        return read
+    arr = store.data.get(store.array_field) or []
+    looked = (clipboard.get("_visited") or set()) | (
+        clipboard.get("_read_failed") or set()
+    )
+    for i, it in enumerate(arr):
+        if (
+            isinstance(it, dict)
+            and it.get(url_field)
+            and _norm_url(it[url_field]) in looked
+        ):
+            read.add(i)
+    return read
+
+
 def _absence_unearned(
     store: OutputStore, clipboard: dict[str, Any] | None, field: str
 ) -> str | None:
@@ -2797,12 +2852,12 @@ def _absence_unearned(
     if not url_field or not store.array_field:
         return None
     arr = store.data.get(store.array_field) or []
-    urls = [
-        it.get(url_field)
-        for it in arr
+    indexed_urls = [
+        (i, it.get(url_field))
+        for i, it in enumerate(arr)
         if isinstance(it, dict) and it.get(url_field)
     ]
-    if not urls:
+    if not indexed_urls:
         return None
     visited: set = (
         clipboard.setdefault("_visited", set()) if clipboard is not None else set()
@@ -2811,7 +2866,13 @@ def _absence_unearned(
         clipboard.setdefault("_read_failed", set()) if clipboard is not None else set()
     )
     looked = visited | failed
-    unread = [u for u in urls if _norm_url(u) not in looked]
+    read_items = _refresh_read_items(store, clipboard)
+    unread = [
+        u
+        for i, u in indexed_urls
+        if i not in read_items and _norm_url(u) not in looked
+    ]
+    urls = [u for _, u in indexed_urls]
     if unread:
         return (
             f"Cannot mark '{field}' absent yet — {len(unread)} of {len(urls)} item "
@@ -2860,12 +2921,14 @@ def _store_bridge(
         return _AwaitableStr(msg)
 
     def update_item(index: int, fields: dict[str, Any]) -> str:
+        _refresh_read_items(store, clipboard)
         ok, msg = store.update_item(index, fields)
         if ok:
             _mirror()
         return _AwaitableStr(msg)
 
     def update_items(updates: list[dict[str, Any]]) -> str:
+        _refresh_read_items(store, clipboard)
         ok, msg = store.update_many(updates)
         if ok:
             _mirror()
@@ -2943,6 +3006,7 @@ def register_output_store_tools(
     async def update_item(
         index: int, fields: dict[str, Any], file_system: FileSystem
     ) -> ActionResult:
+        _refresh_read_items(store, clipboard)
         ok, msg = store.update_item(index, fields)
         if not ok:
             return ActionResult(error=msg)
@@ -2959,6 +3023,7 @@ def register_output_store_tools(
     async def update_items(
         updates: list[dict[str, Any]], file_system: FileSystem
     ) -> ActionResult:
+        _refresh_read_items(store, clipboard)
         ok, msg = store.update_many(updates)
         if not ok:
             return ActionResult(error=msg)
@@ -3114,6 +3179,7 @@ def register_output_store_tools(
             return ActionResult(
                 error=f"No file named {name!r}. Save it first with save_json in a script."
             )
+        _refresh_read_items(store, clipboard)
         ok, msg = store.update_many(arr)
         if not ok:
             return ActionResult(error=msg)
@@ -3137,9 +3203,16 @@ def _gate_empty_fields(
     url_field = _item_url_field(store)
     if not arr or not url_field:
         return empties
-    urls = [it.get(url_field) for it in arr if isinstance(it, dict) and it.get(url_field)]
+    indexed_urls = [
+        (i, it.get(url_field))
+        for i, it in enumerate(arr)
+        if isinstance(it, dict) and it.get(url_field)
+    ]
     looked = (clipboard.get("_visited") or set()) | (clipboard.get("_read_failed") or set())
-    if not urls or any(_norm_url(u) not in looked for u in urls):
+    read_items = _refresh_read_items(store, clipboard)
+    if not indexed_urls or any(
+        i not in read_items and _norm_url(u) not in looked for i, u in indexed_urls
+    ):
         return empties
     filtered: list[str] = []
     for entry in empties:
