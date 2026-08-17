@@ -609,3 +609,57 @@ async def test_codeview_uses_the_shared_renderer(client):
     assert '<script defer src="/static/agents.js"></script>' in resp.text
     assert "agents.renderCode(code, 'python')" in resp.text
     assert "outerHTML" not in resp.text
+
+
+def test_message_display_passes_sources_through():
+    import json as _json
+
+    from app.dashboard.routes import message_display
+
+    row = {
+        "type": "result",
+        "summary": "read_pages: 2/2 pages -> pages.json",
+        "data": _json.dumps({
+            "category": "read",
+            "action": "read_pages",
+            "sources": [
+                {"url": "https://www.bbc.co.uk/news/one", "title": "One"},
+                {"url": "https://example.com/two", "title": ""},
+            ],
+        }),
+    }
+    md = message_display(row)
+    assert len(md["sources"]) == 2
+    assert md["sources"][0]["title"] == "One"
+
+
+def test_domain_of_strips_the_www():
+    from app.dashboard.routes import _domain_of
+
+    assert _domain_of("https://www.bbc.co.uk/news/one") == "bbc.co.uk"
+    assert _domain_of("https://example.com/two") == "example.com"
+    assert _domain_of("") == ""
+
+
+def test_sources_render_as_citations():
+    import json
+
+    from app.dashboard.routes import _format_relative_time, templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "type": "result",
+            "created_at": "2026-08-17T15:00:00+00:00",
+            "summary": "read_pages: 1/1 pages",
+            "data": json.dumps({
+                "category": "read",
+                "action": "read_pages",
+                "sources": [{"url": "https://www.bbc.co.uk/news/one", "title": "One"}],
+            }),
+        }],
+        format_relative=_format_relative_time,
+    )
+    assert 'class="ob-cites"' in html
+    assert "https://www.bbc.co.uk/news/one" in html
+    assert ">bbc.co.uk<" in html
+    assert "has-cards" in html

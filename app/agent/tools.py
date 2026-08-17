@@ -2299,10 +2299,13 @@ def register_tab_tools(
     clipboard: dict[str, Any],
     store: OutputStore | None = None,
     progress: Any = None,
+    source_sink: list[dict[str, str]] | None = None,
 ) -> None:
     """Register the multi-tab fan-out actions on a Tools instance. ``store`` lets
     read_pages prefill rows_draft.json; ``progress`` is an async callable streaming
-    wave-by-wave read_pages progress to the session feed.
+    wave-by-wave read_pages progress to the session feed; ``source_sink`` collects
+    every page actually read, so the run can say afterwards where its answer came
+    from rather than only how many pages it opened.
     """
 
     @tools.action(
@@ -2347,6 +2350,12 @@ def register_tab_tools(
             pages = await _read_pages_impl(
                 browser_session, urls, frame_url_contains, clipboard, progress=progress
             )
+            if source_sink is not None:
+                for page in pages:
+                    url = str(page.get("url") or "")
+                    if url and not page.get("error"):
+                        source_sink.append({"url": url, "title": str(page.get("title") or "")})
+
             saved: str | None = "pages.json"
             try:
                 await file_system.write_file(

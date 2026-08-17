@@ -1441,7 +1441,10 @@ async def run_agent_session(session_id: str) -> None:
         register_fetch_tool(tools)
         register_code_tools(tools, clipboard, store, _code_progress)
         register_clipboard_tools(tools, clipboard)
-        register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
+        read_sources: list[dict[str, str]] = []
+        register_tab_tools(
+            tools, tab_manager, clipboard, store, _read_progress, read_sources
+        )
         capsolver_costs: list[float] = []
         register_capsolver_tool(tools, capsolver_costs)
 
@@ -1663,6 +1666,9 @@ async def run_agent_session(session_id: str) -> None:
                 except Exception:
                     logger.debug("coverage snapshot failed", exc_info=True)
 
+            step_sources = read_sources[:]
+            del read_sources[:]
+
             row_data: dict[str, Any] = {
                 "step": step_count,
                 "duration_s": duration_s,
@@ -1672,6 +1678,8 @@ async def run_agent_session(session_id: str) -> None:
             }
             if full_error and len(full_error) > len(summary):
                 row_data["error_full"] = full_error[:6000]
+            if step_sources:
+                row_data["sources"] = step_sources[:40]
             if action_name == "done" and review_state["round"]:
                 changed = bool(
                     store is not None

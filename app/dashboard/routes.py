@@ -9,6 +9,7 @@ import math
 import os
 import re
 import subprocess
+from urllib.parse import urlparse
 import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -144,7 +145,15 @@ def _mdlite(text: str) -> Markup:
     return Markup("".join(out))
 
 
+def _domain_of(url: str) -> str:
+    try:
+        return urlparse(str(url or "")).netloc.removeprefix("www.")
+    except ValueError:
+        return ""
+
+
 templates.env.filters["mdlite"] = _mdlite
+templates.env.filters["domain_of"] = _domain_of
 
 
 def _usd(value: Any) -> str:
@@ -261,11 +270,13 @@ def message_display(m: dict) -> dict:
             cleaned = "Replied to reviewer"
         else:
             cleaned = "Submitted for review"
+    sources = data.get("sources")
     return {
         "category": category,
         "label": label,
         "summary": cleaned,
         "code": code,
+        "sources": sources if isinstance(sources, list) else None,
         **cards,
     }
 

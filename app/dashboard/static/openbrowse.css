@@ -451,6 +451,73 @@
   font-variant-numeric: tabular-nums;
 }
 
+.ob-cites {
+  margin: 6px 0 2px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius-sm);
+  background: var(--ob-bg);
+}
+.ob-cites-head {
+  font-size: 11px;
+  color: var(--ob-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.ob-cites-count {
+  background: var(--ob-surface-raised);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--ob-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ob-cites-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.ob-cite {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.ob-cite-index {
+  flex: none;
+  min-width: 16px;
+  text-align: right;
+  color: var(--ob-text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.ob-cite-link {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  align-items: baseline;
+  text-decoration: none;
+}
+.ob-cite-title {
+  color: var(--ob-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ob-cite-link:hover .ob-cite-title {
+  color: var(--ob-text);
+  text-decoration: underline;
+}
+.ob-cite-domain {
+  flex: none;
+  color: var(--ob-text-faint);
+  font-size: 11px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,

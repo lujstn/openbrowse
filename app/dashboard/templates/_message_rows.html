@@ -2,7 +2,7 @@
 {% for m in messages %}
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}
-{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning or md.error_full or md.result_snippet %}
+{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning or md.error_full or md.result_snippet or md.sources %}
 <div class="msg-row{% if has_cards %} has-cards{% endif %}" data-type="{{ m.type }}" data-mid="{{ m.id }}">
   <span class="msg-left">
     <span class="msg-time" data-ts="{{ m.created_at }}"></span>
@@ -22,6 +22,22 @@
       {% if md.result_snippet %}<div class="card card-result"><div class="card-head">🧾 What happened</div><div class="card-text">{{ md.result_snippet }}</div></div>{% endif %}
       {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
       {% if md.error_full %}<div class="card card-error"><div class="card-head">⚠️ Full error</div><div class="card-text">{{ md.error_full }}</div></div>{% endif %}
+      {% if md.sources %}
+      <div class="ob-cites">
+        <div class="ob-cites-head">📚 Sources <span class="ob-cites-count">{{ md.sources | length }}</span></div>
+        <ol class="ob-cites-list">
+          {% for s in md.sources %}
+          <li class="ob-cite">
+            <span class="ob-cite-index">{{ loop.index }}</span>
+            <a class="ob-cite-link" href="{{ s.url }}" target="_blank" rel="noreferrer noopener">
+              <span class="ob-cite-title">{{ s.title or s.url }}</span>
+              <span class="ob-cite-domain">{{ s.url | domain_of }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
       <div class="msg-cards-foot">
         <button class="msg-copy" type="button">Copy step</button>
       </div>
