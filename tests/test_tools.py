@@ -2809,3 +2809,78 @@ async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
     stamped = [m for m in progress_msgs if "host CPU saturated" in m]
     assert stamped, progress_msgs
     assert "environmental" in stamped[0]
+
+
+async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def no_dom_hosts(session):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", no_dom_hosts)
+
+    selector_map = _embed_map(with_frame_doc=True)
+    selector_map[31] = _link_node(
+        31, "https://board.example.com/", target="frame-1", text="Powered by"
+    )
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+        href_regex=r"ashbyhq\.com|jobs\.ashbyhq",
+    )
+    assert not result.error
+    import json as _json
+
+    found = _json.loads(result.extracted_content)
+    assert len(found) == 3
+    assert any("embed_jid=aaa" in l["href"] for l in found)
+    note = result.long_term_memory or ""
+    assert "kept 0 of 3" in note
+    assert "rewrites its anchors to the host page's own URLs" in note
+    assert "embed_jid" in note
+
+
+async def test_gate_bounce_has_no_termination_vocabulary() -> None:
+    from app.agent.tools import register_completeness_gate
+    from browser_use import Tools
+
+    tools = Tools()
+    store = _hints_store()
+    store.add_item({"title": "A"})
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is False
+    text = first.extracted_content
+    assert "execution limit" not in text
+    assert "stop early" not in text
+    assert "Do the work above first" in text
+    assert text.index("Do the work above first") > text.index("mark_absent")

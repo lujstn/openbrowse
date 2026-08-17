@@ -2438,9 +2438,10 @@ def register_tab_tools(
             )
             clipboard["_settle_frameless"] = settle_frameless
 
+            unset = object()
+
             async def _scan(
-                href_override: str | None = None,
-                frame_override: str | None = "unset",
+                href: Any = unset, regex: Any = unset, frame: Any = unset
             ) -> tuple[list[dict[str, Any]], int | None, int, bool]:
                 try:
                     await browser_session.get_browser_state_summary(
@@ -2460,14 +2461,10 @@ def register_tab_tools(
                 return _scan_link_map(
                     selector_map,
                     current,
-                    href_contains=(
-                        href_contains if href_override is None else href_override
-                    ),
-                    href_regex=href_regex,
+                    href_contains=href_contains if href is unset else href,
+                    href_regex=href_regex if regex is unset else regex,
                     frame_url_contains=(
-                        frame_url_contains
-                        if frame_override == "unset"
-                        else frame_override
+                        frame_url_contains if frame is unset else frame
                     ),
                     container=container,
                     attr=attr,
@@ -2498,27 +2495,54 @@ def register_tab_tools(
                 links, frames_matched, anchors_seen, iframe_present = await _scan()
             retried = retries > 0
 
-            # @nonobvious(forced-by): the frame filter can be stably wrong — the
-            # role anchors can sit under a frame target the iframe map never
-            # links to — while the embed-rewritten hrefs carry the vendor's
-            # name (…?ashby_jid=…). Rescanning by href on the same needle
-            # recovers the listing the frame filter cannot see.
+            # @nonobvious(forced-by): embeds rewrite anchors to the HOST page's
+            # URLs, so a caller's vendor-host href filter can never match them
+            # (relaxed frame-only rescan recovers the listing); conversely a
+            # stably-wrong frame filter misses anchors whose rewritten hrefs
+            # still carry the vendor's name (href rescan on the needle).
             salvaged = False
-            if (
+            salvage_note = ""
+            degenerate = (
                 frame_url_contains
-                and not href_contains
-                and not href_regex
                 and frames_matched
                 and len(links) <= 2
                 and anchors_seen > len(links)
-            ):
-                s_links, _, _, _ = await _scan(
-                    href_override=frame_url_contains, frame_override=None
-                )
+            )
+            if degenerate and (href_contains or href_regex):
+                frame_links, _, _, _ = await _scan(href=None, regex=None)
                 # @nonobvious(must-hold): only a listing-shaped salvage counts —
-                # matching just the vendor's own branding anchor would swap one
-                # useless result for another.
+                # swapping one branding anchor for another helps nobody.
+                if len(frame_links) > max(2, len(links)):
+                    kept_hrefs = {link["href"] for link in links}
+                    samples = [
+                        link["href"]
+                        for link in frame_links
+                        if link["href"] not in kept_hrefs
+                    ][:2]
+                    salvage_note = (
+                        f" NOTE: your href filter kept {len(links)} of "
+                        f"{len(frame_links)} link(s) in the matched "
+                        f"'{frame_url_contains}' frame — this embed rewrites its "
+                        "anchors to the host page's own URLs (e.g. "
+                        + ", ".join(samples)
+                        + "), so filters on the vendor's host cannot match them. "
+                        "Returning the frame's full link set instead; each "
+                        "detail page carries the real ATS/apply link."
+                    )
+                    links = frame_links
+                    salvaged = True
+            elif degenerate:
+                s_links, _, _, _ = await _scan(
+                    href=frame_url_contains, regex=None, frame=None
+                )
                 if len(s_links) > max(2, len(links)):
+                    salvage_note = (
+                        f" NOTE: the '{frame_url_contains}' frame filter caught "
+                        "only the embed's own anchor(s); these links were "
+                        "recovered by matching hrefs containing "
+                        f"'{frame_url_contains}' instead, which is the same "
+                        "listing."
+                    )
                     links = s_links
                     salvaged = True
         except _FindLinksError as e:
@@ -2536,8 +2560,8 @@ def register_tab_tools(
             )
             + (f" (after {retries} settle retr{'y' if retries == 1 else 'ies'})" if retried else "")
             + (
-                f"; frame filter caught too few so links matching hrefs "
-                f"containing '{frame_url_contains}' were returned instead"
+                "; caller filters starved the matched frame so a relaxed rescan "
+                "returned the listing"
                 if salvaged
                 else ""
             )
@@ -2621,15 +2645,8 @@ def register_tab_tools(
                 "skips them automatically, so still call it with no args. Pass "
                 "explicit urls only if you DO want an offhost page."
             )
-        unverified_hint = ""
-        if salvaged:
-            unverified_hint = (
-                f" NOTE: the '{frame_url_contains}' frame filter caught only the "
-                "embed's own anchor(s); these links were recovered by matching "
-                f"hrefs containing '{frame_url_contains}' instead, which is the "
-                "same listing."
-            )
-        elif (
+        unverified_hint = salvage_note
+        if not salvaged and (
             frame_url_contains
             and frames_matched
             and len(links) <= 2
@@ -3807,9 +3824,9 @@ def register_completeness_gate(
                     extracted_content=(
                         "Not finished — "
                         + "\n\n".join(parts)
-                        + "\n\nNo step, time or cost limit has been reached: "
-                        "you have ample budget left, so do NOT stop early or claim "
-                        "an execution limit. Then call done again."
+                        + "\n\nYou have ample budget and time remaining. Do the "
+                        "work above first; call done again only once the output "
+                        "is complete."
                         + hints
                         + date_hint
                     ),
