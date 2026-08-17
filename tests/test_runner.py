@@ -1244,3 +1244,13 @@ def test_output_diff_truncates_a_flood():
     rows, truncated = _output_diff("", "\n".join(f"line {i}" for i in range(500)), limit=10)
     assert truncated is True
     assert len(rows) == 10
+
+
+def test_output_diff_elides_a_single_enormous_line():
+    from app.agent.runner import _DIFF_LINE_CHARS, _output_diff
+
+    huge = '  "body": "' + ("x" * 50_000) + '"'
+    rows, _ = _output_diff("", huge)
+    assert rows
+    assert all(len(r["content"]) < _DIFF_LINE_CHARS + 40 for r in rows)
+    assert "chars>" in rows[0]["content"]

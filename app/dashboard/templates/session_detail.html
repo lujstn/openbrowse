@@ -903,7 +903,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!target) return;
     const row = target.closest(".msg-row");
     if (!row) return;
-    row.classList.toggle("expanded");
+    OpenBrowseAgents.setRowExpanded(row, !row.classList.contains("expanded"));
   });
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);

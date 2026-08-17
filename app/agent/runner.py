@@ -168,6 +168,16 @@ _GOAL_PROMPT = (
 )
 
 
+_DIFF_LINE_CHARS = 200
+
+
+def _elide_diff_line(text: str) -> str:
+    # @nonobvious(mirrors): the store elides any string past 200 characters for
+    # display; one schema field holding an article body is a single JSON line,
+    # and these rows are persisted and re-sent on every step.
+    return text if len(text) <= _DIFF_LINE_CHARS else text[:_DIFF_LINE_CHARS] + f"… <{len(text)} chars>"
+
+
 def _output_diff(
     before: str, after: str, limit: int = 60
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -182,10 +192,10 @@ def _output_diff(
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new).get_opcodes():
         if tag in ("replace", "delete"):
             for k in range(i1, i2):
-                rows.append({"type": "removed", "line": k + 1, "content": old[k]})
+                rows.append({"type": "removed", "line": k + 1, "content": _elide_diff_line(old[k])})
         if tag in ("replace", "insert"):
             for k in range(j1, j2):
-                rows.append({"type": "added", "line": k + 1, "content": new[k]})
+                rows.append({"type": "added", "line": k + 1, "content": _elide_diff_line(new[k])})
         if len(rows) > limit:
             break
     return rows[:limit], len(rows) > limit

@@ -145,6 +145,21 @@ def _mdlite(text: str) -> Markup:
     return Markup("".join(out))
 
 
+def _safe_url(url: str) -> str:
+    """An href the dashboard is willing to make clickable, or "" .
+
+    @nonobvious(must-hold): escaping does not disarm a URI scheme, and these
+    links are collected from whatever pages a task pointed the agent at, so a
+    scraped javascript: href would otherwise run in the dashboard's own origin.
+    """
+    raw = str(url or "").strip()
+    try:
+        scheme = urlparse(raw).scheme.lower()
+    except ValueError:
+        return ""
+    return raw if scheme in ("http", "https") else ""
+
+
 def _domain_of(url: str) -> str:
     try:
         return urlparse(str(url or "")).netloc.removeprefix("www.")
@@ -154,6 +169,7 @@ def _domain_of(url: str) -> str:
 
 templates.env.filters["mdlite"] = _mdlite
 templates.env.filters["domain_of"] = _domain_of
+templates.env.filters["safe_url"] = _safe_url
 
 
 def _usd(value: Any) -> str:

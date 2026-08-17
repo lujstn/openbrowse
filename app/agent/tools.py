@@ -2352,9 +2352,10 @@ def register_tab_tools(
             )
             if source_sink is not None:
                 for page in pages:
-                    url = str(page.get("url") or "")
-                    if url and not page.get("error"):
-                        source_sink.append({"url": url, "title": str(page.get("title") or "")})
+                    url = str(page.get("url") or "").strip()
+                    if page.get("error") or urlparse(url).scheme not in ("http", "https"):
+                        continue
+                    source_sink.append({"url": url, "title": str(page.get("title") or "")})
 
             saved: str | None = "pages.json"
             try:

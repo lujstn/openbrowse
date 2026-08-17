@@ -663,3 +663,39 @@ def test_sources_render_as_citations():
     assert "https://www.bbc.co.uk/news/one" in html
     assert ">bbc.co.uk<" in html
     assert "has-cards" in html
+
+
+def test_safe_url_refuses_a_scraped_script_scheme():
+    from app.dashboard.routes import _safe_url
+
+    assert _safe_url("https://example.com/a") == "https://example.com/a"
+    assert _safe_url("http://example.com/a") == "http://example.com/a"
+    assert _safe_url("javascript:alert(document.cookie)") == ""
+    assert _safe_url("  javascript:alert(1)") == ""
+    assert _safe_url("JavaScript:alert(1)") == ""
+    assert _safe_url("data:text/html,<script>alert(1)</script>") == ""
+    assert _safe_url("") == ""
+
+
+def test_a_scripted_source_url_never_becomes_a_link():
+    import json
+
+    from app.dashboard.routes import _format_relative_time, templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "type": "result",
+            "created_at": "2026-08-17T15:00:00+00:00",
+            "summary": "read_pages: 1/1 pages",
+            "data": json.dumps({
+                "category": "read",
+                "action": "read_pages",
+                "sources": [
+                    {"url": "javascript:alert(document.cookie)", "title": "Trap"}
+                ],
+            }),
+        }],
+        format_relative=_format_relative_time,
+    )
+    assert "href=" not in html
+    assert "javascript:alert" not in html.replace("&#34;", '"').split("ob-cite-title")[0]

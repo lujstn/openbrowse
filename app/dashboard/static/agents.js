@@ -309,8 +309,20 @@
     revealClose(this.container);
   };
 
+  // @nonobvious(must-hold): the collapsed panel is only clipped, never removed
+  // from the layout, so its Copy button and source links stay focusable and
+  // readable unless it is also made inert.
+  function setRowExpanded(rowEl, open) {
+    var cards = rowEl && rowEl.querySelector(".msg-cards");
+    if (!cards) return;
+    rowEl.classList.toggle("expanded", !!open);
+    cards.inert = !open;
+    var caret = rowEl.querySelector(".msg-caret");
+    if (caret) caret.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
   function revealCardsForHandoff(rowEl) {
-    if (rowEl && rowEl.querySelector(".msg-cards")) rowEl.classList.add("expanded");
+    setRowExpanded(rowEl, true);
   }
 
   function fadeRowIn(rowEl) {
@@ -631,6 +643,7 @@
     renderCode: renderCode,
     highlight: highlight,
     TodoList: TodoList,
+    setRowExpanded: setRowExpanded,
     handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
   };
 })(window);
