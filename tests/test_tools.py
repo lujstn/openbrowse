@@ -1610,3 +1610,65 @@ async def test_read_one_page_still_fails_on_hollow_main_doc(monkeypatch) -> None
         set(),
     )
     assert page.get("error")
+
+
+def _apply_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sourceUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "applyUrl": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "ApplyT"))
+
+
+def test_draft_row_rejects_footer_text_and_fills_apply_url_from_links() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _apply_store()
+    page = {
+        "url": "https://x.com/jobs/role-1",
+        "title": "Large Loss Handler",
+        "text": "Large Loss Handler\nApply\nPowered by\nAshbyHQ\n" + "About the role " * 60,
+        "jsonld": None,
+        "links": [
+            {"text": "Home", "href": "https://x.com/"},
+            {
+                "text": "Apply for this job",
+                "href": "https://jobs.ashbyhq.com/m/role-1/application",
+            },
+            {"text": "Powered by", "href": "javascript:void(0)"},
+        ],
+    }
+    row = _draft_row(store, page)
+    assert row.get("applyUrl") == "https://jobs.ashbyhq.com/m/role-1/application"
+
+
+def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _apply_store()
+    page = {
+        "url": "https://x.com/jobs/role-1",
+        "title": "Role",
+        "text": "Role\nApply\nPowered by\nAshbyHQ\n" + "About the role " * 60,
+        "jsonld": None,
+        "links": [{"text": "Home", "href": "https://x.com/"}],
+    }
+    row = _draft_row(store, page)
+    assert row.get("applyUrl") in (None, "")

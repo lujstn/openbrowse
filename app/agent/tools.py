@@ -2718,6 +2718,40 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             if _try_set(fname, value):
                 break
 
+    if isinstance(page.get("links"), list):
+        # @nonobvious(forced-by): visible text near a link is unreliable for URL
+        # fields (Ashby renders "Apply" then "Powered by", which token-matched
+        # applyUrl); the anchors' own hrefs are the trustworthy source, matched
+        # by field-name tokens against the href path and link text.
+        for fname in fields:
+            if fname in row or not re.fullmatch(
+                r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)", fname
+            ):
+                continue
+            want = _name_tokens(fname) - {"url", "uri", "link", "href"}
+            if not want:
+                continue
+            for link in page["links"]:
+                href = str((link or {}).get("href") or "")
+                if not href.startswith(("http://", "https://")):
+                    continue
+                hay = set(
+                    re.split(
+                        r"[^a-z0-9]+",
+                        (href + " " + str((link or {}).get("text") or "")).lower(),
+                    )
+                ) - {""}
+                if all(
+                    any(
+                        w == h
+                        or (len(w) >= 4 and h.startswith(w))
+                        or (len(h) >= 4 and w.startswith(h))
+                        for h in hay
+                    )
+                    for w in want
+                ) and _try_set(fname, href):
+                    break
+
     title_candidates = [f for f in fields if "title" in f.lower() or f.lower() == "name"]
     if title_candidates and title_candidates[0] not in row and page.get("title"):
         _try_set(title_candidates[0], page["title"])
