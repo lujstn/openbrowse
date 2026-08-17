@@ -1,5 +1,5 @@
 {% for s in sessions %}
-{% set d_status = 'running' if s.status in ('running', 'created') else
+{% set d_status = 'queued' if s.status == 'created' else 'running' if s.status == 'running' else
 'failed' if s.status == 'error' else 'success' if s.status in ('stopped',
 'idle') and s.is_task_successful == 1 else 'warning' if s.status in
 ('stopped', 'idle') and s.is_task_successful == 0 else 'stopped' %}
