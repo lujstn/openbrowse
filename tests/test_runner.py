@@ -818,3 +818,115 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
 
     assert await llm._drain_stream(FakeStream()) == "final"
     assert any(p.startswith("💭 checking the") for p in pushes)
+
+
+def _review_history(done: bool, verdict, reason: str = "needs work"):
+    import types as _t
+
+    judgement = None
+    if verdict is not None:
+        judgement = _t.SimpleNamespace(
+            verdict=verdict, failure_reason=reason, reasoning=""
+        )
+    step = _t.SimpleNamespace(result=[_t.SimpleNamespace(judgement=judgement)])
+    return _t.SimpleNamespace(
+        history=[step],
+        is_done=lambda: done,
+        is_successful=lambda: done,
+    )
+
+
+class _ReviewStore:
+    def __init__(self) -> None:
+        self.value = "v1"
+
+    def read_output(self) -> str:
+        return self.value
+
+
+async def test_run_with_review_loops_until_reviewer_passes(monkeypatch) -> None:
+    import types as _t
+
+    from app.agent import runner as runner_mod
+
+    events: list[str] = []
+
+    async def fake_create_message(**kwargs):
+        events.append(kwargs.get("summary") or "")
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+
+    histories = [
+        _review_history(True, False, "fix the empty fields"),
+        _review_history(True, True),
+    ]
+    tasks: list[str] = []
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
+    store = _ReviewStore()
+
+    async def run_agent():
+        return histories.pop(0)
+
+    final = await runner_mod._run_with_review(agent, store, "sid", run_agent)
+    assert final.is_successful() is True
+    assert len(tasks) == 1
+    assert "fix the empty fields" in tasks[0]
+    assert "you may reply via done" in tasks[0]
+    assert events == ["fix the empty fields"]
+
+
+async def test_run_with_review_forces_changes_after_two_justifications(
+    monkeypatch,
+) -> None:
+    import types as _t
+
+    from app.agent import runner as runner_mod
+
+    async def fake_create_message(**kwargs):
+        return None
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+
+    histories = [
+        _review_history(True, False, "round 1"),
+        _review_history(True, False, "round 2"),
+        _review_history(True, False, "round 3"),
+        _review_history(True, False, "round 4"),
+    ]
+    tasks: list[str] = []
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
+    store = _ReviewStore()
+
+    async def run_agent():
+        return histories.pop(0)
+
+    await runner_mod._run_with_review(agent, store, "sid", run_agent)
+    assert len(tasks) == runner_mod._MAX_REVIEW_ROUNDS
+    assert "you may reply via done" in tasks[0]
+    assert "you may reply via done" in tasks[1]
+    assert "your replies are used up" in tasks[2]
+
+
+async def test_run_with_review_skips_failed_or_passing_runs(monkeypatch) -> None:
+    import types as _t
+
+    from app.agent import runner as runner_mod
+
+    called: list[str] = []
+
+    async def fake_create_message(**kwargs):
+        called.append("event")
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: called.append("task"))
+
+    async def run_pass():
+        return _review_history(True, True)
+
+    await runner_mod._run_with_review(agent, None, "sid", run_pass)
+
+    async def run_failed():
+        return _review_history(False, False)
+
+    await runner_mod._run_with_review(agent, None, "sid", run_failed)
+    assert called == []

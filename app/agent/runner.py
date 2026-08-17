@@ -157,6 +157,86 @@ class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
 
 
+_MAX_REVIEW_ROUNDS = 3
+_MAX_REVIEW_JUSTIFICATIONS = 2
+
+
+def _last_judgement(history: Any) -> Any:
+    try:
+        return getattr(history.history[-1].result[-1], "judgement", None)
+    except (IndexError, AttributeError):
+        return None
+
+
+def _review_message(reason: str, replies_left: int) -> str:
+    if replies_left > 0:
+        plural = "replies" if replies_left != 1 else "reply"
+        return (
+            "A reviewer has assessed your submitted result and requests "
+            f"changes:\n\n{reason}\n\nIf the review is right, make those "
+            "changes now and submit with done again. If you are confident the "
+            "review is wrong, you may reply via done explaining why "
+            f"({replies_left} {plural} remaining) — do not just restate what "
+            "you already said."
+        )
+    return (
+        "The reviewer still requests changes and your replies are used "
+        f"up:\n\n{reason}\n\nApply the requested changes now as far as the "
+        "site's content allows, then submit with done again. Where the review "
+        "asks for something the source genuinely does not publish, state that "
+        "explicitly in your done text."
+    )
+
+
+async def _run_with_review(
+    agent: Any,
+    store: "OutputStore | None",
+    session_id: str,
+    run_agent,
+) -> Any:
+    """Run the agent, then loop while the reviewer requests changes on a run
+    that would otherwise complete as a success: the review re-enters the agent
+    as a continuation turn. The model may talk back — a continuation that
+    leaves the output untouched counts as a justification, and after
+    ``_MAX_REVIEW_JUSTIFICATIONS`` of those the message demands the changes.
+    ``_MAX_REVIEW_ROUNDS`` bounds the whole conversation; the final verdict is
+    recorded either way.
+    """
+    history = await run_agent()
+    justifications = 0
+    for _ in range(_MAX_REVIEW_ROUNDS):
+        judgement = _last_judgement(history)
+        provisional_ok = history.is_done() and (history.is_successful() is not False)
+        if judgement is None or bool(judgement.verdict) or not provisional_ok:
+            break
+        reason = " ".join(
+            (judgement.failure_reason or judgement.reasoning or "").split()
+        )[:4000]
+        if not reason:
+            break
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            summary=reason,
+            data=json.dumps(
+                {"category": "judge", "action": "review", "verdict": "changes"}
+            ),
+            count_step=False,
+        )
+        snapshot = store.read_output() if store is not None else None
+        replies_left = _MAX_REVIEW_JUSTIFICATIONS - justifications
+        message = _review_message(reason, replies_left)
+        try:
+            agent.add_new_task(message)
+        except AttributeError:
+            agent._message_manager.add_new_task(message)
+        history = await run_agent()
+        if store is not None and store.read_output() == snapshot:
+            justifications += 1
+    return history
+
+
 _STORE_ONLY_ACTIONS = {
     "add_item",
     "update_item",
@@ -1497,7 +1577,12 @@ async def run_agent_session(session_id: str) -> None:
                 await agent.file_system.write_file("output.json", store.read_output())
             except Exception:
                 logger.debug("initial output.json mirror failed", exc_info=True)
-        history = await agent.run(on_step_start=on_step_start, on_step_end=on_step_end)
+        history = await _run_with_review(
+            agent,
+            store,
+            session_id,
+            lambda: agent.run(on_step_start=on_step_start, on_step_end=on_step_end),
+        )
 
         file_output = ""
         try:
@@ -1579,11 +1664,7 @@ async def run_agent_session(session_id: str) -> None:
             total_cost_usd=total_cost,
         )
 
-        judgement = None
-        try:
-            judgement = getattr(history.history[-1].result[-1], "judgement", None)
-        except (IndexError, AttributeError):
-            pass
+        judgement = _last_judgement(history)
         if judgement is not None and bool(judgement.verdict) != bool(is_successful):
             judge_word = "PASS" if judgement.verdict else "FAIL"
             own_word = "success" if is_successful else "failure"
