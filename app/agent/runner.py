@@ -27,7 +27,7 @@ from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 from app.agent import cost
 from app import system_metrics
 from app.agent.code_stream import CodeStreamObserver
-from app.agent.activity import clear_activity, set_activity
+from app.agent.activity import clear_activity, set_activity, set_coverage
 from app.agent.leak_repair import (
     is_missing_action_error,
     mistyped_action_params,
@@ -1657,6 +1657,12 @@ async def run_agent_session(session_id: str) -> None:
                 if started
                 else None
             )
+            if store is not None:
+                try:
+                    set_coverage(session_id, store.coverage_items())
+                except Exception:
+                    logger.debug("coverage snapshot failed", exc_info=True)
+
             row_data: dict[str, Any] = {
                 "step": step_count,
                 "duration_s": duration_s,

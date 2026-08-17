@@ -360,6 +360,97 @@
   color: #f78c6c;
 }
 
+.ob-todo {
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius-md);
+  background: var(--ob-surface);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.ob-todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: 0;
+  color: var(--ob-text-dim);
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.ob-todo-title {
+  flex: 1;
+  text-align: left;
+}
+.ob-todo-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ob-text-faint);
+  letter-spacing: 0;
+}
+.ob-todo-chev {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.24s var(--ob-ease-out);
+}
+.ob-todo.is-closed .ob-todo-chev {
+  transform: rotate(-45deg);
+}
+.ob-todo-list {
+  margin: 0;
+  padding: 0 10px 8px 10px;
+  list-style: none;
+  max-height: 248px;
+  overflow-y: auto;
+}
+.ob-todo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--ob-text-muted);
+}
+.ob-todo-ico {
+  flex: none;
+  color: var(--ob-text-faint);
+}
+.ob-todo-row.is-done .ob-todo-ico {
+  color: var(--ob-success);
+}
+.ob-todo-row.is-partial .ob-todo-ico {
+  color: var(--ob-accent);
+}
+.ob-todo-row.is-absent .ob-todo-ico {
+  color: var(--ob-text-faint);
+}
+.ob-todo-field {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ob-todo-row.is-done .ob-todo-field {
+  color: var(--ob-text);
+}
+.ob-todo-row.is-absent .ob-todo-field {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+.ob-todo-detail {
+  flex: none;
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,
@@ -368,7 +459,8 @@
   .msg-cards,
   .ob-row-enter,
   .ob-composer-shell,
-  .ob-composer-send {
+  .ob-composer-send,
+  .ob-todo-chev {
     transition: none !important;
   }
 }

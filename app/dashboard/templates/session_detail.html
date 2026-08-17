@@ -595,6 +595,7 @@ OpenBrowse{% endblock %} {% block head %}
       <div id="completion-card" class="completion-card hidden"></div>
       <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="stream-bar" class="hidden"></div>
+      <div id="coverage-bar" class="hidden"></div>
       <div id="feed-rows"></div>
     </div>
     {% if session.keep_alive %}
@@ -641,6 +642,9 @@ document.addEventListener("DOMContentLoaded", function () {
   const activityBar = document.getElementById("activity-bar");
   const streamingResponse = new OpenBrowseAgents.StreamingResponse(
     document.getElementById("stream-bar")
+  );
+  const coverageList = new OpenBrowseAgents.TodoList(
+    document.getElementById("coverage-bar")
   );
 
   function buildSpinBars() {
@@ -962,6 +966,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       const dstat = displayStatus(data.status, data.isTaskSuccessful);
       syncFollowup(data.status);
+      coverageList.update(data.coverage);
       document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-d-" + dstat;

@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
 from app import system_metrics
-from app.agent.activity import get_activity
+from app.agent.activity import get_activity, get_coverage
 from app.agent.pool import pool
 from app.agent.runner import (
     _category_for,
@@ -839,6 +839,7 @@ async def sse_session_messages(request: Request, session_id: str):
                     "provider": model_provider(session.get("model")),
                     "output": session.get("output") or "",
                     "activity": get_activity(session_id),
+                    "coverage": get_coverage(session_id),
                     "isTaskSuccessful": session.get("is_task_successful"),
                 })
                 if payload != last_status_payload:

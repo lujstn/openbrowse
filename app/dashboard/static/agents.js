@@ -549,6 +549,79 @@
     this.sendBtn.disabled = this._loading && !this.onStop;
   };
 
+  var TODO_CIRCUMFERENCE = 2 * Math.PI * 8;
+
+  function todoIcon(state, fraction) {
+    var ring =
+      '<circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="1.6"' +
+      (state === "pending" ? ' stroke-dasharray="2 3"' : "") +
+      ' opacity="' + (state === "pending" ? "0.5" : "0.28") + '"/>';
+    var mark = "";
+    if (state === "done") {
+      mark =
+        '<path d="M6.2 10.2 8.8 12.8 13.8 7.4" fill="none" stroke="currentColor" ' +
+        'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>';
+    } else if (state === "absent") {
+      mark =
+        '<path d="M7 7 13 13M13 7 7 13" fill="none" stroke="currentColor" ' +
+        'stroke-width="1.7" stroke-linecap="round"/>';
+    } else if (state === "partial") {
+      var filled = Math.max(0, Math.min(1, fraction || 0)) * TODO_CIRCUMFERENCE;
+      mark =
+        '<circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" ' +
+        'stroke-width="1.9" stroke-linecap="round" transform="rotate(-90 10 10)" ' +
+        'stroke-dasharray="' + filled + " " + TODO_CIRCUMFERENCE + '"/>';
+    }
+    return '<svg class="ob-todo-ico" viewBox="0 0 20 20" width="15" height="15">' + ring + mark + "</svg>";
+  }
+
+  function TodoList(container) {
+    this.container = container;
+    this.container.className = "ob-todo hidden";
+    this.container.innerHTML =
+      '<button type="button" class="ob-todo-head">' +
+      '<span class="ob-todo-title">Schema coverage</span>' +
+      '<span class="ob-todo-count"></span><span class="ob-todo-chev"></span></button>' +
+      '<div class="ob-todo-body ob-reveal is-open"><ol class="ob-reveal-inner ob-todo-list"></ol></div>';
+    this.head = this.container.querySelector(".ob-todo-head");
+    this.count = this.container.querySelector(".ob-todo-count");
+    this.body = this.container.querySelector(".ob-todo-body");
+    this.list = this.container.querySelector(".ob-todo-list");
+    this._signature = null;
+    var self = this;
+    this.head.addEventListener("click", function () {
+      self.body.classList.toggle("is-open");
+      self.container.classList.toggle("is-closed", !self.body.classList.contains("is-open"));
+    });
+  }
+
+  TodoList.prototype.update = function (items) {
+    if (!items || !items.length) {
+      this.container.classList.add("hidden");
+      return;
+    }
+    var signature = JSON.stringify(items);
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this.container.classList.remove("hidden");
+    var done = 0;
+    var html = items
+      .map(function (it) {
+        if (it.state === "done") done += 1;
+        var detail = it.detail ? '<span class="ob-todo-detail">' + escapeHtml(it.detail) + "</span>" : "";
+        return (
+          '<li class="ob-todo-row is-' + escapeHtml(it.state) + '">' +
+          todoIcon(it.state, it.fraction) +
+          '<span class="ob-todo-field">' + escapeHtml(it.field) + "</span>" +
+          detail +
+          "</li>"
+        );
+      })
+      .join("");
+    this.list.innerHTML = html;
+    this.count.textContent = done + "/" + items.length;
+  };
+
   global.OpenBrowseAgents = {
     renderMdLite: renderMdLite,
     reveal: { open: revealOpen, close: revealClose },
@@ -557,6 +630,7 @@
     PromptInput: PromptInput,
     renderCode: renderCode,
     highlight: highlight,
+    TodoList: TodoList,
     handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
   };
 })(window);

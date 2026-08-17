@@ -446,3 +446,30 @@ def test_read_output_compact_elides_long_values() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_coverage_items_mirror_the_prose_summary():
+    store = OutputStore(json_schema_to_pydantic(SCHEMA))
+    store.add_item({"title": "One", "url": "https://example.com/1", "department": "Eng"})
+    store.add_item({"title": "Two", "url": "https://example.com/2"})
+    store.mark_absent("location", "the site does not publish it")
+
+    items = {it["field"]: it for it in store.coverage_items()}
+
+    assert items["items"]["state"] == "done"
+    assert items["items"]["detail"] == "2 item(s)"
+    assert items["title"]["state"] == "done"
+    assert items["department"]["state"] == "partial"
+    assert items["department"]["fraction"] == 0.5
+    assert items["department"]["detail"] == "1 of 2"
+    assert items["location"]["state"] == "absent"
+    assert items["description"]["state"] == "pending"
+    assert items["indexPageUrl"]["state"] == "pending"
+
+
+def test_coverage_items_on_an_empty_store():
+    store = OutputStore(json_schema_to_pydantic(SCHEMA))
+    states = {it["field"]: it["state"] for it in store.coverage_items()}
+    assert states["items"] == "pending"
+    assert states["title"] == "pending"
+    assert all(s in {"pending", "absent", "done", "partial"} for s in states.values())

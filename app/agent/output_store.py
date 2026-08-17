@@ -498,6 +498,71 @@ class OutputStore:
             parts.append("top-level not set: " + ", ".join(top_unset))
         return "Coverage — " + "; ".join(parts) + "."
 
+    def coverage_items(self) -> list[dict[str, Any]]:
+        """The same fill-state as ``coverage_summary``, one entry per field, for a
+        caller that wants to draw it rather than read it.
+
+        ``fraction`` is None wherever there is nothing partial to measure: a
+        top-level field is set or it is not.
+        """
+        items: list[dict[str, Any]] = []
+        if self._array_field:
+            arr = self._data.get(self._array_field) or []
+            total = len(arr)
+            items.append({
+                "field": self._array_field,
+                "state": "done" if total else "pending",
+                "fraction": None,
+                "detail": f"{total} item(s)",
+            })
+            if self._item_model is not None:
+                for fname in self._item_model.model_fields:
+                    if fname in self._absent:
+                        items.append({
+                            "field": fname,
+                            "state": "absent",
+                            "fraction": None,
+                            "detail": self._absent[fname],
+                        })
+                        continue
+                    filled = sum(
+                        1
+                        for it in arr
+                        if isinstance(it, dict) and not _is_empty_value(it.get(fname))
+                    )
+                    if not total:
+                        state, detail = "pending", "no items yet"
+                    elif filled == total:
+                        state, detail = "done", f"on all {total}"
+                    elif filled:
+                        state, detail = "partial", f"{filled} of {total}"
+                    else:
+                        state, detail = "pending", f"none of {total}"
+                    items.append({
+                        "field": fname,
+                        "state": state,
+                        "fraction": (filled / total) if total else None,
+                        "detail": detail,
+                    })
+        for name, value in self._data.items():
+            if name == self._array_field:
+                continue
+            if name in self._absent:
+                items.append({
+                    "field": name,
+                    "state": "absent",
+                    "fraction": None,
+                    "detail": self._absent[name],
+                })
+            else:
+                items.append({
+                    "field": name,
+                    "state": "pending" if _is_empty_value(value) else "done",
+                    "fraction": None,
+                    "detail": "",
+                })
+        return items
+
     def extra_key_hints(self) -> list[str]:
         """Detect raw captured keys that look like they fill an empty schema field
         (extra.datePublished vs an empty publishedAt), so the gate can point at a bulk
