@@ -1708,3 +1708,28 @@ async def test_done_text_untouched_when_store_empty() -> None:
     second = await entry.function(params=params, file_system=fs)
     assert second.is_done is True
     assert params.text == "all done"
+
+
+async def test_judge_injection_elides_long_values_keeping_all_records() -> None:
+    from app.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    for i in range(16):
+        store.add_item(
+            {
+                "title": f"Item {i}",
+                "sourceUrl": f"https://x.com/{i}",
+                "description": "long text " * 200,
+            }
+        )
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    fs = _FakeFileSystem()
+    result = await entry.function(params=params, file_system=fs)
+    assert result.is_done is True
+    assert "FINAL STRUCTURED OUTPUT" in params.text
+    assert "long values elided" in params.text
+    for i in range(16):
+        assert f"Item {i}" in params.text, i

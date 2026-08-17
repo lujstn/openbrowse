@@ -3313,11 +3313,20 @@ def register_completeness_gate(
         if not store.is_empty():
             try:
                 answer = store.read_output()
+                elision_note = ""
+                if len(answer) > _JUDGE_ANSWER_CAP:
+                    # @nonobvious(forced-by): a raw cap cuts mid-record and the
+                    # judge fails the run as truncated; eliding long values keeps
+                    # every record visible in the same budget.
+                    answer = json.dumps(
+                        elide_long_values(json.loads(answer))[0], default=str
+                    )
+                    elision_note = "; long values elided for review"
                 if len(answer) > _JUDGE_ANSWER_CAP:
                     answer = answer[:_JUDGE_ANSWER_CAP] + "\n…[truncated for length]"
                 params.text = (
-                    f"FINAL STRUCTURED OUTPUT ({store.coverage_summary()}):\n"
-                    f"{answer}\n\n{params.text}"
+                    f"FINAL STRUCTURED OUTPUT ({store.coverage_summary()}"
+                    f"{elision_note}):\n{answer}\n\n{params.text}"
                 )
             except Exception:
                 logger.debug("judge answer injection failed", exc_info=True)
