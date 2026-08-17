@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 
 ONE_M_BETA = "context-1m-2025-08-07"
 
+_REASONING_PUSH_INTERVAL_S = 0.15
+_REASONING_LABEL = "💭 Thinking"
+
 _live_agents: dict[str, Any] = {}
 
 
@@ -479,13 +482,10 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ):
                     parts.append(getattr(event, "delta", "") or "")
                     now = loop.time()
-                    text = " ".join("".join(parts).split())
-                    if now - last_push > 0.4:
+                    if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
-                        snippet = (
-                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
-                        )
-                        set_activity(sid, snippet, spin=True)
+                        text = " ".join("".join(parts).split())
+                        set_activity(sid, _REASONING_LABEL, spin=True, stream=text)
             return await stream.get_final_response()
 
     async def _create(self, params: dict[str, Any]) -> Any:
@@ -601,8 +601,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         if summary:
             self._last_model_reasoning = summary
             if sid:
-                snippet = summary[:140] + ("…" if len(summary) > 140 else "")
-                set_activity(sid, f"💭 {snippet}")
+                set_activity(sid, _REASONING_LABEL, stream=summary)
         await _settle_code_stream(self, result, output_format)
         return result
 
@@ -755,25 +754,21 @@ class _RepairingChatAnthropic(ChatAnthropic):
             etype = getattr(event, "type", "")
             if sid and etype == "content_block_start":
                 block = getattr(event, "content_block", None)
+                # @nonobvious(forced-by): adaptive thinking reasons privately and
+                # can open a block then stay silent for tens of seconds, so the
+                # label goes up on the block itself rather than the first delta.
                 if getattr(block, "type", None) == "thinking":
-                    set_activity(sid, "💭 Thinking…", spin=True)
+                    set_activity(sid, _REASONING_LABEL, spin=True)
             if sid and etype == "content_block_delta":
                 delta = getattr(event, "delta", None)
                 chunk = getattr(delta, "thinking", None)
                 if chunk:
                     think_parts.append(chunk)
                     now = loop.time()
-                    text = " ".join("".join(think_parts).split())
-                    if now - last_push > 0.4:
+                    if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
-                        # @nonobvious(forced-by): adaptive thinking reasons
-                        # privately and can stream a lone fragment then go
-                        # silent for tens of seconds; a stuck "💭 I" reads as
-                        # broken, so short accumulations show as Thinking….
-                        snippet = (
-                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
-                        )
-                        set_activity(sid, snippet, spin=True)
+                        text = " ".join("".join(think_parts).split())
+                        set_activity(sid, _REASONING_LABEL, spin=True, stream=text)
             if observer is None:
                 continue
             if etype == "input_json" and getattr(event, "partial_json", ""):
@@ -789,8 +784,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
             self._last_model_reasoning = thinking_text
             sid = getattr(self, "_activity_session", None)
             if sid:
-                snippet = thinking_text[:140] + ("…" if len(thinking_text) > 140 else "")
-                set_activity(sid, f"💭 {snippet}")
+                set_activity(sid, _REASONING_LABEL, stream=thinking_text)
         return result
 
     async def _ainvoke_inner(
