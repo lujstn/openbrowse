@@ -418,6 +418,7 @@ _READ_PAGES_MIN_WAVE_S = 30.0
 _PAGE_READY_TIMEOUT_S = 25.0
 _FRAME_MATCH_GRACE_S = 6.0
 _MIN_PAGE_TEXT_CHARS = 200
+_JUDGE_ANSWER_CAP = 8000
 _JSONLD_GRACE_S = 3.0
 
 
@@ -3324,4 +3325,18 @@ def register_completeness_gate(
                         "Then call done again." + hints + date_hint
                     ),
                 )
+        # @nonobvious(forced-by): browser-use's judge evaluates the done text,
+        # not our answer store — without the store's JSON prepended it sees only
+        # prose and returns FAIL against a perfectly complete structured output.
+        if not store.is_empty():
+            try:
+                answer = store.read_output()
+                if len(answer) > _JUDGE_ANSWER_CAP:
+                    answer = answer[:_JUDGE_ANSWER_CAP] + "\n…[truncated for length]"
+                params.text = (
+                    f"FINAL STRUCTURED OUTPUT ({store.coverage_summary()}):\n"
+                    f"{answer}\n\n{params.text}"
+                )
+            except Exception:
+                logger.debug("judge answer injection failed", exc_info=True)
         return await original_done(params=params, file_system=file_system)

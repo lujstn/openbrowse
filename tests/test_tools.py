@@ -1672,3 +1672,39 @@ def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
     }
     row = _draft_row(store, page)
     assert row.get("applyUrl") in (None, "")
+
+
+async def test_done_text_carries_store_output_for_judge() -> None:
+    from app.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item(
+        {"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300}
+    )
+    store.mark_absent("description", "checked")
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    fs = _FakeFileSystem()
+    result = await entry.function(params=params, file_system=fs)
+    assert result.is_done is True
+    assert "FINAL STRUCTURED OUTPUT" in params.text
+    assert '"title": "A"' in params.text
+    assert params.text.rstrip().endswith("all done")
+
+
+async def test_done_text_untouched_when_store_empty() -> None:
+    from app.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    fs = _FakeFileSystem()
+    first = await entry.function(params=params, file_system=fs)
+    assert first.is_done is False
+    second = await entry.function(params=params, file_system=fs)
+    assert second.is_done is True
+    assert params.text == "all done"

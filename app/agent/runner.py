@@ -1488,6 +1488,28 @@ async def run_agent_session(session_id: str) -> None:
             and (history.is_successful() is not False)
             and schema_valid
         )
+        # @nonobvious(means): a run that died before calling done (step timeout,
+        # attrition) but left a complete, valid store has delivered the answer —
+        # the completeness gate's own deficiency check is the arbiter.
+        if not is_successful and not history.is_done() and from_store and schema_valid:
+            try:
+                from app.agent.tools import _gate_empty_fields
+
+                if store is not None and not _gate_empty_fields(store, clipboard):
+                    is_successful = True
+                    await crud.create_message(
+                        session_id=session_id,
+                        role="ai",
+                        msg_type="event",
+                        summary=(
+                            "Run ended without done, but the output store is "
+                            "complete and schema-valid — recorded as success"
+                        ),
+                        data=json.dumps({"category": "judge", "action": "storeComplete"}),
+                        count_step=False,
+                    )
+            except Exception:
+                logger.debug("store-complete success check failed", exc_info=True)
 
         usage_history = agent.token_cost_service.usage_history
         llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
