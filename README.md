@@ -27,7 +27,7 @@ Given the same real-world extraction task (a careers page with 16 records behind
 | **OpenBrowse** | **gpt-5.6-terra** | **none** | **1m 47s** | **202k** | **$0.24** | **14/14** |
 | **OpenBrowse** | **claude-sonnet-5** | **high** | 4m 02s | **242k** | **$0.40** | **14/14** |
 
-<sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were inferred rather than shown on the page.</i></sub>
+<sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were hallucinated when not shown on the page.</i></sub>
 
 ## Why OpenBrowse over BU Cloud?
 
@@ -65,9 +65,9 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | OpenBrowse | gpt-5.6-terra | none | 11 | **1m 47s** | **202k** | **$0.24** | 14/14 |
 | OpenBrowse | gpt-5.6-luna | max | 36 | 17m 03s | 1.08M | $0.22 | 14/14 |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
-| OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | claude-opus-5 | none | 17 | 4m 53s | 480k | $1.62 | 14/14 |
 
-<sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were inferred rather than shown on the page.</i></sub>
+<sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were hallucinated when not shown on the page.</i></sub>
 
 OpenAI and Anthropic models are generally at their best at the opposite ends of the reasoning dial. For example, OpenAI's GPT-5.6-Terra performs better with less reasoning, spending less time planning ahead and more time reacting to the page in front of it, while Anthropic's 5-series Claude models lean towards rabbit holes and need reasoning time to refocus on the goal.
 
