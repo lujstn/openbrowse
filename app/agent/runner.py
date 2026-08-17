@@ -194,6 +194,7 @@ async def _run_with_review(
     store: "OutputStore | None",
     session_id: str,
     run_agent,
+    review_state: dict[str, Any] | None = None,
 ) -> Any:
     """Run the agent, then loop while the reviewer requests changes on a run
     that would otherwise complete as a success: the review re-enters the agent
@@ -203,6 +204,8 @@ async def _run_with_review(
     ``_MAX_REVIEW_ROUNDS`` bounds the whole conversation; the final verdict is
     recorded either way.
     """
+    if review_state is None:
+        review_state = {"round": 0, "snapshot": None}
     history = await run_agent()
     justifications = 0
     for _ in range(_MAX_REVIEW_ROUNDS):
@@ -226,6 +229,8 @@ async def _run_with_review(
             count_step=False,
         )
         snapshot = store.read_output() if store is not None else None
+        review_state["round"] += 1
+        review_state["snapshot"] = snapshot
         steps_before = len(getattr(history, "history", []) or [])
         replies_left = _MAX_REVIEW_JUSTIFICATIONS - justifications
         message = _review_message(reason, replies_left)
@@ -1260,6 +1265,7 @@ async def run_agent_session(session_id: str) -> None:
         browser_session.browser_profile.keep_alive = True
 
         clipboard: dict[str, Any] = {}
+        review_state: dict[str, Any] = {"round": 0, "snapshot": None}
         tab_manager = TabManager(browser_session)
         tools = Tools()
 
@@ -1505,6 +1511,12 @@ async def run_agent_session(session_id: str) -> None:
                 "action": action_name,
                 "code": is_code,
             }
+            if action_name == "done" and review_state["round"]:
+                changed = bool(
+                    store is not None
+                    and store.read_output() != review_state.get("snapshot")
+                )
+                row_data["review_reply"] = "resubmitted" if changed else "replied"
             if step.model_output is not None:
                 for key, src in (
                     ("see", "what_i_see"),
@@ -1606,6 +1618,7 @@ async def run_agent_session(session_id: str) -> None:
             store,
             session_id,
             lambda: agent.run(on_step_start=on_step_start, on_step_end=on_step_end),
+            review_state,
         )
 
         file_output = ""

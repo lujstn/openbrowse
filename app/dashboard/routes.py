@@ -182,7 +182,14 @@ def message_display(m: dict) -> dict:
     }
     label = action or category
     if action == "done":
-        category, label, cleaned = "judge", "review", "Submitted for review"
+        category, label = "judge", "review"
+        reply = data.get("review_reply")
+        if reply == "resubmitted":
+            cleaned = "Resubmitted after changes"
+        elif reply == "replied":
+            cleaned = "Replied to reviewer"
+        else:
+            cleaned = "Submitted for review"
     return {
         "category": category,
         "label": label,

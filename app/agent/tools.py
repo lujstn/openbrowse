@@ -460,6 +460,10 @@ _READ_PAGES_MIN_WAVE_S = 30.0
 # @nonobvious(means): measured live — heavy pages need ~15s to render an embed.
 _PAGE_READY_TIMEOUT_S = 25.0
 _FRAME_MATCH_GRACE_S = 6.0
+# @nonobvious(must-hold): bounds the DOM-evidence wait — an iframe that is in
+# the DOM but whose panel never attaches (a consent frame, a dead embed) must
+# not hold every page to the full deadline.
+_PANEL_EVIDENCE_EXTRA_S = 8.0
 _MIN_PAGE_TEXT_CHARS = 200
 _JUDGE_ANSWER_CAP = 8000
 _JSONLD_GRACE_S = 3.0
@@ -536,7 +540,10 @@ async def _read_one_page(
                         panel_in_dom = any(
                             url_contains.lower() in str(s).lower() for s in srcs
                         )
-                    if panel_in_dom:
+                    if (
+                        panel_in_dom
+                        and loop.time() < frame_grace_end + _PANEL_EVIDENCE_EXTRA_S
+                    ):
                         await asyncio.sleep(0.5)
                         continue
                     # @nonobvious(forced-by): no frame + substantial main doc is
@@ -659,7 +666,7 @@ class _FindLinksError(Exception):
 
 
 _FIND_LINKS_RETRY_DELAY_S = 3.0
-_FIND_LINKS_MAX_RETRIES = 3
+_FIND_LINKS_MAX_RETRIES = 1
 
 
 def _scan_link_map(
@@ -863,11 +870,23 @@ async def _read_pages_impl(
             await _run_wave(urls[i : i + concurrency])
             done = [results.get(u, {}) for u in urls[: i + concurrency] if u in results]
             ok = sum(1 for p in done if not p.get("error"))
+            # @nonobvious(deliberately-missing): no panel wording at all without
+            # a frame filter — "0 frames matched" on a plain read alarmed users
+            # when it described nothing; the full counts stay in the export.
+            frame_note = ""
+            if url_contains:
+                matched_n = sum(1 for p in done if p.get("frame_matched"))
+                skipped_n = sum(1 for p in done if p.get("frame_skipped_own_host"))
+                if matched_n:
+                    frame_note = f", {matched_n} read inside their embedded panel"
+                elif skipped_n == len(done):
+                    frame_note = ", read directly on the panel provider's site"
+                else:
+                    frame_note = ", no embedded panels attached yet"
             await _emit_progress(
                 progress,
-                f"read_pages wave {wave_no}/{total_waves}: {ok} of {len(done)} pages ok, "
-                f"{sum(1 for p in done if p.get('frame_matched'))} frames matched "
-                f"({loop.time() - wave_started:.0f}s)",
+                f"read_pages wave {wave_no}/{total_waves}: {ok} of {len(done)} "
+                f"pages ok{frame_note} ({loop.time() - wave_started:.0f}s)",
             )
 
         retry = [u for u in urls if results.get(u, {}).get("error")]
@@ -2529,67 +2548,78 @@ def register_tab_tools(
                     return len(links) <= 2 and anchors > len(links)
                 return len(links) <= 2 and iframe
 
-            links, frames_matched, anchors_seen, iframe_present = await _scan()
-            retries = 0
-            while retries < _FIND_LINKS_MAX_RETRIES and _suspicious(
-                links, frames_matched, anchors_seen, iframe_present
-            ):
-                retries += 1
-                await asyncio.sleep(_FIND_LINKS_RETRY_DELAY_S)
-                links, frames_matched, anchors_seen, iframe_present = await _scan()
-            retried = retries > 0
-
             # @nonobvious(forced-by): embeds rewrite anchors to the HOST page's
             # URLs, so an href filter on the embedded site's domain can never
             # match them (relaxed frame-only rescan recovers the links);
             # conversely a stably-wrong frame filter misses anchors whose
             # rewritten hrefs still carry that domain (href rescan on it).
-            salvaged = False
-            salvage_note = ""
-            degenerate = (
-                frame_url_contains
-                and frames_matched
-                and len(links) <= 2
-                and anchors_seen > len(links)
-            )
-            if degenerate and (href_contains or href_regex):
-                frame_links, _, _, _ = await _scan(href=None, regex=None)
-                # @nonobvious(must-hold): only a list-shaped salvage counts —
-                # swapping one branding anchor for another helps nobody.
-                if len(frame_links) > max(2, len(links)):
-                    kept_hrefs = {link["href"] for link in links}
-                    samples = [
-                        link["href"]
-                        for link in frame_links
-                        if link["href"] not in kept_hrefs
-                    ][:2]
-                    salvage_note = (
-                        f" NOTE: your href filter kept {len(links)} of "
-                        f"{len(frame_links)} link(s) in the matched "
-                        f"'{frame_url_contains}' frame — this embed rewrites its "
-                        "anchors to the host page's own URLs (e.g. "
-                        + ", ".join(samples)
-                        + "), so filters on the embedded site's own domain cannot "
-                        "match them. Returning the frame's full link set "
-                        "instead; each linked page carries its own outward "
-                        "links."
-                    )
-                    links = frame_links
-                    salvaged = True
-            elif degenerate:
+            async def _try_salvage(
+                links: list, frames_matched: int | None, anchors_seen: int
+            ) -> tuple[bool, str, list]:
+                degenerate = (
+                    frame_url_contains
+                    and frames_matched
+                    and len(links) <= 2
+                    and anchors_seen > len(links)
+                )
+                if not degenerate:
+                    return False, "", links
+                if href_contains or href_regex:
+                    frame_links, _, _, _ = await _scan(href=None, regex=None)
+                    # @nonobvious(must-hold): only a list-shaped salvage counts —
+                    # swapping one branding anchor for another helps nobody.
+                    if len(frame_links) > max(2, len(links)):
+                        kept_hrefs = {link["href"] for link in links}
+                        samples = [
+                            link["href"]
+                            for link in frame_links
+                            if link["href"] not in kept_hrefs
+                        ][:2]
+                        note = (
+                            f" NOTE: your href filter kept {len(links)} of "
+                            f"{len(frame_links)} link(s) in the matched "
+                            f"'{frame_url_contains}' frame — this embed rewrites "
+                            "its anchors to the host page's own URLs (e.g. "
+                            + ", ".join(samples)
+                            + "), so filters on the embedded site's own domain "
+                            "cannot match them. Returning the frame's full link "
+                            "set instead; each linked page carries its own "
+                            "outward links."
+                        )
+                        return True, note, frame_links
+                    return False, "", links
                 s_links, _, _, _ = await _scan(
                     href=frame_url_contains, regex=None, frame=None
                 )
                 if len(s_links) > max(2, len(links)):
-                    salvage_note = (
+                    note = (
                         f" NOTE: the '{frame_url_contains}' frame filter caught "
                         "only the embed's own anchor(s); these links were "
                         "recovered by matching hrefs containing "
                         f"'{frame_url_contains}' instead, which is the same "
                         "link set."
                     )
-                    links = s_links
-                    salvaged = True
+                    return True, note, s_links
+                return False, "", links
+
+            links, frames_matched, anchors_seen, iframe_present = await _scan()
+            # @nonobvious(must-hold): salvage before any sleep-retry — a
+            # starving caller filter produces the identical result on every
+            # rescan, so sleeping first only delays the same rescue.
+            salvaged, salvage_note, links = await _try_salvage(
+                links, frames_matched, anchors_seen
+            )
+            retries = 0
+            if not salvaged and _suspicious(
+                links, frames_matched, anchors_seen, iframe_present
+            ):
+                retries = 1
+                await asyncio.sleep(_FIND_LINKS_RETRY_DELAY_S)
+                links, frames_matched, anchors_seen, iframe_present = await _scan()
+                salvaged, salvage_note, links = await _try_salvage(
+                    links, frames_matched, anchors_seen
+                )
+            retried = retries > 0
         except _FindLinksError as e:
             return ActionResult(error=str(e))
         except Exception as e:
