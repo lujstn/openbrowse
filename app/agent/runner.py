@@ -1245,6 +1245,44 @@ def _friendly_error(error: str) -> str:
     return text[:140] + ("…" if len(text) > 140 else "")
 
 
+def _gated_done_output(history: Any) -> str:
+    """history.final_result() returns the last action's extracted_content
+    regardless of whether done() was ever reached, so an unfinished run must
+    not have its last step mistaken for delivered output."""
+    if not history.is_done():
+        return ""
+    return history.final_result() or ""
+
+
+def _completion_summary(
+    *,
+    is_successful: bool,
+    is_done: bool,
+    raw_success: bool,
+    schema_valid: bool,
+    stopped: bool,
+    done_text: str,
+    recovered_errors: int,
+) -> str:
+    """One honest sentence for the ending, distinguishing an agent-reported
+    failure from a user stop and from running out of steps — the three were
+    previously collapsed into a single "Task finished with errors"."""
+    if is_successful:
+        summary = "Task completed successfully"
+        if recovered_errors:
+            plural = "s" if recovered_errors != 1 else ""
+            summary += f" (recovered from {recovered_errors} transient error{plural})"
+        return summary
+    if is_done and raw_success and not schema_valid:
+        return "Task finished but the result did not match the requested schema"
+    if is_done and not raw_success:
+        reason = f": {done_text}" if done_text else ""
+        return f"Task failed{reason}"
+    if stopped:
+        return "Task failed: stopped before the goal was reached"
+    return "Task failed: ran out of steps before the goal was reached"
+
+
 def _primary_action_name(actions: list) -> str | None:
     if not actions:
         return None
@@ -1664,11 +1702,16 @@ async def run_agent_session(session_id: str) -> None:
             # @nonobvious(forced-by): on_step_end also fires for steps cancelled
             # by step_timeout, where re-reading history[-1] would double-log.
             if len(steps) == logged_history_len["n"]:
+                stopped = bool(getattr(agent_instance.state, "stopped", False))
                 await crud.create_message(
                     session_id=session_id,
                     role="ai",
                     msg_type="browser_action_error",
-                    summary="Step timed out and was cancelled before completing",
+                    summary=(
+                        "Cancelled by stop request"
+                        if stopped
+                        else "Step timed out and was cancelled before completing"
+                    ),
                 )
                 return
             logged_history_len["n"] = len(steps)
@@ -1890,7 +1933,7 @@ async def run_agent_session(session_id: str) -> None:
                     file_output = file_content
         except Exception:
             logger.debug("result.json read from agent.file_system failed", exc_info=True)
-        done_output = history.final_result() or ""
+        done_output = _gated_done_output(history)
         from_store = store is not None and not store.is_empty()
         if from_store:
             output = store.read_output()
@@ -1914,11 +1957,8 @@ async def run_agent_session(session_id: str) -> None:
                 pass
 
         recovered_errors = sum(1 for e in history.errors() if e)
-        is_successful = (
-            history.is_done()
-            and (history.is_successful() is not False)
-            and schema_valid
-        )
+        raw_success = history.is_successful() is not False
+        is_successful = history.is_done() and raw_success and schema_valid
         # @nonobvious(means): a run that died before done but left a complete,
         # valid store has delivered the answer; the gate check is the arbiter.
         if not is_successful and not history.is_done() and from_store and schema_valid:
@@ -1987,15 +2027,15 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
-        if is_successful:
-            completion_summary = "Task completed successfully"
-            if recovered_errors:
-                plural = "s" if recovered_errors != 1 else ""
-                completion_summary += (
-                    f" (recovered from {recovered_errors} transient error{plural})"
-                )
-        else:
-            completion_summary = "Task finished with errors"
+        completion_summary = _completion_summary(
+            is_successful=is_successful,
+            is_done=history.is_done(),
+            raw_success=raw_success,
+            schema_valid=schema_valid,
+            stopped=bool(getattr(agent.state, "stopped", False)),
+            done_text=done_output,
+            recovered_errors=recovered_errors,
+        )
         await crud.create_message(
             session_id=session_id,
             role="ai",

@@ -203,8 +203,6 @@ OpenBrowse{% endblock %} {% block head %}
     color: #f87171;
   }
   .completion-card {
-    background: rgba(34, 197, 94, 0.08);
-    border: 1px solid rgba(34, 197, 94, 0.35);
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
@@ -212,8 +210,28 @@ OpenBrowse{% endblock %} {% block head %}
   .completion-card.hidden {
     display: none;
   }
-  .cc-head {
+  .completion-card.success {
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+  }
+  .completion-card.success .cc-head {
     color: #22c55e;
+  }
+  .completion-card.failed {
+    background: rgba(248, 113, 113, 0.08);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+  }
+  .completion-card.failed .cc-head {
+    color: #f87171;
+  }
+  .completion-card.schema {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+  }
+  .completion-card.schema .cc-head {
+    color: #f59e0b;
+  }
+  .cc-head {
     font-weight: 600;
     font-size: 13px;
     display: flex;
@@ -452,7 +470,6 @@ OpenBrowse{% endblock %} {% block head %}
   .queued-title { color: #d4d4d8; font-weight: 600; letter-spacing: 0.02em; font-size: 15px; }
   .queued-sub { color: #666; font-size: 13px; max-width: 340px; text-align: center; line-height: 1.5; }
   .status-d-success .status-dot { background: #34d399; }
-  .status-d-warning .status-dot { background: #f59e0b; }
   .status-d-failed .status-dot { background: #f87171; }
   .status-d-stopped .status-dot { background: #6b7280; }
   .msg-code {
@@ -515,7 +532,7 @@ OpenBrowse{% endblock %} {% block head %}
   {% elif session.status == 'running' %}{% set dstat = 'running' %}
   {% elif session.status == 'error' %}{% set dstat = 'failed' %}
   {% elif ok == 1 %}{% set dstat = 'success' %}
-  {% elif ok == 0 %}{% set dstat = 'warning' %}
+  {% elif ok == 0 %}{% set dstat = 'failed' %}
   {% else %}{% set dstat = 'stopped' %}{% endif %}
   <span class="status status-d-{{ dstat }}">
     <span class="status-dot"></span>
@@ -554,6 +571,7 @@ OpenBrowse{% endblock %} {% block head %}
     data-status="{{ session.status }}"
     data-live-url="{{ session.live_url or '' }}"
     data-max-concurrent="{{ max_concurrent }}"
+    data-success="{{ session.is_task_successful if session.is_task_successful is not none else '' }}"
   >
     {% if session.status == 'created' %}
     <div class="no-live queued">
@@ -619,6 +637,8 @@ OpenBrowse{% endblock %} {% block head %}
   let currentOutput = "";
   let activityState = null;
   let lastStatus = browserPanel.dataset.status;
+  let lastIsSuccessful =
+    browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
   let activityIndicatorType = null;
   const activityBar = document.getElementById("activity-bar");
 
@@ -684,7 +704,7 @@ OpenBrowse{% endblock %} {% block head %}
     if (status === "running") return "running";
     if (status === "error") return "failed";
     if (success === true || success === 1) return "success";
-    if (success === false || success === 0) return "warning";
+    if (success === false || success === 0) return "failed";
     return "stopped";
   }
 
@@ -799,15 +819,28 @@ OpenBrowse{% endblock %} {% block head %}
     return text;
   }
 
+  function completionVerdict() {
+    if (lastIsSuccessful === true) return "success";
+    if (
+      typeof completionSummary === "string" &&
+      completionSummary.indexOf("did not match the requested schema") !== -1
+    ) {
+      return "schema";
+    }
+    return "failed";
+  }
+
   function renderCompletion() {
     if (!completionSummary && !currentOutput) {
       completionCard.classList.add("hidden");
       return;
     }
-    completionCard.classList.remove("hidden");
+    const verdict = completionVerdict();
+    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
+    completionCard.className = "completion-card " + verdict;
     let html =
-      '<div class="cc-head"><span class="cc-title">✓ ' +
-      esc(completionSummary || "Task completed") + "</span>" +
+      '<div class="cc-head"><span class="cc-title">' + glyph + " " +
+      esc(completionSummary || "Run ended") + "</span>" +
       (currentOutput ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
       "</div>";
     if (currentOutput) {
@@ -836,7 +869,7 @@ OpenBrowse{% endblock %} {% block head %}
       const sumEl = row.querySelector(".msg-summary");
       const summary = (sumEl ? sumEl.textContent : "").trim();
       if (type === "completion") {
-        completionSummary = summary || "Task completed";
+        completionSummary = summary || "Run ended";
         renderCompletion();
         return;
       }
@@ -918,11 +951,21 @@ OpenBrowse{% endblock %} {% block head %}
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-d-" + dstat;
       lastStatus = data.status;
+      const nextIsSuccessful =
+        data.isTaskSuccessful === true || data.isTaskSuccessful === 1
+          ? true
+          : data.isTaskSuccessful === false || data.isTaskSuccessful === 0
+          ? false
+          : null;
+      const successChanged = nextIsSuccessful !== lastIsSuccessful;
+      lastIsSuccessful = nextIsSuccessful;
       activityState = data.activity || null;
       renderActivity();
       syncControls();
       if (data.output && data.output !== currentOutput) {
         currentOutput = data.output;
+        renderCompletion();
+      } else if (successChanged) {
         renderCompletion();
       }
       setBrowser(data.status, data.liveUrl);

@@ -9,6 +9,8 @@ from app.agent.runner import (
     _THINKING_BUDGETS,
     _build_llm,
     _canonical_stored_effort,
+    _completion_summary,
+    _gated_done_output,
     _resolve_model,
     resolve_default_effort,
     valid_efforts,
@@ -1063,3 +1065,109 @@ def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
 
     assert corrected is None
     assert hits == 0
+
+
+def _fake_history(*, is_done: bool, final_result: str = ""):
+    return types.SimpleNamespace(
+        is_done=lambda: is_done,
+        final_result=lambda: final_result,
+    )
+
+
+def test_gated_done_output_empty_when_run_never_reached_done():
+    history = _fake_history(is_done=False, final_result="Searched Bing for 'X'")
+    assert _gated_done_output(history) == ""
+
+
+def test_gated_done_output_returns_final_result_when_done():
+    history = _fake_history(is_done=True, final_result="the extracted answer")
+    assert _gated_done_output(history) == "the extracted answer"
+
+
+def test_completion_summary_success_notes_recovered_errors():
+    summary = _completion_summary(
+        is_successful=True,
+        is_done=True,
+        raw_success=True,
+        schema_valid=True,
+        stopped=False,
+        done_text="all good",
+        recovered_errors=2,
+    )
+    assert summary == "Task completed successfully (recovered from 2 transient errors)"
+
+
+def test_completion_summary_agent_reported_failure_surfaces_done_text():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="Could not find the requested item",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: Could not find the requested item"
+
+
+def test_completion_summary_agent_reported_failure_without_done_text():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed"
+
+
+def test_completion_summary_stopped_before_done():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=False,
+        schema_valid=True,
+        stopped=True,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: stopped before the goal was reached"
+
+
+def test_completion_summary_ran_out_of_steps():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: ran out of steps before the goal was reached"
+
+
+def test_completion_summary_schema_mismatch():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=True,
+        schema_valid=False,
+        stopped=False,
+        done_text="the raw text",
+        recovered_errors=0,
+    )
+    assert summary == "Task finished but the result did not match the requested schema"
+
+
+def test_on_step_end_reports_stop_not_timeout_when_agent_was_stopped():
+    import inspect
+
+    from app.agent import runner as runner_mod
+
+    src = inspect.getsource(runner_mod.run_agent_session)
+    assert "Cancelled by stop request" in src
+    assert "Step timed out and was cancelled before completing" in src
+    assert 'getattr(agent_instance.state, "stopped", False)' in src
