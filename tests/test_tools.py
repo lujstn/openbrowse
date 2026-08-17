@@ -365,7 +365,8 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
     sole_flags: list[bool] = []
 
     async def fake_read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         sole_flags.append(allow_sole_candidate)
         if url in fail_once:
@@ -415,7 +416,8 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
         pass
 
     async def fake_read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         reads.append(url)
         if url == dead:
@@ -438,7 +440,8 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
     by_url = {p["url"]: p for p in pages}
     assert by_url[dead].get("error")
     assert by_url[slow_ld]["jsonld"] == {"datePublished": "2026-08-04"}
-    assert tools_mod._norm_url(dead) in clipboard["_read_failed"]
+    assert tools_mod._norm_url(dead) in clipboard["_read_failed_frame"]
+    assert tools_mod._norm_url(dead) not in clipboard["_read_failed"]
     assert tools_mod._norm_url(slow_ld) in clipboard["_visited"]
 
 
@@ -611,7 +614,8 @@ async def test_read_pages_impl_reports_progress(monkeypatch) -> None:
         pass
 
     async def fake_read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
 
@@ -666,7 +670,8 @@ def _wave_fakes(monkeypatch, read_one, home="home-tid"):
 
 async def test_read_pages_impl_focuses_home_before_closing(monkeypatch) -> None:
     async def read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
 
@@ -688,7 +693,8 @@ async def test_read_pages_impl_closes_tabs_even_when_cancelled(monkeypatch) -> N
     import pytest
 
     async def read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         if url.endswith("/2"):
             raise asyncio.CancelledError()
@@ -705,7 +711,8 @@ async def test_read_pages_impl_closes_tabs_even_when_cancelled(monkeypatch) -> N
 
 async def test_read_pages_impl_budget_stops_before_starting(monkeypatch) -> None:
     async def read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         return {"url": url, "text": "body " * 60, "jsonld": None, "links": []}
 
@@ -717,7 +724,8 @@ async def test_read_pages_impl_budget_stops_before_starting(monkeypatch) -> None
 
     assert all("not attempted" in (p.get("error") or "") for p in pages)
     assert not [ev for ev in order if ev[0] == "spawn"]
-    assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_read_failed"]
+    assert {tools_mod._norm_url(u) for u in urls} <= clipboard["_read_failed_frame"]
+    assert not clipboard["_read_failed"]
 
 
 def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
@@ -979,7 +987,8 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
         return "Job title"
 
     async def fake_match(
-        session, tid, needle, claimed, baseline, allow_sole=False, page_url=None
+        session, tid, needle, claimed, baseline, allow_sole=False, page_url=None,
+        sibling_urls=None,
     ):
         return "frame-1"
 
@@ -1469,7 +1478,8 @@ async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
         events.append(msg)
 
     async def read_one(
-        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
     ):
         return {"url": url, "text": "t" * 300, "jsonld": None, "links": []}
 
@@ -1904,3 +1914,505 @@ async def test_find_links_frameless_retry_when_embed_present(monkeypatch) -> Non
     found = _json.loads(result.extracted_content)
     assert len(found) == 4
     assert all("embed_jid" in l["href"] for l in found)
+
+
+async def test_flag_shell_reads_falls_back_to_dom_probe(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def no_targets(session):
+        return []
+
+    async def dom_hosts(session):
+        return ["embed.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", no_targets)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+
+    results = {
+        f"https://x.com/{i}": {"url": f"https://x.com/{i}", "text": "Acme careers portal welcome"}
+        for i in range(3)
+    }
+    flagged, hosts = await tools_mod._flag_shell_reads(None, results)
+    assert flagged == 3
+    assert hosts == ["embed.example.com"]
+    assert all("embedding shell" in p["error"] for p in results.values())
+
+
+async def test_flag_shell_reads_tolerates_digit_noise(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def no_targets(session):
+        return []
+
+    async def dom_hosts(session):
+        return ["embed.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", no_targets)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+
+    results = {
+        f"https://x.com/{i}": {
+            "url": f"https://x.com/{i}",
+            "text": f"Acme careers portal  {i * 17} open roles today {i}",
+        }
+        for i in range(3)
+    }
+    flagged, _hosts = await tools_mod._flag_shell_reads(None, results)
+    assert flagged == 3
+
+
+async def test_gate_bounces_on_link_deficit_then_passes() -> None:
+    from app.agent.tools import register_completeness_gate
+    from browser_use import Tools
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item(
+        {"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 200}
+    )
+    store.add_item(
+        {"title": "B", "sourceUrl": "https://x.com/b", "description": "d" * 200}
+    )
+    clipboard: dict = {
+        "found_links": [
+            "https://x.com/a",
+            "https://x.com/b",
+            "https://x.com/c",
+            "https://x.com/d",
+            "https://other.com/nav",
+        ],
+        "found_links_offhost": {"https://other.com/nav"},
+        "_visited": {"https://x.com/a", "https://x.com/b"},
+    }
+    register_completeness_gate(tools, store, None, clipboard)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    fs = _FakeFileSystem()
+
+    first = await entry.function(params=params, file_system=fs)
+    assert first.is_done is False
+    assert "4 on-site link(s)" in first.extracted_content
+    assert "only 2 item(s)" in first.extracted_content
+    assert "https://x.com/c" in first.extracted_content
+    assert "https://other.com/nav" not in first.extracted_content
+
+    second = await entry.function(params=params, file_system=fs)
+    assert second.is_done is True
+
+
+async def test_gate_bounce_names_dom_embeds_when_no_links_found() -> None:
+    from app.agent.tools import register_completeness_gate
+    from browser_use import Tools
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A"})
+    clipboard: dict = {"_dom_embed_hosts": ["board.example.com"]}
+    register_completeness_gate(tools, store, None, clipboard)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is False
+    assert "never captured any links" in first.extracted_content
+    assert "board.example.com" in first.extracted_content
+
+
+def test_frame_failure_classifier() -> None:
+    from app.agent.tools import _frame_failure
+
+    assert _frame_failure("read the embedding shell, not this page's real content")
+    assert _frame_failure("no embedded panel matching 'embed' rendered")
+    assert _frame_failure("page embeds its content in a panel from x.com")
+    assert _frame_failure("not attempted — read_pages stopped before its time budget")
+    assert not _frame_failure("HTTPError: 404")
+    assert not _frame_failure("no readable text rendered")
+
+
+async def test_frame_failures_do_not_unlock_mark_absent() -> None:
+    from app.agent.tools import _absence_unearned
+
+    store = _items_store()
+    clipboard: dict = {"_visited": {"https://x.com/a"}}
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
+    store.add_item({"title": "B", "sourceUrl": "https://x.com/b"})
+
+    clipboard["_read_failed_frame"] = {"https://x.com/b"}
+    refusal = _absence_unearned(store, clipboard, "description")
+    assert refusal is not None and "https://x.com/b" in refusal
+
+
+def _sandbox_browser_with_frames(frames):
+    from app.agent.tools import _SandboxBrowser
+
+    sb = _SandboxBrowser(None)
+
+    async def fake_frames():
+        return frames
+
+    sb.frames = fake_frames
+    return sb
+
+
+async def test_frame_evaluate_raises_instead_of_wrong_frame_fallback() -> None:
+    import pytest
+
+    sb = _sandbox_browser_with_frames(
+        [{"targetId": "t1", "url": "https://consent.example.com/x"}]
+    )
+    with pytest.raises(RuntimeError) as err:
+        await sb.frame_evaluate("board.example.com", "1+1")
+    assert "consent.example.com" in str(err.value)
+
+    sb_empty = _sandbox_browser_with_frames([])
+    with pytest.raises(RuntimeError) as err2:
+        await sb_empty.frame_evaluate("board.example.com", "1+1")
+    assert "wait_for_frame" in str(err2.value)
+
+
+async def test_wait_for_frame_returns_false_instead_of_raising() -> None:
+    sb = _sandbox_browser_with_frames([])
+    assert await sb.wait_for_frame("board.example.com", timeout_s=0.5) is False
+
+
+async def test_navigate_raises_when_wait_for_frame_never_renders(monkeypatch) -> None:
+    import pytest
+
+    import app.agent.tools as tools_mod
+
+    async def fake_eval(session, js):
+        return None
+
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    sb = _sandbox_browser_with_frames(
+        [{"targetId": "t1", "url": "https://consent.example.com/x"}]
+    )
+
+    async def never(url_contains, timeout_s=12.0):
+        return False
+
+    sb.wait_for_frame = never
+    with pytest.raises(RuntimeError) as err:
+        await sb.navigate("https://x.com/j", wait_for="board.example.com")
+    assert "board.example.com" in str(err.value)
+    assert "consent.example.com" in str(err.value)
+
+
+async def test_match_frame_target_rejects_shared_discriminator(monkeypatch) -> None:
+    import types as _t
+
+    import app.agent.tools as tools_mod
+
+    targets = [
+        {"targetId": "f1", "url": "https://panel.example.com/view/abcdefgh1234"}
+    ]
+
+    async def fake_targets(session):
+        return targets
+
+    async def fake_eval_on_target(session, tid, js):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", fake_targets)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval_on_target)
+    session = _t.SimpleNamespace()
+
+    alone = await tools_mod._match_frame_target(
+        session,
+        "page-1",
+        "panel",
+        set(),
+        set(),
+        page_url="https://x.com/jobs?id=abcdefgh1234",
+    )
+    assert alone == "f1"
+
+    shared = await tools_mod._match_frame_target(
+        session,
+        "page-1",
+        "panel",
+        set(),
+        set(),
+        page_url="https://x.com/jobs?id=abcdefgh1234",
+        sibling_urls=[
+            "https://x.com/jobs?id=abcdefgh1234",
+            "https://x.com/other?id=abcdefgh1234",
+        ],
+    )
+    assert shared is None
+
+
+async def test_match_frame_target_sole_candidate_host_check(monkeypatch) -> None:
+    import types as _t
+
+    import app.agent.tools as tools_mod
+
+    session = _t.SimpleNamespace()
+
+    async def fake_eval_on_target(session_, tid, js):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval_on_target)
+
+    async def offhost_targets(session_):
+        return [{"targetId": "f1", "url": "https://weird.example.com/ashby/x"}]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", offhost_targets)
+    rejected = await tools_mod._match_frame_target(
+        session,
+        "page-1",
+        "ashby",
+        set(),
+        set(),
+        allow_sole_candidate=True,
+        page_url="https://x.com/j",
+    )
+    assert rejected is None
+
+    async def vendor_targets(session_):
+        return [{"targetId": "f2", "url": "https://jobs.ashbyhq.com/acme"}]
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", vendor_targets)
+    accepted = await tools_mod._match_frame_target(
+        session,
+        "page-1",
+        "ashby",
+        set(),
+        set(),
+        allow_sole_candidate=True,
+        page_url="https://x.com/j",
+    )
+    assert accepted == "f2"
+
+
+async def test_settle_lazy_links_reports_never_matched_frame(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def no_targets(session):
+        return []
+
+    async def fake_eval(session, js):
+        return 0
+
+    monkeypatch.setattr(tools_mod, "_iframe_targets", no_targets)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_LAZY_POLL_S", 0.0)
+
+    assert await tools_mod._settle_lazy_links(None, "board.example.com") is True
+    assert await tools_mod._settle_lazy_links(None, None) is False
+
+
+async def test_read_one_page_flags_short_main_doc_with_embeds(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    async def fake_eval(session, tid, js):
+        if js == tools_mod._BODY_TEXT_JS:
+            return "X" * 250
+        if js == tools_mod._JSONLD_JS:
+            return []
+        if js == tools_mod._LINKS_JS:
+            return []
+        if js == tools_mod._IFRAME_HOSTS_JS:
+            return ["panel.example.com"]
+        if "readyState" in js:
+            return "complete"
+        return "Title"
+
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_JSONLD_GRACE_S", 0.0)
+
+    page = await tools_mod._read_one_page(
+        None, "https://x.com/j1", "tid-1", None, set(), set()
+    )
+    assert "embeds its content in a panel from panel.example.com" in page["error"]
+    assert tools_mod._frame_failure(page["error"])
+
+
+async def test_find_links_notes_unverified_when_matched_frame_has_no_links(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def no_dom_hosts(session):
+        return []
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", no_dom_hosts)
+
+    selector_map = _embed_map(with_frame_doc=True)
+    for node in selector_map.values():
+        if node.tag_name == "a":
+            node.target_id = "main"
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        frame_url_contains="board.example.com",
+    )
+    assert not result.error
+    assert "unverified" in result.long_term_memory
+    assert "may not have finished rewriting" in result.long_term_memory
+
+
+async def test_find_links_frameless_hint_from_dom_probe(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from browser_use import Tools
+
+    monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
+
+    async def fake_settle(session, frame):
+        return False
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    async def dom_hosts(session):
+        return ["board.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+
+    selector_map = _embed_map(with_frame_doc=True)
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return selector_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    clipboard: dict = {}
+    tools_mod.register_tab_tools(tools, object(), clipboard, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(),
+        file_system=_FakeFileSystem(),
+        href_contains="embed_jid",
+    )
+    assert not result.error
+    assert "embeds cross-origin panel(s)" in result.long_term_memory
+    assert "board.example.com" in result.long_term_memory
+    assert clipboard["_dom_embed_hosts"] == ["board.example.com"]
+
+
+async def test_read_pages_thin_pages_named_honestly(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from app.agent.tools import register_tab_tools
+    from browser_use import Tools
+
+    thin_url = "https://x.com/thin"
+
+    async def fake_impl(session, urls, url_contains, clipboard, progress=None):
+        return [
+            {
+                "url": "https://x.com/full",
+                "title": "Full record",
+                "text": "body " * 100,
+                "jsonld": None,
+                "links": [],
+            },
+            {
+                "url": thin_url,
+                "title": "Thin",
+                "text": "almost nothing",
+                "jsonld": None,
+                "links": [],
+            },
+        ]
+
+    monkeypatch.setattr(tools_mod, "_read_pages_impl", fake_impl)
+
+    tools = Tools()
+    store = _items_store()
+    register_tab_tools(tools, object(), {}, store, None)
+    entry = tools.registry.registry.actions["read_pages"]
+    result = await entry.function(
+        browser_session=object(),
+        file_system=_FakeFileSystem(),
+        urls=["https://x.com/full", thin_url],
+    )
+    assert not result.error
+    assert "returned too little text to draft a row" in result.extracted_content
+    assert "may have failed to render" in result.extracted_content
+    assert thin_url in result.extracted_content
+    assert "probably not records" not in result.extracted_content
+
+
+async def test_open_in_new_tab_miss_names_unattached_embed(monkeypatch) -> None:
+    import types as _t
+
+    import app.agent.tools as tools_mod
+    from app.agent.tools import TabManager
+
+    async def none_element(index):
+        return None
+
+    session = _t.SimpleNamespace(
+        get_element_by_index=lambda index: none_element(index)
+    )
+
+    async def dom_hosts(session_):
+        return ["board.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+    manager = TabManager(session)
+    note = await manager.open_in_new_tab(7)
+    assert "No element at index 7" in note
+    assert "board.example.com" in note
+    assert "frame_url_contains" in note
+
+
+async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    from app.agent.tools import _SandboxBrowser
+
+    async def fake_eval(session, js):
+        if "outerHTML" in js:
+            return "<div>shell</div>"
+        return "thin shell text"
+
+    async def dom_hosts(session):
+        return ["board.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+
+    sb = _SandboxBrowser(None)
+    body = await sb.evaluate("document.body.innerText")
+    assert "MAIN page only" in body
+    assert "board.example.com" in body
+
+    title = await sb.evaluate("document.title")
+    assert title == "thin shell text"
+
+    html = await sb.get_html()
+    assert html.startswith("<div>shell</div>")
+    assert "MAIN page only" in html

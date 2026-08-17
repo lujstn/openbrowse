@@ -243,6 +243,31 @@ async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str
     ]
 
 
+_IFRAME_HOSTS_JS = (
+    "(function(){var own=location.host.toLowerCase();var out=[];"
+    "document.querySelectorAll('iframe').forEach(function(f){"
+    "try{var h=new URL(f.src,location.href).host.toLowerCase();"
+    "if(h&&h!==own&&out.indexOf(h)<0)out.push(h)}catch(e){}});return out;})()"
+)
+
+
+async def _dom_iframe_hosts(browser_session: BrowserSession) -> list[str]:
+    """Cross-origin iframe hosts read from the page's own DOM — the second source
+    of truth on whether this page embeds its content. CDP's Target.getTargets can
+    miss an OOPIF that has not attached yet, and every guard keyed solely on it
+    fails together in exactly that failure mode; the iframe elements themselves
+    are always in the main document. Best-effort: empty list on any error.
+    """
+    try:
+        val = await _eval_js(browser_session, _IFRAME_HOSTS_JS)
+    except Exception:
+        logger.debug("_dom_iframe_hosts failed", exc_info=True)
+        return []
+    if not isinstance(val, list):
+        return []
+    return [h for h in val if isinstance(h, str) and h]
+
+
 def _url_discriminators(url: str) -> set[str]:
     """Long, distinctive tokens from a page URL (query values and path segments)
     that can re-identify the page's own embed among many — an embedded panel's URL
@@ -268,14 +293,18 @@ async def _match_frame_target(
     baseline: set[str],
     allow_sole_candidate: bool = False,
     page_url: str | None = None,
+    sibling_urls: list[str] | None = None,
 ) -> str | None:
     """The OOPIF target belonging to ``page_target_id`` whose URL contains
     ``url_contains``. Ownership is resolved by matching the global iframe-target
     list against the page's own frame tree and iframe srcs, because CDP's target
-    list carries no parent linkage. The sole-unclaimed-candidate fallback is only
-    honoured when ``allow_sole_candidate`` (single-page reads) — in a concurrent
-    wave a slow page's sole candidate could be a SIBLING page's embed, which would
-    silently attribute the wrong item's data.
+    list carries no parent linkage. URL discriminators shared with a sibling
+    page's URL are discarded — in a concurrent wave a shared path/query segment
+    would attribute a SIBLING page's embed, silently mixing items' data. The
+    sole-unclaimed-candidate fallback is only honoured when
+    ``allow_sole_candidate`` (single-page reads) and only when the candidate's
+    host itself matches the needle or the page's own host. When in doubt this
+    returns None; the caller reads the main document honestly instead.
     """
     needle = (url_contains or "").lower()
     tree_urls: set[str] = set()
@@ -304,6 +333,10 @@ async def _match_frame_target(
         logger.debug("_match_frame_target: iframe src read failed", exc_info=True)
 
     discriminators = _url_discriminators(page_url or "")
+    for other in sibling_urls or []:
+        if _norm_url(other) == _norm_url(page_url or ""):
+            continue
+        discriminators -= _url_discriminators(other)
     candidates: list[dict[str, str]] = []
     for t in await _iframe_targets(browser_session):
         tid, turl = t["targetId"], t["url"]
@@ -323,7 +356,10 @@ async def _match_frame_target(
         if tid not in baseline:
             candidates.append(t)
     if allow_sole_candidate and len(candidates) == 1:
-        return candidates[0]["targetId"]
+        cand_host = urlparse(candidates[0]["url"] or "").netloc.lower()
+        page_host = urlparse(page_url or "").netloc.lower()
+        if (needle and needle in cand_host) or (page_host and cand_host == page_host):
+            return candidates[0]["targetId"]
     return None
 
 
@@ -335,24 +371,31 @@ _LAZY_POLL_S = 0.6
 
 async def _settle_lazy_links(
     browser_session: BrowserSession, frame_url_contains: str | None
-) -> None:
+) -> bool:
     """Coax a lazily-populating listing into showing everything before links are
     collected: repeatedly scroll the main page and any matching embedded frame to
     the bottom, and only proceed once the link count has stopped growing for two
     consecutive polls. Listings (and their embeds) commonly append items on scroll
     or a second after first paint, so collecting immediately under-counts. The main
-    page's scroll position is restored afterwards.
+    page's scroll position is restored afterwards. Returns True when a frame
+    filter was requested but no matching frame was ever seen during settling —
+    the embedded panel was never scrolled, so any later link count is unverified.
     """
     needle = (frame_url_contains or "").lower()
+    matched_any = False
 
     async def _matching_frames() -> list[str]:
+        nonlocal matched_any
         if not needle:
             return []
-        return [
+        tids = [
             t["targetId"]
             for t in await _iframe_targets(browser_session)
             if needle in t["url"].lower()
         ]
+        if tids:
+            matched_any = True
+        return tids
 
     async def _count() -> int:
         total = 0
@@ -404,6 +447,7 @@ async def _settle_lazy_links(
         await _eval_js(browser_session, f"window.scrollTo(0, {original_y})")
     except Exception:
         logger.debug("_settle_lazy_links: scroll restore failed", exc_info=True)
+    return bool(needle) and not matched_any
 
 
 _READ_PAGES_MAX = 48
@@ -428,6 +472,7 @@ async def _read_one_page(
     claimed: set[str],
     baseline: set[str],
     allow_sole_candidate: bool = False,
+    sibling_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     """Wait for a spawned tab (and, when asked, its embedded panel) to render, then
     read {url, title, text, jsonld, links} from it — the panel when one matches,
@@ -463,6 +508,7 @@ async def _read_one_page(
                     baseline,
                     allow_sole_candidate,
                     page_url=url,
+                    sibling_urls=sibling_urls,
                 )
                 if frame_tid:
                     txt = await _eval_on_target(browser_session, frame_tid, _BODY_TEXT_JS)
@@ -535,6 +581,25 @@ async def _read_one_page(
         )
     elif not (page.get("text") or "").strip():
         page["error"] = "no readable text rendered"
+    elif (
+        not url_contains
+        and len((page.get("text") or "").strip()) < 2 * _MIN_PAGE_TEXT_CHARS
+    ):
+        try:
+            raw = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
+        except Exception:
+            raw = None
+        hosts = (
+            [h for h in raw if isinstance(h, str) and h]
+            if isinstance(raw, list)
+            else []
+        )
+        if hosts:
+            page["error"] = (
+                f"page embeds its content in a panel from {hosts[0]}; the main "
+                "document alone was read and holds too little text — re-run "
+                f"read_pages with frame_url_contains='{hosts[0]}'"
+            )
     return page
 
 
@@ -545,6 +610,24 @@ async def _emit_progress(progress: Any, message: str) -> None:
         await progress(message)
     except Exception:
         logger.debug("_emit_progress failed", exc_info=True)
+
+
+_FRAME_FAILURE_MARKERS = (
+    "embedding shell",
+    "no embedded panel",
+    "embeds its content in a panel",
+    "not attempted",
+)
+
+
+def _frame_failure(error: str) -> bool:
+    """True when a read failed because the embed layer failed, not because the
+    URL is dead. Frame failures must never count as "looked" — treating them as
+    dead pages would unlock mark_absent and drop gate fields on content that was
+    simply never seen.
+    """
+    low = (error or "").lower()
+    return any(marker in low for marker in _FRAME_FAILURE_MARKERS)
 
 
 class _FindLinksError(Exception):
@@ -703,6 +786,7 @@ async def _read_pages_impl(
                     claimed,
                     baseline,
                     allow_sole_candidate=len(pairs) == 1,
+                    sibling_urls=wave,
                 )
         finally:
             # @nonobvious(forced-by): closing a focused target can wedge the CDP
@@ -816,14 +900,18 @@ async def _read_pages_impl(
     if clipboard is not None:
         visited = clipboard.setdefault("_visited", set())
         failed = clipboard.setdefault("_read_failed", set())
+        frame_failed = clipboard.setdefault("_read_failed_frame", set())
         listing_meta = clipboard.get("found_links_meta") or {}
         for u, page in results.items():
             if listing_meta.get(u):
                 page.setdefault("listing_text", listing_meta[u])
             if page.get("error"):
-                failed.add(_norm_url(u))
+                bucket = frame_failed if _frame_failure(page["error"]) else failed
+                bucket.add(_norm_url(u))
             else:
                 visited.add(_norm_url(u))
+                failed.discard(_norm_url(u))
+                frame_failed.discard(_norm_url(u))
         _extend_evidence_corpus(clipboard, results)
     return [results[u] for u in urls if u in results]
 
@@ -843,7 +931,9 @@ async def _flag_shell_reads(
         return 0, []
 
     def _sig(page: dict[str, Any]) -> str:
-        return " ".join((page.get("text") or "").split())[:1500]
+        # @nonobvious(means): digits are stripped so shells differing only in
+        # per-page noise (counts, timestamps) still count as duplicates.
+        return " ".join(re.sub(r"\d+", "", page.get("text") or "").split())[:1500]
 
     top_sig, top_n = Counter(_sig(p) for p in ok_pages).most_common(1)[0]
     if not top_sig or top_n < 3:
@@ -858,6 +948,8 @@ async def _flag_shell_reads(
         )
     except Exception:
         embed_hosts = []
+    if not embed_hosts:
+        embed_hosts = await _dom_iframe_hosts(browser_session)
     if not embed_hosts:
         return 0, []
     flagged = 0
@@ -934,8 +1026,30 @@ class _SandboxBrowser:
             return
         self._clipboard.setdefault("_visited", set()).add(_norm_url(url))
 
+    async def _main_frame_caveat(self) -> str:
+        hosts = await _dom_iframe_hosts(self._session)
+        if not hosts:
+            return ""
+        return (
+            "note: this reads the MAIN page only; this page embeds content from "
+            + ", ".join(hosts)
+            + " — use browser.frame_text(...)/find_links(frame_url_contains=...)"
+        )
+
     async def evaluate(self, js: str) -> Any:
-        return await _eval_js(self._session, js)
+        result = await _eval_js(self._session, js)
+        # @nonobvious(deliberately-missing): only page-text-shaped string reads
+        # get the embed caveat appended — annotating arbitrary short values
+        # (titles, ids) would corrupt data the script stores verbatim.
+        if (
+            isinstance(result, str)
+            and len(result.strip()) < _MIN_PAGE_TEXT_CHARS
+            and any(t in js for t in ("innerText", "textContent", "outerHTML", "innerHTML"))
+        ):
+            caveat = await self._main_frame_caveat()
+            if caveat:
+                result += "\n" + caveat
+        return result
 
     async def get_html(self, selector: str | None = None) -> str:
         if selector:
@@ -946,7 +1060,12 @@ class _SandboxBrowser:
             )
         else:
             js = "document.documentElement.outerHTML"
-        return await _eval_js(self._session, js) or ""
+        html = await _eval_js(self._session, js) or ""
+        if len(html.strip()) < _MIN_PAGE_TEXT_CHARS:
+            caveat = await self._main_frame_caveat()
+            if caveat:
+                html += f"<!-- {caveat} -->"
+        return html
 
     async def frames(self) -> list[dict[str, str]]:
         """Every cross-origin iframe target on the page — the embedded panels that
@@ -976,8 +1095,21 @@ class _SandboxBrowser:
         needle = (url_contains or "").lower()
         all_frames = await self.frames()
         matched = [f for f in all_frames if not needle or needle in f["url"].lower()]
-        if not matched and all_frames:
-            matched = all_frames
+        # @nonobvious(deliberately-missing): no fall-back to unmatched frames —
+        # running JS in an unrelated frame (consent, analytics) returns
+        # plausible-but-wrong data that would be stored as this page's content.
+        if not matched:
+            if all_frames:
+                raise RuntimeError(
+                    f"no embedded frame matches {url_contains!r}; attached frame "
+                    "URLs: " + ", ".join(f["url"] for f in all_frames)
+                )
+            raise RuntimeError(
+                "no embedded frames are attached right now — the panel may still "
+                "be loading; retry after browser.wait_for_frame("
+                + repr(url_contains)
+                + ")"
+            )
         results: list[tuple[str, Any]] = []
         for f in matched:
             try:
@@ -1019,7 +1151,10 @@ class _SandboxBrowser:
         because an embed loads asynchronously after navigation. Returns True on success.
         """
         for _ in range(int(max(1.0, timeout_s) * 2)):
-            txt = await self.frame_text(url_contains)
+            try:
+                txt = await self.frame_text(url_contains)
+            except RuntimeError:
+                txt = ""
             if txt and txt.strip():
                 return True
             await asyncio.sleep(0.5)
@@ -1052,12 +1187,30 @@ class _SandboxBrowser:
         self, url: str, wait_for: str | None = None, settle_s: float = 2.0
     ) -> None:
         """Navigate the current tab to ``url``. If ``wait_for`` is given, wait for a
-        cross-origin iframe whose URL contains it to render; otherwise settle briefly.
+        cross-origin iframe whose URL contains it to render, and raise if it never
+        does — silently proceeding would read the shell as if it were the panel.
+        Otherwise settle briefly.
         """
         await _eval_js(self._session, "window.location.assign(" + json.dumps(url) + ")")
         self._mark_visited(url)
         if wait_for:
-            await self.wait_for_frame(wait_for, timeout_s=max(settle_s, 12.0))
+            if not await self.wait_for_frame(wait_for, timeout_s=max(settle_s, 12.0)):
+                hosts = sorted(
+                    {
+                        urlparse(f["url"]).netloc
+                        for f in await self.frames()
+                        if urlparse(f["url"]).netloc
+                    }
+                )
+                raise RuntimeError(
+                    f"navigate: no embedded frame matching {wait_for!r} rendered "
+                    f"on {url}"
+                    + (
+                        "; attached frame hosts: " + ", ".join(hosts)
+                        if hosts
+                        else "; no embedded frames are attached"
+                    )
+                )
         else:
             await asyncio.sleep(settle_s)
 
@@ -1891,6 +2044,14 @@ class TabManager:
     async def open_in_new_tab(self, index: int) -> str:
         node = await self._session.get_element_by_index(index)
         if node is None:
+            hosts = await _dom_iframe_hosts(self._session)
+            if hosts:
+                return (
+                    f"No element at index {index}. This page embeds cross-origin "
+                    f"panel(s) from {', '.join(hosts)} — the element may live in an "
+                    "embed that has not attached yet; collect its links with "
+                    "find_links(frame_url_contains=...) instead."
+                )
             return f"No element at index {index}."
 
         href = (node.attributes or {}).get("href")
@@ -2000,12 +2161,12 @@ def register_tab_tools(
             draft_note = ""
             if store is not None and store.item_model is not None:
                 drafts: list[dict[str, Any]] = []
-                thin = 0
+                thin_urls: list[str] = []
                 for p in pages:
                     if p.get("error"):
                         continue
                     if len((p.get("text") or "").strip()) < _MIN_PAGE_TEXT_CHARS:
-                        thin += 1
+                        thin_urls.append(str(p.get("url") or ""))
                         continue
                     row = _draft_row(store, p)
                     if row:
@@ -2032,8 +2193,13 @@ def register_tab_tools(
                             f"\nrows_draft.json prefilled with {len(drafts)} row(s) "
                             "mapped from the pages"
                             + (
-                                f" ({thin} thin page(s) skipped — probably not records)"
-                                if thin
+                                f" ({len(thin_urls)} page(s) returned too little "
+                                "text to draft a row — they may have failed to "
+                                "render; their URLs are in pages.json: "
+                                + ", ".join(thin_urls[:5])
+                                + ("…" if len(thin_urls) > 5 else "")
+                                + ")"
+                                if thin_urls
                                 else ""
                             )
                             + f". Draft fills: {coverage}."
@@ -2206,7 +2372,10 @@ def register_tab_tools(
                 "href_regex, frame_url_contains, container_index, or attr."
             )
         try:
-            await _settle_lazy_links(browser_session, frame_url_contains)
+            settle_frameless = bool(
+                await _settle_lazy_links(browser_session, frame_url_contains)
+            )
+            clipboard["_settle_frameless"] = settle_frameless
 
             async def _scan() -> tuple[list[dict[str, Any]], int | None, int, bool]:
                 try:
@@ -2239,10 +2408,13 @@ def register_tab_tools(
             retried = False
             # @nonobvious(forced-by): OOPIF frame targets and embed-rewritten
             # hrefs attach late on slow devices — a first scan can see a bare
-            # main document while the page visibly shows the embed; one settle
-            # retry recovers it instead of silently returning the footer links.
-            if (frame_url_contains and not frames_matched) or (
-                not frame_url_contains and len(links) <= 2 and iframe_present
+            # main document, or a matched frame whose anchors are not rewritten
+            # yet; one settle retry recovers it instead of silently returning
+            # the footer links or an empty set.
+            if (
+                (frame_url_contains and not frames_matched)
+                or (frame_url_contains and frames_matched and not links and anchors_seen)
+                or (not frame_url_contains and len(links) <= 2 and iframe_present)
             ):
                 retried = True
                 await asyncio.sleep(_FIND_LINKS_RETRY_DELAY_S)
@@ -2263,6 +2435,10 @@ def register_tab_tools(
             + (" (after one settle retry)" if retried else "")
         )
         await _emit_progress(progress, telemetry)
+
+        dom_hosts = await _dom_iframe_hosts(browser_session)
+        if dom_hosts:
+            clipboard["_dom_embed_hosts"] = dom_hosts
 
         if frame_url_contains and not frames_matched:
             return ActionResult(
@@ -2318,6 +2494,8 @@ def register_tab_tools(
                 )
             except Exception:
                 embed_hosts = []
+            if not embed_hosts:
+                embed_hosts = dom_hosts
             if embed_hosts:
                 frame_hint = (
                     " Note: this page embeds cross-origin panel(s) "
@@ -2334,12 +2512,27 @@ def register_tab_tools(
                 "skips them automatically, so still call it with no args. Pass "
                 "explicit urls only if you DO want an offhost page."
             )
+        unverified_hint = ""
+        if frame_url_contains and frames_matched and not links and anchors_seen:
+            unverified_hint = (
+                f" WARNING: the frame filter matched {frames_matched} frame(s) but "
+                f"0 of the page's {anchors_seen} anchor(s) belong to it — the "
+                "embed's links may not have finished rewriting, so this count is "
+                "unverified. Wait 2 seconds and re-run find_links before trusting "
+                "an empty result."
+            )
+        elif settle_frameless:
+            unverified_hint = (
+                " WARNING: the count is unverified — the embedded panel was never "
+                "scrolled during settling (its frame had not attached), so late "
+                "items may be missing. Re-run find_links if the count looks low."
+            )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
             + ". Next: call read_pages() with no args to read them ALL in one step — "
             "each item's detail (description, posted date and more) lives on its own "
-            "page, not this listing." + frame_hint + offhost_hint
+            "page, not this listing." + unverified_hint + frame_hint + offhost_hint
             + " read_pages prefills rows_draft.json for add_items_from_file — no "
             "mapping script needed. The links stay in view below and via "
             "recall('found_links') — no need to re-read."
@@ -3327,6 +3520,46 @@ def _gate_empty_fields(
     return filtered
 
 
+def _gate_link_deficit(
+    store: OutputStore, clipboard: dict[str, Any] | None
+) -> str | None:
+    """The bounce message when find_links captured more usable links than the
+    output holds items — the signature of a run that read a partial listing and
+    stopped (e.g. an embed's links appearing mid-run). None when counts agree.
+    """
+    if clipboard is None or not store.array_field:
+        return None
+    kept, _ = _saved_links_sans_offhost(clipboard)
+    count = store.item_count()
+    if not kept or len(kept) <= count:
+        return None
+    url_field = _item_url_field(store)
+    arr = store.data.get(store.array_field) or []
+    item_urls = {
+        _norm_url(it[url_field])
+        for it in arr
+        if url_field and isinstance(it, dict) and it.get(url_field)
+    }
+    unlisted = [u for u in kept if _norm_url(u) not in item_urls]
+    msg = (
+        f"find_links captured {len(kept)} on-site link(s) but the output holds "
+        f"only {count} item(s)."
+    )
+    if unlisted:
+        shown = "\n- ".join(unlisted[:8])
+        msg += (
+            f" These link(s) have no item yet:\n- {shown}\n"
+            "Read them with read_pages([...]) and add the missing rows, or state "
+            "in your done text why they are not records."
+        )
+    else:
+        msg += (
+            " Re-check the saved found_links against the items and add what is "
+            "missing, or state in your done text why the counts differ."
+        )
+    return msg
+
+
 def register_completeness_gate(
     tools: Tools,
     store: OutputStore,
@@ -3355,14 +3588,36 @@ def register_completeness_gate(
     async def done(params: Any, file_system: FileSystem) -> ActionResult:
         if not state["bounced"]:
             empties = _gate_empty_fields(store, clipboard)
-            if empties:
+            deficit = _gate_link_deficit(store, clipboard)
+            if empties or deficit:
                 state["bounced"] = True
                 if on_incomplete is not None:
                     try:
-                        await on_incomplete(empties)
+                        await on_incomplete(empties or ([deficit] if deficit else []))
                     except Exception:
                         logger.debug("completeness gate event emit failed", exc_info=True)
-                listing = "\n- ".join(empties)
+                parts: list[str] = []
+                if empties:
+                    listing = "\n- ".join(empties)
+                    parts.append(
+                        "these fields in the output are still empty:\n- "
+                        f"{listing}\n\nFor each field, either fill it (update_items "
+                        "in bulk, or go back to the page that shows it) or, if you "
+                        "have looked where it should be and the site genuinely does "
+                        "not publish it, settle it with mark_absent(field, reason)."
+                    )
+                if deficit:
+                    parts.append(deficit)
+                if not (clipboard or {}).get("found_links") and (clipboard or {}).get(
+                    "_dom_embed_hosts"
+                ):
+                    parts.append(
+                        "find_links never captured any links, yet the page embeds "
+                        "cross-origin panel(s) from "
+                        + ", ".join((clipboard or {})["_dom_embed_hosts"])
+                        + " — if the listing lives inside one, run "
+                        "find_links(frame_url_contains=...) first."
+                    )
                 hints = ""
                 try:
                     hint_lines = store.extra_key_hints()
@@ -3384,14 +3639,13 @@ def register_completeness_gate(
                 return ActionResult(
                     is_done=False,
                     extracted_content=(
-                        "Not finished — these fields in the output are still empty:\n- "
-                        f"{listing}\n\nNo step, time or cost limit has been reached: "
-                        "you have ample budget left, so do NOT stop early or claim an "
-                        "execution limit. For each field, either fill it (update_items "
-                        "in bulk, or go back to the page that shows it) or, if you "
-                        "have looked where it should be and the site genuinely does "
-                        "not publish it, settle it with mark_absent(field, reason). "
-                        "Then call done again." + hints + date_hint
+                        "Not finished — "
+                        + "\n\n".join(parts)
+                        + "\n\nNo step, time or cost limit has been reached: "
+                        "you have ample budget left, so do NOT stop early or claim "
+                        "an execution limit. Then call done again."
+                        + hints
+                        + date_hint
                     ),
                 )
         # @nonobvious(forced-by): the judge evaluates the done text, so the
