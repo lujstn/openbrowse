@@ -24,8 +24,8 @@ Given the same real-world extraction task (a careers page with 16 records behind
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 10 | 2m 36s | 859k | $0.78 | 14/14<sup>1</sup> |
-| **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | **4m 02s** | **242k** | **$0.40** | **14/14** |
-| **OpenBrowse** | **gpt-5.6-terra** | **none** | **11** | **1m 47s** | **202k** | **$0.24** | **14/14** |
+| **OpenBrowse** | **gpt-5.6-terra** | **none** | 11 | **1m 47s** | **202k** | **$0.24** | **14/14** |
+| **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | 4m 02s | **242k** | **$0.40** | **14/14** |
 
 <sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were inferred rather than shown on the page.</i></sub>
 
@@ -59,10 +59,10 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 10 | 2m 36s | 859k | $0.78 | 14/14<sup>1</sup> |
-| OpenBrowse | claude-sonnet-5 | high | **10** | **4m 02s** | **242k** | **$0.40** | 14/14 |
+| OpenBrowse | claude-sonnet-5 | high | **10** | 4m 02s | **242k** | **$0.40** | 14/14 |
 | OpenBrowse | claude-sonnet-5 | none | 9 | 5m 18s | 237k | $0.51 | 14/14 |
 | OpenBrowse | gpt-5.6-terra | high | 17 | 5m 05s | 434k | $0.66 | 14/14 |
-| OpenBrowse | gpt-5.6-terra | none | **11** | **1m 47s** | **202k** | **$0.24** | 14/14 |
+| OpenBrowse | gpt-5.6-terra | none | 11 | **1m 47s** | **202k** | **$0.24** | 14/14 |
 | OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
