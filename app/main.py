@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Any
 
 # @nonobvious(forced-by): browser-use reads this env var ONCE at module import to
 # set its global per-action timeout (default 180s), which cancelled long
@@ -14,8 +16,11 @@ from contextlib import asynccontextmanager
 # stay above read_pages' own 420s budget and below the 520s step_timeout.
 os.environ.setdefault("BROWSER_USE_ACTION_TIMEOUT_S", "480")
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import system_metrics
@@ -85,6 +90,28 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+def _jsonable_finite(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {k: _jsonable_finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_finite(v) for v in value]
+    return value
+
+
+# @nonobvious(forced-by): validation errors echo the offending input, so a body
+# like {"maxCostUsd": Infinity} puts a non-finite float in the 422 detail, which
+# the JSON response encoder refuses to serialise, turning a clean 422 into a 500.
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _jsonable_finite(jsonable_encoder(exc.errors()))},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,
