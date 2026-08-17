@@ -535,8 +535,8 @@ OpenBrowse{% endblock %} {% block head %}
       <span class="feed-btns" style="display: flex; gap: 6px">
         <button id="stop-btn" class="feed-btn stop" title="Stop the agent (saves partial output)" style="display: none">⏹ Stop</button>
         <span class="export-wrap">
-          <button id="copy-json" class="feed-btn" title="Copy this session as JSON">
-            {} Copy JSON ▾
+          <button id="copy-json" class="feed-btn" title="Download this session as JSON">
+            {} Export JSON ▾
           </button>
           <div id="export-menu" class="export-menu" style="display: none">
             <button class="feed-btn export-opt" data-scope="output" title="Just the schema-validated result — what the platform receives">
@@ -829,16 +829,11 @@ OpenBrowse{% endblock %} {% block head %}
     exportMenu.style.display = exportMenu.style.display === "none" ? "flex" : "none";
   };
   exportMenu.querySelectorAll(".export-opt").forEach(function (opt) {
-    opt.onclick = async function () {
+    opt.onclick = function () {
       exportMenu.style.display = "none";
-      try {
-        const resp = await fetch(
-          "/session/" + SESSION_ID + "/log?scope=" + opt.dataset.scope
-        );
-        const data = await resp.json();
-        await copyText(JSON.stringify(data, null, 2));
-        flash(exportBtn, "Copied");
-      } catch (e) {}
+      window.location =
+        "/session/" + SESSION_ID + "/log?scope=" + opt.dataset.scope + "&download=1";
+      flash(exportBtn, "Downloading…");
     };
   });
   document.addEventListener("click", function (e) {

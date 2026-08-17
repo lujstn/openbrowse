@@ -25,6 +25,7 @@ from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
 from app.agent import cost
+from app import system_metrics
 from app.agent.code_stream import CodeStreamObserver
 from app.agent.activity import clear_activity, set_activity
 from app.agent.leak_repair import is_missing_action_error, repair_anthropic_message
@@ -1260,6 +1261,23 @@ async def run_agent_session(session_id: str) -> None:
                 msg_type="event",
                 data=json.dumps({"category": "memory", "action": "startUrl"}),
                 summary=f"startUrl saved → {start_url}",
+                count_step=False,
+            )
+
+        pressure_level, pressure_sample = system_metrics.pressure()
+        if pressure_level != "ok":
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "system", "action": "pressure"}),
+                summary=(
+                    f"⚠ Host CPU {pressure_level} at launch: load "
+                    f"{pressure_sample['load1']} on {pressure_sample['cores']} "
+                    "cores. Timing-sensitive embed reads (frame attach, link "
+                    "rewriting, consent persistence) are degraded — failures in "
+                    "this run may be environmental, not site changes."
+                ),
                 count_step=False,
             )
 

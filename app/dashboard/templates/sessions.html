@@ -82,9 +82,73 @@
     color: #34d399;
     border-bottom-color: #34d399;
   }
+  .monitor-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .monitor-tile {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 10px 12px 6px;
+  }
+  .monitor-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .monitor-title {
+    color: #666;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .monitor-value {
+    color: #e5e5e5;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .monitor-value.warn {
+    color: #fbbf24;
+  }
+  .monitor-value.hot {
+    color: #ef4444;
+  }
+  .monitor-tile svg {
+    display: block;
+    width: 100%;
+    height: 36px;
+  }
 </style>
 {% endblock %} {% block content %}
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
+
+<div class="monitor-strip" id="monitor-strip" style="display: none">
+  <div class="monitor-tile">
+    <div class="monitor-head">
+      <span class="monitor-title">CPU load / core</span>
+      <span class="monitor-value" id="mon-cpu-val">–</span>
+    </div>
+    <svg id="mon-cpu" preserveAspectRatio="none" viewBox="0 0 200 36"></svg>
+  </div>
+  <div class="monitor-tile">
+    <div class="monitor-head">
+      <span class="monitor-title">Memory used</span>
+      <span class="monitor-value" id="mon-mem-val">–</span>
+    </div>
+    <svg id="mon-mem" preserveAspectRatio="none" viewBox="0 0 200 36"></svg>
+  </div>
+  <div class="monitor-tile">
+    <div class="monitor-head">
+      <span class="monitor-title">Swap used</span>
+      <span class="monitor-value" id="mon-swap-val">–</span>
+    </div>
+    <svg id="mon-swap" preserveAspectRatio="none" viewBox="0 0 200 36"></svg>
+  </div>
+</div>
 
 <div id="live-section" {% if not live_sessions %}style="display: none"{% endif %}>
   <div class="section-label">Live</div>
@@ -244,6 +308,65 @@
         el.textContent = original;
       }, 1000);
     });
+  })();
+</script>
+<script>
+  (function () {
+    var strip = document.getElementById("monitor-strip");
+    var CFG = [
+      { svg: "mon-cpu", val: "mon-cpu-val", key: "loadPerCore", color: "#60a5fa",
+        fmt: function (v) { return v.toFixed(2); }, max: null, threshold: 1.0 },
+      { svg: "mon-mem", val: "mon-mem-val", key: "memUsedPct", color: "#2dd4bf",
+        fmt: function (v) { return v.toFixed(0) + "%"; }, max: 100, threshold: null },
+      { svg: "mon-swap", val: "mon-swap-val", key: "swapUsedMb", color: "#fbbf24",
+        fmt: function (v) { return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : v.toFixed(0) + " MB"; },
+        max: null, threshold: null },
+    ];
+    var W = 200, H = 36, PAD = 2;
+
+    function draw(cfg, hist, thresholds) {
+      var svg = document.getElementById(cfg.svg);
+      var valEl = document.getElementById(cfg.val);
+      var pts = hist.map(function (s) { return s[cfg.key]; })
+        .filter(function (v) { return v !== null && v !== undefined; });
+      if (!pts.length) { valEl.textContent = "n/a"; return; }
+      var last = pts[pts.length - 1];
+      valEl.textContent = cfg.fmt(last);
+      valEl.className = "monitor-value";
+      if (cfg.key === "loadPerCore") {
+        if (last >= thresholds.saturated) valEl.className += " hot";
+        else if (last >= thresholds.elevated) valEl.className += " warn";
+      }
+      var max = cfg.max || Math.max.apply(null, pts.concat(cfg.threshold || 0)) * 1.15 || 1;
+      var step = (W - PAD * 2) / Math.max(pts.length - 1, 1);
+      function y(v) { return H - PAD - (Math.min(v, max) / max) * (H - PAD * 2); }
+      var d = pts.map(function (v, i) {
+        return (i ? "L" : "M") + (PAD + i * step).toFixed(1) + " " + y(v).toFixed(1);
+      }).join(" ");
+      var parts = [];
+      if (cfg.threshold !== null && cfg.threshold < max) {
+        parts.push('<line x1="0" x2="' + W + '" y1="' + y(cfg.threshold).toFixed(1) +
+          '" y2="' + y(cfg.threshold).toFixed(1) +
+          '" stroke="#ef4444" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 3" />');
+      }
+      parts.push('<path d="' + d + '" fill="none" stroke="' + cfg.color +
+        '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />');
+      svg.innerHTML = parts.join("");
+      svg.parentElement.title =
+        svg.parentElement.querySelector(".monitor-title").textContent +
+        ": " + cfg.fmt(last) + " now, " + cfg.fmt(Math.max.apply(null, pts)) +
+        " peak over the last hour";
+    }
+
+    function tick() {
+      fetch("/system/metrics.json").then(function (r) { return r.json(); }).then(function (data) {
+        if (!data.history || !data.history.length) return;
+        strip.style.display = "";
+        CFG.forEach(function (cfg) { draw(cfg, data.history, data.thresholds); });
+      }).catch(function () {});
+    }
+    tick();
+    setInterval(tick, 10000);
   })();
 </script>
 {% endblock %}

@@ -2756,3 +2756,53 @@ async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
     note = result.long_term_memory or ""
     assert "recovered by matching hrefs" in note
     assert clipboard["found_links_frame"] == "board.example.com"
+
+
+def test_system_metrics_pressure_levels(monkeypatch) -> None:
+    import app.system_metrics as sm
+
+    monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (5.5, 5.0, 4.0))
+    level, s = sm.pressure()
+    assert level == "saturated"
+    assert s["loadPerCore"] == 1.375
+    note = sm.pressure_note()
+    assert "saturated" in note and "environmental" in note
+
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (4.2, 4.0, 4.0))
+    assert sm.pressure()[0] == "elevated"
+
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (0.4, 0.5, 0.5))
+    assert sm.pressure()[0] == "ok"
+    assert sm.pressure_note() == ""
+
+
+async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+    import app.system_metrics as sm
+
+    monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (6.5, 6.0, 6.0))
+
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        return {"url": url, "text": "identical shell text " * 30, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+
+    async def dom_hosts(session_):
+        return ["board.example.com"]
+
+    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
+    progress_msgs: list[str] = []
+
+    async def progress(msg):
+        progress_msgs.append(msg)
+
+    urls = [f"https://x.com/{i}" for i in range(3)]
+    await tools_mod._read_pages_impl(session, urls, None, {}, progress=progress)
+    stamped = [m for m in progress_msgs if "host CPU saturated" in m]
+    assert stamped, progress_msgs
+    assert "environmental" in stamped[0]

@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app import system_metrics
 from app.agent.pool import pool
 from app.api.profiles import router as profiles_router
 from app.api.sessions import router as sessions_router
@@ -62,14 +63,17 @@ async def lifespan(app: FastAPI):
         logger.info("Expired %d stale session shell(s)", expired)
 
     sweeper = asyncio.create_task(_stale_session_sweeper())
+    metrics_sampler = asyncio.create_task(system_metrics.sampler_loop())
     logger.info("Server ready on %s:%d", settings.host, settings.port)
     yield
     logger.info("Shutting down — cancelling sessions and releasing displays...")
     sweeper.cancel()
-    try:
-        await sweeper
-    except asyncio.CancelledError:
-        pass
+    metrics_sampler.cancel()
+    for task in (sweeper, metrics_sampler):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await pool.shutdown()
     await display_manager.cleanup_all()
     logger.info("Shutdown complete.")

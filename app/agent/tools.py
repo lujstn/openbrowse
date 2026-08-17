@@ -30,6 +30,7 @@ from app.agent.output_store import (
     elide_long_values,
 )
 from app.agent.textguard import guard_key
+from app import system_metrics
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -868,7 +869,8 @@ async def _read_pages_impl(
             progress,
             f"read_pages: {shell_flagged} page(s) only showed the site's outer "
             f"frame because the real content loads in an embedded panel{host_note}. "
-            "Retrying each read inside that panel now",
+            "Retrying each read inside that panel now"
+            + system_metrics.pressure_note(),
         )
     if shell_flagged and embed_hosts:
         # @nonobvious(forced-by): retry here, not via instruction — models route
@@ -903,7 +905,8 @@ async def _read_pages_impl(
         await _emit_progress(
             progress,
             f"read_pages: {len(lone)} page(s) read the outer shell while sibling "
-            "pages rendered their embedded panel — retrying each inside the panel",
+            "pages rendered their embedded panel — retrying each inside the panel"
+            + system_metrics.pressure_note(),
         )
         try:
             for i in range(0, len(lone), concurrency):
@@ -2538,6 +2541,7 @@ def register_tab_tools(
                 if salvaged
                 else ""
             )
+            + (system_metrics.pressure_note() if retried or salvaged else "")
         )
         await _emit_progress(progress, telemetry)
 

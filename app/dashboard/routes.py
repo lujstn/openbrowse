@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
+from app import system_metrics
 from app.agent.activity import get_activity
 from app.agent.pool import pool
 from app.agent.runner import (
@@ -431,22 +432,46 @@ def _strip_thinking(data: str | None) -> str | None:
     return data
 
 
+@router.get("/system/metrics.json")
+async def system_metrics_json():
+    """Host pressure history for the dashboard monitor strip."""
+    return JSONResponse(
+        {
+            "now": system_metrics.sample(),
+            "history": system_metrics.history(),
+            "thresholds": {
+                "elevated": system_metrics.ELEVATED_LOAD_PER_CORE,
+                "saturated": system_metrics.SATURATED_LOAD_PER_CORE,
+            },
+        }
+    )
+
+
+def _attachment(session_id: str, scope: str) -> dict[str, str]:
+    suffix = "" if scope == "full" else f".{scope}"
+    return {
+        "Content-Disposition": f'attachment; filename="{session_id}{suffix}.json"'
+    }
+
+
 @router.get("/session/{session_id}/log")
-async def session_log(session_id: str, scope: str = "full"):
+async def session_log(session_id: str, scope: str = "full", download: bool = False):
     """Session export at three scopes: ``output`` is only the schema answer,
     ``steps`` is the session and step log without raw thinking, ``full`` is
-    everything the feed shows.
+    everything the feed shows. With ``download`` the response arrives as an
+    attachment named ``<session id>.json`` so exports land as files.
     """
     session = await crud.get_session(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
+    headers = _attachment(session_id, scope) if download else None
     if scope == "output":
         raw = session.get("output")
         try:
-            return JSONResponse(json.loads(raw) if raw else None)
+            return JSONResponse(json.loads(raw) if raw else None, headers=headers)
         except (json.JSONDecodeError, TypeError):
-            return JSONResponse({"output": raw})
+            return JSONResponse({"output": raw}, headers=headers)
 
     messages, _ = await crud.list_messages(session_id, limit=1000)
     export = _to_session_response(session).model_dump()
@@ -460,7 +485,7 @@ async def session_log(session_id: str, scope: str = "full"):
         }
         for m in messages
     ]
-    return JSONResponse(export)
+    return JSONResponse(export, headers=headers)
 
 
 @router.post("/session/{session_id}/message")
