@@ -467,12 +467,30 @@ OpenBrowse{% endblock %} {% block head %}
   .msg-row.has-cards .msg-caret { display: inline-block; }
   .msg-cards {
     flex-basis: 100%;
-    display: none;
-    margin: 8px 0 4px 0;
-    padding: 2px 0 2px 14px;
+    display: grid;
+    grid-template-rows: 0fr;
+    padding-left: 14px;
     border-left: 2px solid #26262b;
+    /* @nonobvious(forced-by): the row wraps with an 8px gap, and a collapsed
+       grid still occupies a flex line, so this cancels the gap it would add. */
+    margin-top: -8px;
+    transition:
+      grid-template-rows 0.3s var(--ob-ease-in-out),
+      margin 0.3s var(--ob-ease-in-out);
   }
-  .msg-row.expanded .msg-cards { display: block; }
+  .msg-cards-inner { overflow: hidden; min-height: 0; }
+  .msg-row.expanded .msg-cards { grid-template-rows: 1fr; margin: 8px 0 4px 0; }
+  .msg-cards-foot { display: flex; justify-content: flex-end; padding-top: 2px; }
+  .msg-copy {
+    background: none;
+    border: 1px solid var(--ob-border-strong);
+    color: var(--ob-text-dim);
+    border-radius: 5px;
+    font-size: 11px;
+    padding: 2px 9px;
+    cursor: pointer;
+  }
+  .msg-copy:hover { border-color: var(--ob-text-muted); color: var(--ob-text); }
   .msg-cards .card { display: block; padding: 8px 0; }
   .msg-cards .card + .card { border-top: 1px solid #1c1c20; }
   .msg-cards .card-head {
@@ -891,6 +909,21 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   feedRows.addEventListener("click", function (e) {
+    const copyBtn = e.target.closest(".msg-copy");
+    if (copyBtn) {
+      const row = copyBtn.closest(".msg-row");
+      const lines = [];
+      const cat = row.querySelector(".msg-cat");
+      const summary = row.querySelector(".msg-summary");
+      if (cat) lines.push(cat.textContent.trim() + ": " + (summary ? summary.textContent.trim() : ""));
+      row.querySelectorAll(".msg-cards .card").forEach(function (card) {
+        const head = card.querySelector(".card-head");
+        const body = card.querySelector(".card-text");
+        lines.push("\n" + (head ? head.textContent.trim() : "") + "\n" + (body ? body.textContent.trim() : ""));
+      });
+      copyText(lines.join("\n")).then(function () { flash(copyBtn, "Copied"); });
+      return;
+    }
     const target = e.target.closest(".msg-caret");
     if (!target) return;
     const row = target.closest(".msg-row");

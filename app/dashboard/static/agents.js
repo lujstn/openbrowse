@@ -310,26 +310,7 @@
   };
 
   function revealCardsForHandoff(rowEl) {
-    var cards = rowEl && rowEl.querySelector(".msg-cards");
-    if (!cards) return;
-    rowEl.classList.add("expanded");
-    if (REDUCED_MOTION) return;
-    cards.classList.add("ob-handoff-grow");
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        cards.classList.add("ob-handoff-grow-open");
-      });
-    });
-    var done = false;
-    var cleanup = function (e) {
-      if (e && e.propertyName !== "grid-template-rows") return;
-      if (done) return;
-      done = true;
-      cards.classList.remove("ob-handoff-grow", "ob-handoff-grow-open");
-      cards.removeEventListener("transitionend", cleanup);
-    };
-    cards.addEventListener("transitionend", cleanup);
-    setTimeout(cleanup, 500);
+    if (rowEl && rowEl.querySelector(".msg-cards")) rowEl.classList.add("expanded");
   }
 
   function fadeRowIn(rowEl) {
