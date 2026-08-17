@@ -146,8 +146,6 @@ sudo tailscale funnel --bg 8420
 
 ## Citation
 
-[![DOI](https://zenodo.org/badge/1210478161.svg)](https://doi.org/10.5281/zenodo.21986248)
-
 This project is licensed under the MIT License. If you use OpenBrowse as part of your research or project, please cite:
 
 ```bibtex
@@ -161,7 +159,9 @@ This project is licensed under the MIT License. If you use OpenBrowse as part of
 }
 ```
 
-<br>
+[![DOI](https://zenodo.org/badge/1210478161.svg)](https://doi.org/10.5281/zenodo.21986248)
+
+<br><br>
 
 <table align="center">
   <tr>
