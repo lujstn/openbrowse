@@ -68,13 +68,13 @@ _CARDS_EXTENSION = (
 )
 
 _DRILL_IN_EXTENSION = (
-    "Listing and results pages are a table of contents, not the content. Never "
+    "Index and results pages are a table of contents, not the content. Never "
     "record an item from its snippet; open its own page and read it first."
 )
 
 _TOOLS_EASIEST_EXTENSION = (
     "Browsing here is easiest with your own tools, and extraction has ONE golden "
-    "path: (1) find_links(...) collects a listing's links with a selector "
+    "path: (1) find_links(...) collects a page's links with a selector "
     "(href_contains, href_regex, frame_url_contains, container_index, attr) — the "
     "only action that reads links inside an embedded/cross-origin panel; (2) "
     "read_pages() reads every found link in parallel tabs in ONE step, saves "
@@ -82,13 +82,13 @@ _TOOLS_EASIEST_EXTENSION = (
     "rows_draft.json with one schema row per page; (3) "
     "add_items_from_file('rows_draft.json') loads them all — write NO mapping "
     "script; (4) fix judgement fields in ONE update_items call, deciding from what "
-    "you have already read (each page's listing-row text is in page['listing_text'] "
+    "you have already read (each page's source-row text is in page['link_text'] "
     "in pages.json) — never write a parser script for prose, and NEVER guess an "
     "enum or default one: a value the page does not state stays null; (5) "
     "mark_absent any field NO page publishes — a field found on some pages with "
     "the rest read is already complete as a partial — then done. A record's real "
     "detail lives only on its own page, never the "
-    "listing — add_item refuses more than two listing items with no detail. Use "
+    "list page — add_item refuses more than two undetailed list rows. Use "
     "open_tabs/goto_tab/open_in_new_tab/close_tab only when you must interact with "
     "a page; find_elements and evaluate see only the MAIN page, while a script can "
     "read inside an embed with browser.frame_text(url_part)."
@@ -262,7 +262,7 @@ _STORE_ONLY_ACTIONS = {
 def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) -> None:
     """Wrap the session's state fetch so that, when the previous step only did
     store/file/sandbox work (``flag['eligible']``) and the page URL is unchanged,
-    the next step gets a stub state — URL, title and tabs, but no DOM listing and no
+    the next step gets a stub state — URL, title and tabs, but no DOM element list and no
     screenshot — instead of re-serialising the same page. The cached selector map is
     kept, so element indices from the last full state still resolve for clicks.
     One-shot per arming: only the agent's own per-step fetch sees the stub, never a

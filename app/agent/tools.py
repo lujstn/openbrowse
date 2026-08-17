@@ -373,10 +373,10 @@ _LAZY_POLL_S = 0.6
 async def _settle_lazy_links(
     browser_session: BrowserSession, frame_url_contains: str | None
 ) -> bool:
-    """Coax a lazily-populating listing into showing everything before links are
+    """Coax a lazily-populating list page into showing everything before links are
     collected: repeatedly scroll the main page and any matching embedded frame to
     the bottom, and only proceed once the link count has stopped growing for two
-    consecutive polls. Listings (and their embeds) commonly append items on scroll
+    consecutive polls. List pages (and their embeds) commonly append items on scroll
     or a second after first paint, so collecting immediately under-counts. The main
     page's scroll position is restored afterwards. Returns True when a frame
     filter was requested but no matching frame was ever seen during settling —
@@ -479,7 +479,7 @@ async def _read_one_page(
     read {url, title, text, jsonld, links} from it — the panel when one matches,
     else the main document. Rendering only counts once the text is substantial
     (embeds paint a thin loading shell first), and a page whose JSON-LD has not
-    arrived with the text gets a short grace poll — that is where posted dates and
+    arrived with the text gets a short grace poll — that is where published dates and
     other structured details live, so reading the shell would silently null those fields.
     """
     page: dict[str, Any] = {"url": url}
@@ -735,7 +735,7 @@ def _scan_link_map(
 
 def _saved_links_sans_offhost(clipboard: dict[str, Any] | None) -> tuple[list[str], int]:
     """The last find_links result minus links flagged as pointing off-site, plus
-    how many were skipped — so a no-args bulk read covers the listing without
+    how many were skipped — so a no-args bulk read covers the list page without
     dragging in navigation/branding pages.
     """
     cb = clipboard or {}
@@ -931,10 +931,10 @@ async def _read_pages_impl(
         visited = clipboard.setdefault("_visited", set())
         failed = clipboard.setdefault("_read_failed", set())
         frame_failed = clipboard.setdefault("_read_failed_frame", set())
-        listing_meta = clipboard.get("found_links_meta") or {}
+        links_meta = clipboard.get("found_links_meta") or {}
         for u, page in results.items():
-            if listing_meta.get(u):
-                page.setdefault("listing_text", listing_meta[u])
+            if links_meta.get(u):
+                page.setdefault("link_text", links_meta[u])
             if page.get("error"):
                 bucket = frame_failed if _frame_failure(page["error"]) else failed
                 bucket.add(_norm_url(u))
@@ -1150,7 +1150,7 @@ class _SandboxBrowser:
         """Run JS INSIDE a cross-origin iframe whose URL contains ``url_contains``, via
         a per-target CDP session. Returns the value of the first matching frame, or
         ``[(frame_url, value), …]`` when all_matches=True. This is the only way a script
-        can read an embedded/cross-origin panel (e.g. a listing detail inside an embed).
+        can read an embedded/cross-origin panel (e.g. a detail panel inside an embed).
         """
         needle = (url_contains or "").lower()
         all_frames = await self.frames()
@@ -1199,7 +1199,7 @@ class _SandboxBrowser:
 
     async def frame_jsonld(self, url_contains: str) -> Any:
         """Parsed JSON-LD structured data from the matching cross-origin iframe — where a
-        posted/published date and other structured fields live that are not in the visible
+        published date and other structured fields live that are not in the visible
         text. Returns the first entity-describing object, else the first parseable
         object, else None (e.g. ``(await browser.frame_jsonld('embed'))['datePublished']``).
         """
@@ -1228,7 +1228,7 @@ class _SandboxBrowser:
     ) -> list[dict[str, Any]]:
         """Read many pages in parallel background tabs and return
         ``[{url, title, text, jsonld, links, error?}, …]`` — the bulk way to read a
-        whole listing's detail pages without navigating the current tab. With no
+        whole set of found links without navigating the current tab. With no
         urls, reads the links saved by the last find_links. When
         ``frame_url_contains`` is given, text/jsonld/links come from the matching
         embedded panel on each page.
@@ -1931,7 +1931,7 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
 
     @tools.action(
         "Save a value to the session clipboard under a key so you can return to it "
-        "later (e.g. a listings URL, an id, a running count). Persists across steps "
+        "later (e.g. a list-page URL, an id, a running count). Persists across steps "
         "and is shared with the code sandbox (remember/recall)."
     )
     async def remember(key: str, value: str) -> ActionResult:
@@ -2176,7 +2176,7 @@ def register_tab_tools(
     """
 
     @tools.action(
-        "Read MANY pages in ONE step — the fast way to cover a whole listing. Opens "
+        "Read MANY pages in ONE step — the fast way to cover a whole list page. Opens "
         "the URLs in parallel tabs, waits for each to render, reads them, closes "
         "them, and saves the results to pages.json: for each page {url, title, "
         "text, jsonld, links}. Call with NO arguments after find_links: it reads "
@@ -2265,7 +2265,7 @@ def register_tab_tools(
                             )
                             + f". Draft fills: {coverage}."
                             + (
-                                " Not in the draft (fill from the listing rows above "
+                                " Not in the draft (fill from the source rows above "
                                 "via update_items, or mark_absent): "
                                 + ", ".join(unfilled) + "."
                                 if unfilled
@@ -2285,13 +2285,13 @@ def register_tab_tools(
                 if p.get("error"):
                     lines.append(f"#{i} FAILED {p['url']} — {p['error']}")
                 else:
-                    listing = " ".join((p.get("listing_text") or "").split())[:80]
+                    link_text = " ".join((p.get("link_text") or "").split())[:80]
                     lines.append(
                         f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
                         f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
                         f"frame {'yes' if p.get('frame_matched') else 'no'}, "
                         f"{len(p.get('links') or [])} links"
-                        + (f" | listing row: {listing}" if listing else "")
+                        + (f" | source row: {link_text}" if link_text else "")
                     )
             note = (
                 f"Read {ok_count} of {len(pages)} pages"
@@ -2332,7 +2332,7 @@ def register_tab_tools(
         "(hard cap 48 total). Each becomes a blank about:blank tab at a stable 0-based "
         "index; the real URL is only fetched when you call goto_tab(n). Call with NO "
         "urls to queue every link from your last find_links. Prefer read_pages when "
-        "you just need each page's content — it covers the whole listing in one step; "
+        "you just need each page's content — it covers every found link in one step; "
         "use tabs when you must interact with the pages."
     )
     async def open_tabs(urls: list[str] | None = None) -> ActionResult:
@@ -2346,7 +2346,7 @@ def register_tab_tools(
             note = await tab_manager.open_tabs(urls)
             note += (
                 " Next: walk them — goto_tab(0), read the detail page, update_item that "
-                "item, then goto_tab(1), and so on. Do NOT add items from the listing alone."
+                "item, then goto_tab(1), and so on. Do NOT add items from the list page alone."
             )
             return ActionResult(extracted_content=note, long_term_memory=note)
         except Exception as e:
@@ -2373,7 +2373,7 @@ def register_tab_tools(
     @tools.action(
         "Open the link at element index N in a new tab and switch to it — works "
         "even for links inside embedded/cross-origin sections that find_elements "
-        "can't read. Use this to visit a listing's detail page."
+        "can't read. Use this to visit an item's detail page."
     )
     async def open_in_new_tab(index: int) -> ActionResult:
         try:
@@ -2407,7 +2407,7 @@ def register_tab_tools(
         "This is the ONLY tool that can read links inside embedded/cross-origin panels. "
         "Lazy-loading is handled for you: the page and any matching panel are "
         "scrolled and settled until the link count is stable, so ONE call collects "
-        "the whole listing — do not re-run it to check for late items. "
+        "the whole list — do not re-run it to check for late items. "
         "The result is saved as found_links, so open them ALL with open_tabs() (no args) "
         "or one with open_in_new_tab(index) — no need to copy hrefs back."
     )
@@ -2510,7 +2510,7 @@ def register_tab_tools(
             )
             if degenerate and (href_contains or href_regex):
                 frame_links, _, _, _ = await _scan(href=None, regex=None)
-                # @nonobvious(must-hold): only a listing-shaped salvage counts —
+                # @nonobvious(must-hold): only a list-shaped salvage counts —
                 # swapping one branding anchor for another helps nobody.
                 if len(frame_links) > max(2, len(links)):
                     kept_hrefs = {link["href"] for link in links}
@@ -2542,7 +2542,7 @@ def register_tab_tools(
                         "only the embed's own anchor(s); these links were "
                         "recovered by matching hrefs containing "
                         f"'{frame_url_contains}' instead, which is the same "
-                        "listing."
+                        "link set."
                     )
                     links = s_links
                     salvaged = True
@@ -2562,7 +2562,7 @@ def register_tab_tools(
             + (f" (after {retries} settle retr{'y' if retries == 1 else 'ies'})" if retried else "")
             + (
                 "; caller filters starved the matched frame so a relaxed rescan "
-                "returned the listing"
+                "returned the link set"
                 if salvaged
                 else ""
             )
@@ -2634,7 +2634,7 @@ def register_tab_tools(
                 frame_hint = (
                     " Note: this page embeds cross-origin panel(s) "
                     f"({', '.join(embed_hosts)}) that a frameless find_links does "
-                    "NOT search — if the listing lives inside one, re-run "
+                    "NOT search — if the links live inside one, re-run "
                     "find_links with frame_url_contains matching that host, and "
                     "keep the same frame for read_pages."
                 )
@@ -2671,8 +2671,8 @@ def register_tab_tools(
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
             + ". Next: call read_pages() with no args to read them ALL in one step — "
-            "each item's detail (description, posted date and more) lives on its own "
-            "page, not this listing." + unverified_hint + frame_hint + offhost_hint
+            "each item's detail (description, published date and more) lives on its own "
+            "page, not this list page." + unverified_hint + frame_hint + offhost_hint
             + " read_pages prefills rows_draft.json for add_items_from_file — no "
             "mapping script needed. The links stay in view below and via "
             "recall('found_links') — no need to re-read."
@@ -2876,7 +2876,7 @@ def _item_url_field(store: OutputStore) -> str | None:
 
 def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
     """Append to an add_item/update_item result the fields still empty on that item and
-    a push to open its own page and fill them — this is what turns a listing stub into
+    a push to open its own page and fill them — this is what turns a list-row stub into
     a full record instead of the finished answer.
     """
     empties = store.item_missing_fields(index)
@@ -2890,8 +2890,8 @@ def _enrichment_note(store: OutputStore, base_msg: str, index: int) -> str:
     return (
         f"{base_msg} Still empty on this item: {shown}. If you have not read this "
         f"item's own page yet, open {where} and update_item({index}, {{…}}) to fill "
-        "what that page shows — detail such as a description or posted date lives on "
-        "the item's page, not the listing. A field the site genuinely does not "
+        "what that page shows — detail such as a description or published date lives on "
+        "the item's page, not the list page. A field the site genuinely does not "
         "publish should be settled once with mark_absent, not left blank."
     )
 
@@ -2902,7 +2902,7 @@ _STUB_CONTENT_CHARS = 120
 
 def _item_has_substantial_content(item: dict) -> bool:
     """True if the item carries a real page-read field (a description far exceeds a
-    listing's short title/location), so it is drilled-in data, not a bare listing row.
+    list row's short title/location), so it is drilled-in data, not a bare list row.
     """
     return any(
         isinstance(v, str) and len(v) > _STUB_CONTENT_CHARS for v in item.values()
@@ -2911,7 +2911,7 @@ def _item_has_substantial_content(item: dict) -> bool:
 
 def _is_bare_stub(store: OutputStore, item: dict, visited: set) -> bool:
     """A bare stub is an item with a detail URL whose page has NOT been opened and which
-    carries no substantial content yet — i.e. a listing row added without drilling in.
+    carries no substantial content yet — i.e. a list row added without drilling in.
     An item with a real description, or whose URL was visited, is never a bare stub.
     """
     url_field = _item_url_field(store)
@@ -2925,7 +2925,7 @@ def _is_bare_stub(store: OutputStore, item: dict, visited: set) -> bool:
 
 def _bare_stub_count(store: OutputStore, visited: set) -> int:
     """How many bare stubs are already in the store — the throttle that stops the agent
-    batch-adding the whole listing without opening any detail page.
+    batch-adding a whole list page without opening any detail page.
     """
     if not store.array_field:
         return 0
@@ -3201,17 +3201,17 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             and not k.startswith("@")
             and isinstance(v, (str, int, float, bool))
         }
-        listing_text = page.get("listing_text") or ""
-        if listing_text:
+        link_text = page.get("link_text") or ""
+        if link_text:
             stored_blob = _norm_evidence(json.dumps(row, default=str)).replace(" ", "")
             residue = [
                 seg.strip()
-                for seg in re.split(r"[•|·\n]+", listing_text)
+                for seg in re.split(r"[•|·\n]+", link_text)
                 if seg.strip()
                 and _norm_evidence(seg).replace(" ", "") not in stored_blob
             ]
             if residue:
-                leftovers["listing_row"] = " • ".join(residue)[:500]
+                leftovers["source_row"] = " • ".join(residue)[:500]
         if leftovers:
             if extra_kind == "undeclared":
                 row[extra_field] = [
@@ -3248,7 +3248,7 @@ def _stub_block_msg(
     store: OutputStore, clipboard: dict[str, Any] | None, item: dict[str, Any]
 ) -> str | None:
     """The refusal message when adding ``item`` would exceed the allowance of
-    listing stubs whose own pages have not been opened, else None.
+    list-row stubs whose own pages have not been opened, else None.
     """
     visited: set = (
         clipboard.setdefault("_visited", set()) if clipboard is not None else set()
@@ -3258,10 +3258,10 @@ def _stub_block_msg(
     if _bare_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
         return None
     return (
-        f"Slow down — you already have {_MAX_UNVISITED_STUBS} listing stubs with no "
+        f"Slow down — you already have {_MAX_UNVISITED_STUBS} list-row stubs with no "
         "detail. Read the items' own pages before adding more: read_pages() covers "
         "them all in one step, then add items with the descriptions it returns. Do "
-        "not batch items in from the listing."
+        "not batch items in from the list page."
     )
 
 
@@ -3447,7 +3447,7 @@ def register_output_store_tools(
     single answer surface: the agent fills it as it discovers data, every write is
     validated live and mirrored to ``output.json``, and the final result is read
     back from it after the run. A shared ``clipboard['_visited']`` URL set throttles
-    adding items whose own detail page has not been opened, so the listing cannot be
+    adding items whose own detail page has not been opened, so a list page cannot be
     batched in as the finished answer.
     """
     array = store.array_field or "output"
@@ -3513,7 +3513,7 @@ def register_output_store_tools(
     @tools.action(
         f"Remove item(s) from the '{array}' list by 0-based index — the repair "
         "tool for rows that should not be in the answer: duplicates, a "
-        "landing/listing page captured as a record, or rows superseded by "
+        "landing/index page captured as a record, or rows superseded by "
         "corrected ones. Pass the indices to delete plus a one-line reason. "
         "Remaining items shift down, so re-check indices with read_output before "
         "any follow-up update_item calls."
@@ -3725,7 +3725,7 @@ def _gate_link_deficit(
     store: OutputStore, clipboard: dict[str, Any] | None
 ) -> str | None:
     """The bounce message when find_links captured more usable links than the
-    output holds items — the signature of a run that read a partial listing and
+    output holds items — the signature of a run that read a partial list page and
     stopped (e.g. an embed's links appearing mid-run). None when counts agree.
     """
     if clipboard is None or not store.array_field:
@@ -3799,10 +3799,10 @@ def register_completeness_gate(
                         logger.debug("completeness gate event emit failed", exc_info=True)
                 parts: list[str] = []
                 if empties:
-                    listing = "\n- ".join(empties)
+                    field_list = "\n- ".join(empties)
                     parts.append(
                         "these fields in the output are still empty:\n- "
-                        f"{listing}\n\nFor each field, either fill it (update_items "
+                        f"{field_list}\n\nFor each field, either fill it (update_items "
                         "in bulk, or go back to the page that shows it) or, if you "
                         "have looked where it should be and the site genuinely does "
                         "not publish it, settle it with mark_absent(field, reason)."
@@ -3816,7 +3816,7 @@ def register_completeness_gate(
                         "find_links never captured any links, yet the page embeds "
                         "cross-origin panel(s) from "
                         + ", ".join((clipboard or {})["_dom_embed_hosts"])
-                        + " — if the listing lives inside one, run "
+                        + " — if the links live inside one, run "
                         "find_links(frame_url_contains=...) first."
                     )
                 hints = ""
@@ -3833,7 +3833,7 @@ def register_completeness_gate(
                     for e in empties
                 ):
                     date_hint = (
-                        "\n\nA posted/published date is usually NOT in the visible text — "
+                        "\n\nA published date is usually NOT in the visible text — "
                         "it is in each page's JSON-LD, which read_pages already returns "
                         "as page['jsonld'] (e.g. its 'datePublished')."
                     )

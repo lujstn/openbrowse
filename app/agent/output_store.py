@@ -362,7 +362,7 @@ class OutputStore:
 
     def item_missing_fields(self, index: int) -> list[str]:
         """The item-model fields still empty on the array item at ``index`` — the
-        drill-in nudge for a stub added from listing data.
+        drill-in nudge for a stub added from list-row data.
         """
         if not self._array_field or self._item_model is None:
             return []
