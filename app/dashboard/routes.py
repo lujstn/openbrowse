@@ -9,8 +9,11 @@ import re
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
+import html as _html
+
 import httpx
 import websockets
+from markupsafe import Markup
 from fastapi import APIRouter, Depends, Form, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -47,6 +50,23 @@ def _safe_fromjson(value: str) -> dict:
 
 templates.env.filters["fromjson"] = _safe_fromjson
 
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _mdlite(text: str) -> Markup:
+    """Markdown-lite for model reasoning text: escape everything, then allow
+    bold, inline code and line breaks. Full markdown is deliberately not
+    rendered; reasoning is prose, not a document.
+    """
+    t = _html.escape(str(text or ""))
+    t = _MD_BOLD_RE.sub(r"<strong>\1</strong>", t)
+    t = _MD_CODE_RE.sub(r"<code>\1</code>", t)
+    return Markup(t.replace("\n", "<br>"))
+
+
+templates.env.filters["mdlite"] = _mdlite
+
 _SELECTOR_RE = re.compile(
     r"^[a-zA-Z][a-zA-Z0-9]*(\[[a-zA-Z_:][\w:-]*(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\])*$"
 )
@@ -72,12 +92,15 @@ def message_display(m: dict) -> dict:
     summary = m.get("summary") or ""
     if t == "event":
         data = _safe_fromjson(m.get("data") or "")
-        return {
+        out = {
             "category": data.get("category", "memory"),
             "label": data.get("action", "note"),
             "summary": summary,
             "code": False,
         }
+        if data.get("reasoning"):
+            out["reasoning"] = data["reasoning"]
+        return out
     if t == "browser_action_error":
         return {"category": "error", "label": "error", "summary": summary, "code": False}
     if t == "planning":

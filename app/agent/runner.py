@@ -342,9 +342,42 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                     parts.append(text)
         return " ".join(" ".join(parts).split())
 
+    async def _stream_reasoning_create(self, params: dict[str, Any]) -> Any:
+        sid = getattr(self, "_activity_session", None)
+        loop = asyncio.get_running_loop()
+        parts: list[str] = []
+        last_push = 0.0
+        async with self.get_client().responses.stream(**params) as stream:
+            async for event in stream:
+                if not sid:
+                    continue
+                if str(getattr(event, "type", "")).endswith(
+                    "reasoning_summary_text.delta"
+                ):
+                    parts.append(getattr(event, "delta", "") or "")
+                    now = loop.time()
+                    if now - last_push > 0.4:
+                        last_push = now
+                        text = " ".join("".join(parts).split())
+                        set_activity(sid, f"💭 {text[-140:]}", spin=True)
+            return await stream.get_final_response()
+
+    async def _create(self, params: dict[str, Any]) -> Any:
+        if "summary" not in (params.get("reasoning") or {}):
+            return await self.get_client().responses.create(**params)
+        try:
+            return await self._stream_reasoning_create(params)
+        except (APIStatusError, APIConnectionError, RateLimitError):
+            raise
+        except Exception:
+            # @nonobvious(forced-by): the SDK's responses.stream surface varies
+            # by version; a non-API failure falls back to the plain call.
+            logger.debug("responses streaming failed; falling back", exc_info=True)
+            return await self.get_client().responses.create(**params)
+
     async def _create_with_summary_fallback(self, params: dict[str, Any]) -> Any:
         try:
-            return await self.get_client().responses.create(**params)
+            return await self._create(params)
         except APIStatusError as e:
             # @nonobvious(forced-by): unverified OpenAI orgs 400 on the summary
             # parameter — drop it once and remember, not fail every step.
@@ -535,13 +568,26 @@ class _RepairingChatAnthropic(ChatAnthropic):
 
     async def _drain_stream(self, stream: Any) -> Any:
         observer = getattr(self, "stream_observer", None)
+        sid = getattr(self, "_activity_session", None)
+        loop = asyncio.get_running_loop()
         parts: list[str] = []
+        think_parts: list[str] = []
+        last_push = 0.0
         async for event in stream:
+            etype = getattr(event, "type", "")
+            if sid and etype == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                chunk = getattr(delta, "thinking", None)
+                if chunk:
+                    think_parts.append(chunk)
+                    now = loop.time()
+                    if now - last_push > 0.4:
+                        last_push = now
+                        text = " ".join("".join(think_parts).split())
+                        set_activity(sid, f"💭 {text[-140:]}", spin=True)
             if observer is None:
                 continue
-            if getattr(event, "type", "") == "input_json" and getattr(
-                event, "partial_json", ""
-            ):
+            if etype == "input_json" and getattr(event, "partial_json", ""):
                 parts.append(event.partial_json)
                 await observer.on_partial("".join(parts))
         return await stream.get_final_message()
@@ -1347,8 +1393,22 @@ async def run_agent_session(session_id: str) -> None:
                         row_data[key] = str(val)[:1500]
             native_reasoning = getattr(llm, "_last_model_reasoning", None)
             if native_reasoning:
-                row_data["model_reasoning"] = str(native_reasoning)[:1500]
                 llm._last_model_reasoning = None
+                reasoning_text = str(native_reasoning)
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps(
+                        {
+                            "category": "reasoning",
+                            "action": "model_reasoning",
+                            "reasoning": reasoning_text[:6000],
+                        }
+                    ),
+                    summary=" ".join(reasoning_text.split())[:200],
+                    count_step=False,
+                )
             await crud.create_message(
                 session_id=session_id,
                 role="ai",

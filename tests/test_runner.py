@@ -723,3 +723,98 @@ async def test_responses_action_repair_three_failures_short_error(monkeypatch):
         await llm.ainvoke(_messages(), output_format=Out)
     text = str(exc.value)
     assert "abandoned" in text and len(text) < 400
+
+
+async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
+    import app.agent.runner as runner_mod
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-1"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+    )
+
+    final = _fake_response(reasoning_summary="thinking about the page layout")
+
+    class FakeStream:
+        def __init__(self):
+            self._events = [
+                types.SimpleNamespace(
+                    type="response.reasoning_summary_text.delta", delta="thinking about "
+                ),
+                types.SimpleNamespace(
+                    type="response.reasoning_summary_text.delta", delta="the page layout"
+                ),
+                types.SimpleNamespace(type="response.output_text.delta", delta="ok"),
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(self._events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_response(self):
+            return final
+
+    class FakeResponses:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+    result = await llm.ainvoke(_messages())
+    assert result.completion == "ok"
+    assert llm._last_model_reasoning == "thinking about the page layout"
+    assert any(p.startswith("💭 thinking about") for p in pushes)
+
+
+async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _RepairingChatAnthropic
+
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    llm._activity_session = "sess-2"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+    )
+
+    events = [
+        types.SimpleNamespace(
+            type="content_block_delta",
+            delta=types.SimpleNamespace(type="thinking_delta", thinking="checking the "),
+        ),
+        types.SimpleNamespace(
+            type="content_block_delta",
+            delta=types.SimpleNamespace(type="thinking_delta", thinking="listing panel"),
+        ),
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            self._it = iter(events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_message(self):
+            return "final"
+
+    assert await llm._drain_stream(FakeStream()) == "final"
+    assert any(p.startswith("💭 checking the") for p in pushes)

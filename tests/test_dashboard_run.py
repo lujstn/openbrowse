@@ -123,3 +123,30 @@ def test_strip_thinking_removes_reasoning_keys_including_legacy():
     assert "model_reasoning" not in stripped
     assert "model_thinking" not in stripped
     assert stripped["see"] == "a"
+
+
+def test_mdlite_escapes_then_formats():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("**Plan** use `run_code_file`\n<script>x</script>"))
+    assert "<strong>Plan</strong>" in out
+    assert "<code>run_code_file</code>" in out
+    assert "<br>" in out
+    assert "<script>" not in out and "&lt;script&gt;" in out
+
+
+def test_message_display_reasoning_event_row():
+    import json
+
+    from app.dashboard.routes import message_display
+
+    row = {
+        "type": "event",
+        "summary": "short preview",
+        "data": json.dumps(
+            {"category": "reasoning", "action": "model_reasoning", "reasoning": "**Full** text"}
+        ),
+    }
+    md = message_display(row)
+    assert md["category"] == "reasoning"
+    assert md["reasoning"] == "**Full** text"
