@@ -16,8 +16,28 @@ block head %}
     margin-bottom: 0;
   }
   .capacity {
-    color: #666;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: #9ca3af;
     font-size: 12px;
+    border: 1px solid #222;
+    border-radius: 999px;
+    padding: 5px 12px;
+    background: #101010;
+  }
+  .capacity .cap-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #34d399;
+  }
+  .capacity.cap-full .cap-dot {
+    background: #f59e0b;
+  }
+  .capacity strong {
+    color: #e5e5e5;
+    font-weight: 600;
   }
   .run-card {
     background: #111;
@@ -77,21 +97,57 @@ block head %}
     outline: none;
     border-color: #60a5fa;
   }
-  .field-inline {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
+  .options-group {
+    margin-top: 16px;
   }
-  .field-inline input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+  .options-label {
+    display: block;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  .opt-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+  }
+  .opt-tile {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 11px 13px;
+    cursor: pointer;
+    background: #0d0d0d;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .opt-tile:hover {
+    border-color: #3a3a3a;
+  }
+  .opt-tile:has(input:checked) {
+    border-color: #60a5fa;
+    background: #0d1524;
+  }
+  .opt-tile input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin-top: 2px;
     accent-color: #60a5fa;
+    flex: none;
   }
-  .field-inline label {
-    text-transform: none;
-    letter-spacing: 0;
-    font-size: 13px;
+  .opt-tile .opt-name {
     color: #e5e5e5;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .opt-tile .opt-sub {
+    color: #737373;
+    font-size: 12px;
+    margin-top: 2px;
+    line-height: 1.4;
   }
   .run-actions {
     display: flex;
@@ -111,6 +167,13 @@ block head %}
   .run-btn:hover {
     background: #7db8fb;
   }
+  .run-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .run-btn:disabled:hover {
+    background: #60a5fa;
+  }
   .icon {
     width: 14px;
     height: 14px;
@@ -124,7 +187,10 @@ block head %}
 <div class="run-wrap">
   <div class="run-head">
     <h1>Run a task</h1>
-    <span class="capacity">{{ active_count }}/{{ max_concurrent }} running</span>
+    <span class="capacity{% if active_count >= max_concurrent %} cap-full{% endif %}">
+      <span class="cap-dot"></span>
+      <strong>{{ active_count }}</strong>&nbsp;of {{ max_concurrent }} browser{{ 's' if max_concurrent != 1 else '' }} in use
+    </span>
   </div>
   <form class="run-card" method="post" action="/run">
     <textarea
@@ -141,6 +207,14 @@ block head %}
           <option value="{{ value }}" {% if value == default_model %}selected{% endif %}>
             {{ label }}
           </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="reasoning_effort">Reasoning</label>
+        <select id="reasoning_effort" name="reasoning_effort">
+          {% for value, label in reasoning_options %}
+          <option value="{{ value }}" {% if value == reasoning_default %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </div>
@@ -167,37 +241,38 @@ block head %}
           type="number"
           min="0"
           step="0.01"
-          value="0.50"
+          value="1.50"
         />
       </div>
-      <div class="field">
-        <label for="reasoning_effort">Model Reasoning</label>
-        <select id="reasoning_effort" name="reasoning_effort">
-          {% for value, label in reasoning_options %}
-          <option value="{{ value }}" {% if value == reasoning_default %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field field-inline">
-        <input id="keep_alive" name="keep_alive" type="checkbox" />
-        <label for="keep_alive">Keep browser alive after task</label>
-      </div>
     </div>
-    <div class="field" style="margin-top: 14px">
-      <div class="field field-inline">
-        <input id="use_schema" type="checkbox" />
-        <label for="use_schema">Force output schema (JSON)</label>
+    <div class="options-group">
+      <span class="options-label">Options</span>
+      <div class="opt-tiles">
+        <label class="opt-tile">
+          <input id="keep_alive" name="keep_alive" type="checkbox" />
+          <span>
+            <span class="opt-name">Keep browser alive</span>
+            <div class="opt-sub">The session stays idle after the task so you can send follow-ups.</div>
+          </span>
+        </label>
+        <label class="opt-tile">
+          <input id="use_schema" type="checkbox" />
+          <span>
+            <span class="opt-name">Force output schema</span>
+            <div class="opt-sub">Validate the result against a JSON Schema you provide.</div>
+          </span>
+        </label>
       </div>
       <textarea
         id="output_schema"
         name="output_schema"
         placeholder='{"type": "object", "properties": { ... }}'
-        style="display: none; min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 8px"
+        style="display: none; min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 10px; width: 100%"
       ></textarea>
       <div id="schema_error" style="display: none; color: #f87171; font-size: 12px; margin-top: 6px"></div>
     </div>
     <div class="run-actions">
-      <button class="run-btn" type="submit">Run</button>
+      <button class="run-btn" type="submit" disabled>Run</button>
     </div>
   </form>
 </div>
@@ -218,6 +293,15 @@ block head %}
         thinkSel.appendChild(opt);
       });
     });
+  })();
+  (function () {
+    var task = document.querySelector("textarea[name=task]");
+    var btn = document.querySelector(".run-btn");
+    function sync() {
+      btn.disabled = !task.value.trim();
+    }
+    task.addEventListener("input", sync);
+    sync();
   })();
   (function () {
     var toggle = document.getElementById("use_schema");

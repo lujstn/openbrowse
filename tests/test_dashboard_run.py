@@ -22,6 +22,7 @@ def test_model_options_curated_list():
         "claude-sonnet-5",
         "gpt-5.6-terra",
         "gpt-5.6-sol",
+        "gpt-5.6-luna",
         "claude-opus-5",
         "claude-fable-5",
         "claude-mythos-5",
@@ -33,7 +34,6 @@ def test_model_options_curated_list():
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-6",
         "claude-sonnet-4-6[1m]",
-        "gpt-5.6-luna",
     ]
     from app.agent.runner import _resolve_model
 
@@ -48,14 +48,14 @@ def test_reasoning_options_map_covers_all_models_with_defaults():
         values = [v for v, _ in spec["options"]]
         assert spec["default"] in values, value
         labels = dict(spec["options"])
-        assert "(Default)" in labels[spec["default"]]
+        assert "Default" in labels[spec["default"]] or "Recommended" in labels[spec["default"]]
 
 
 def test_reasoning_options_per_generation():
     options_map = reasoning_options_map()
     sonnet5 = options_map["claude-sonnet-5"]
     assert sonnet5["default"] == "high"
-    assert dict(sonnet5["options"])["high"] == "High (Default)"
+    assert dict(sonnet5["options"])["high"] == "High (Default, Recommended)"
     assert dict(sonnet5["options"])["none"] == "None"
     assert "off" not in dict(sonnet5["options"])
     opus48 = options_map["claude-opus-4-8[1m]"]
@@ -66,12 +66,16 @@ def test_reasoning_options_per_generation():
     assert "none" not in dict(fable["options"])
     assert fable["default"] == "high"
     terra = options_map["gpt-5.6-terra"]
-    assert terra["default"] == "medium"
+    assert terra["default"] == "none"
+    assert dict(terra["options"])["none"] == "None (Recommended)"
     assert dict(terra["options"])["medium"] == "Medium (Default)"
     assert dict(terra["options"])["max"] == "Max"
-    assert "none" in dict(terra["options"])
+    luna = options_map["gpt-5.6-luna"]
+    assert luna["default"] == "max"
+    assert dict(luna["options"])["max"] == "Max (Recommended)"
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
+    assert sonnet46["default"] == "none"
 
 
 def test_model_provider_labels():

@@ -153,6 +153,7 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-5", "Claude Sonnet 5"),
     ("gpt-5.6-terra", "GPT-5.6 Terra"),
     ("gpt-5.6-sol", "GPT-5.6 Sol"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna"),
     ("claude-opus-5", "Claude Opus 5"),
     ("claude-fable-5", "Claude Fable 5"),
     ("claude-mythos-5", "Claude Mythos 5 (Project Glasswing only)"),
@@ -164,21 +165,38 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-opus-4-6[1m]", "Claude Opus 4.6 (1M)"),
     ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
     ("claude-sonnet-4-6[1m]", "Claude Sonnet 4.6 (1M)"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna (not recommended)"),
 ]
+
+# @nonobvious(mirrors): the benchmark-backed picks from the README's
+# recommended-models section; the dropdown preselects these.
+_RECOMMENDED_EFFORT: dict[str, str] = {
+    "claude-sonnet-5": "high",
+    "claude-opus-5": "none",
+    "gpt-5.6-terra": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-luna": "max",
+}
+
 
 def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     spec = model_reasoning(model_value)
+    recommended = _RECOMMENDED_EFFORT.get(model_value)
+
+    def decorate(value: str, label: str) -> str:
+        marks = []
+        if value == spec.default:
+            marks.append("Default")
+        if value == recommended:
+            marks.append("Recommended")
+        return f"{label} ({', '.join(marks)})" if marks else label
+
     options: list[tuple[str, str]] = []
     if spec.can_disable:
-        label = "None (Default)" if spec.default == "none" else "None"
-        options.append(("none", label))
+        options.append(("none", decorate("none", "None")))
     for level in spec.efforts:
         label = "XHigh" if level == "xhigh" else level.capitalize()
-        if level == spec.default:
-            label = f"{label} (Default)"
-        options.append((level, label))
-    return {"options": options, "default": spec.default}
+        options.append((level, decorate(level, label)))
+    return {"options": options, "default": recommended or spec.default}
 
 
 def reasoning_options_map() -> dict[str, dict[str, Any]]:

@@ -23,7 +23,6 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  .cell-input,
   .create-card input {
     background: #0a0a0a;
     border: 1px solid #333;
@@ -33,10 +32,28 @@
     font-size: 13px;
     padding: 7px 9px;
   }
+  .cell-input {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 7px 9px;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  tbody tr:hover .cell-input {
+    border-color: #2a2a2a;
+    background: #0a0a0a;
+  }
+  .cell-input:hover {
+    border-color: #333;
+  }
   .cell-input:focus,
   .create-card input:focus {
     outline: none;
     border-color: #60a5fa;
+    background: #0a0a0a;
   }
   .cell-input.mono {
     font-family: "SF Mono", "Menlo", monospace;
@@ -52,6 +69,9 @@
     font-size: 13px;
     cursor: pointer;
     font-family: inherit;
+  }
+  .btn {
+    transition: border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
   }
   .btn:hover {
     border-color: #444;
@@ -72,6 +92,25 @@
   .actions {
     display: flex;
     gap: 8px;
+  }
+  .actions .btn {
+    opacity: 0;
+    pointer-events: none;
+  }
+  tbody tr:hover .actions .btn,
+  tbody tr:focus-within .actions .btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .btn-save:hover {
+    border-color: #60a5fa;
+    color: #60a5fa;
+  }
+  tbody tr {
+    transition: background 0.12s ease;
+  }
+  tbody tr:hover {
+    background: #0d0d0d;
   }
   table td {
     vertical-align: middle;
@@ -153,7 +192,7 @@
       <td>{{ format_relative(p.created_at) }}</td>
       <td>
         <div class="actions">
-          <button class="btn btn-primary" form="edit-{{ p.id }}" type="submit">
+          <button class="btn btn-save" form="edit-{{ p.id }}" type="submit">
             Save
           </button>
           <button
