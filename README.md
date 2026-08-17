@@ -58,8 +58,8 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
 | OpenBrowse | claude-sonnet-5 | high | **10** | **4m 02s** | **242k** | **$0.40** | 14/14 |
-| OpenBrowse | claude-sonnet-5 | none | TBD | TBD | TBD | TBD | TBD |
-| OpenBrowse | gpt-5.6-terra | high | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | claude-sonnet-5 | none | 9 | 5m 18s | 237k | $0.51 | 14/14 |
+| OpenBrowse | gpt-5.6-terra | high | 17 | 5m 05s | 434k | $0.66 | 14/14 |
 | OpenBrowse | gpt-5.6-terra | none | **11** | **1m 47s** | **202k** | **$0.24** | 14/14 |
 | OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
