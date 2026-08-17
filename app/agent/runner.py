@@ -146,10 +146,11 @@ _BEGIN_EXTENSION = (
     "Begin your browsing by recalling startUrl and opening that page in a new tab."
 )
 
-_NORTH_STAR_PROMPT = (
-    "Reply with one sentence stating this task's North Star: what a complete and "
-    "correct result looks like, in the task's own words. Name the purpose, not the "
-    "output's shape; do not list fields or restate the schema."
+_GOAL_PROMPT = (
+    "Reply with one sentence stating this task's goal: what a complete and "
+    "correct result looks like, in the task's own words. Start directly with "
+    "the substance (never with a phrase like 'the goal is'); name the purpose, "
+    "not the output's shape; do not list fields or restate the schema."
 )
 
 
@@ -1065,7 +1066,7 @@ async def _derive_north_star(llm: Any, task: str) -> str:
     """
     try:
         resp = await llm.ainvoke(
-            [UserMessage(content=f"{_NORTH_STAR_PROMPT}\n\nTASK:\n{task}")]
+            [UserMessage(content=f"{_GOAL_PROMPT}\n\nTASK:\n{task}")]
         )
         text = " ".join((getattr(resp, "completion", None) or str(resp)).split())
         if text:
@@ -1314,7 +1315,7 @@ async def run_agent_session(session_id: str) -> None:
 
         full_task = task
         if north_star:
-            full_task = f"{task}\n\nNORTH STAR: {north_star}"
+            full_task = f"{task}\n\nGOAL: {north_star}"
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
@@ -1415,7 +1416,7 @@ async def run_agent_session(session_id: str) -> None:
             if north_star and step_count % 10 == 0:
                 try:
                     agent_instance._message_manager.add_new_task(
-                        f"North Star: {north_star} Not done until this is met."
+                        f"GOAL: {north_star} Not done until this is met."
                     )
                 except Exception:
                     logger.debug("north star reminder injection failed", exc_info=True)

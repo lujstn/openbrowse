@@ -2983,3 +2983,80 @@ def test_draft_row_harvests_undeclared_extra_when_schema_allows() -> None:
     assert ok, msg
     stored = _json.loads(store.read_output())["items"][0]
     assert stored.get("extra")
+
+
+def _visual_store():
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "location": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "publishedAt": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema))
+
+
+def test_draft_row_rendered_values_outrank_background_data() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _visual_store()
+    page = {
+        "url": "https://x.com/p?id=1",
+        "title": "Role One",
+        "text": "Role One\nLocation\n\nLondon\n\nOverview\n" + "t" * 400,
+        "jsonld": {
+            "@type": "JobPosting",
+            "title": "Role One",
+            "datePublished": "2026-08-04",
+            "jobLocation": {
+                "@type": "Place",
+                "address": {
+                    "@type": "PostalAddress",
+                    "addressCountry": "United Kingdom",
+                },
+            },
+        },
+    }
+    row = _draft_row(store, page)
+    assert row.get("location") == "London"
+    assert row.get("publishedAt") == "2026-08-04"
+
+
+def test_draft_row_background_upgrades_visual_only_when_richer() -> None:
+    from app.agent.tools import _draft_row
+
+    store = _visual_store()
+    page = {
+        "url": "https://x.com/p?id=2",
+        "title": "Role Two",
+        "text": "Role Two\nCategory\n\nHome\n\nLocation\n\nLondon\n\nOverview\n" + "t" * 400,
+        "jsonld": {
+            "@type": "Thing",
+            "title": "Role Two",
+            "category": "Home Office",
+            "jobLocation": {
+                "@type": "Place",
+                "address": {
+                    "@type": "PostalAddress",
+                    "addressCountry": "United Kingdom",
+                },
+            },
+        },
+    }
+    row = _draft_row(store, page)
+    assert row.get("category") == "Home Office"
+    assert row.get("location") == "London"

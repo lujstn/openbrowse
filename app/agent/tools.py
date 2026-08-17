@@ -3080,6 +3080,41 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     elif desc_field and (page.get("text") or "").strip():
         _try_set(desc_field, (page.get("text") or "")[:20000])
 
+    # @nonobvious(must-hold): the rendered page outranks background data — a
+    # value the page explicitly labels on screen fills its field FIRST, and
+    # structured/background data only fills the gaps afterwards or upgrades a
+    # visual value it strictly extends (visual "Home" -> background "Home
+    # Office"), never replaces it with something coarser.
+    visual_fields: set[str] = set()
+    for label, value in _labelled_pairs(page.get("text") or "").items():
+        label_tokens = _name_tokens(label)
+        if not label_tokens:
+            continue
+        label_candidates = sorted(
+            (
+                (len(_name_tokens(fname) & label_tokens), fname)
+                for fname in fields
+                if _strong_overlap(_name_tokens(fname), label_tokens)
+            ),
+            key=lambda pair: -pair[0],
+        )
+        if label_candidates:
+            top_score = label_candidates[0][0]
+            label_candidates = [c for c in label_candidates if c[0] == top_score]
+        for _score, fname in label_candidates:
+            if _try_set(fname, value):
+                visual_fields.add(fname)
+                break
+
+    def _upgrades_visual(fname: str, value: Any) -> bool:
+        current = row.get(fname)
+        return (
+            isinstance(current, str)
+            and isinstance(value, str)
+            and len(value) > len(current)
+            and current.casefold() in value.casefold()
+        )
+
     flat = _flatten_jsonld_scalars(ld)
     for path in sorted(flat, key=lambda p: p.count(".")):
         if path in used or path.split(".", 1)[0] in used:
@@ -3090,7 +3125,7 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         # @nonobvious(forced-by): equal-score ties only — when the tie-winner
         # rejects a value (enum mismatch) an equally-close field gets its
         # chance, but a lower-score field is semantically farther and would be
-        # polluted (jobLocationType's TELECOMMUTE landing in 'location').
+        # polluted (a location-type constant landing in 'location').
         candidates = sorted(
             (
                 (len(_name_tokens(fname) & key_tokens), fname)
@@ -3109,27 +3144,14 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
                 fields[fname].annotation
             ) is not bool:
                 continue
+            if fname in visual_fields and _upgrades_visual(fname, flat[path]):
+                previous = row.pop(fname)
+                if _try_set(fname, flat[path]):
+                    used.add(path)
+                    break
+                row[fname] = previous
             if _try_set(fname, flat[path]):
                 used.add(path)
-                break
-
-    for label, value in _labelled_pairs(page.get("text") or "").items():
-        label_tokens = _name_tokens(label)
-        if not label_tokens:
-            continue
-        label_candidates = sorted(
-            (
-                (len(_name_tokens(fname) & label_tokens), fname)
-                for fname in fields
-                if _strong_overlap(_name_tokens(fname), label_tokens)
-            ),
-            key=lambda pair: -pair[0],
-        )
-        if label_candidates:
-            top_score = label_candidates[0][0]
-            label_candidates = [c for c in label_candidates if c[0] == top_score]
-        for _score, fname in label_candidates:
-            if _try_set(fname, value):
                 break
 
     if isinstance(page.get("links"), list):

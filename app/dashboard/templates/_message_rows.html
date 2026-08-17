@@ -10,8 +10,7 @@
   </span>
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
   <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>
-  <button class="msg-caret" type="button" aria-label="Expand step details">▾</button>
-  {% if d.step %}<span class="msg-step">#{{ d.step }}</span>{% endif %}
+  <button class="msg-caret" type="button" aria-label="Expand step details"></button>
   {% if has_cards %}
   <div class="msg-cards">
     {% if md.see %}<div class="card card-see"><div class="card-head">🖼️ What I'm seeing</div><div class="card-text">{{ md.see }}</div></div>{% endif %}
