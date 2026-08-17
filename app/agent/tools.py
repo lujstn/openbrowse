@@ -677,10 +677,12 @@ async def _read_pages_impl(
 
     shell_flagged, embed_hosts = await _flag_shell_reads(browser_session, results)
     if shell_flagged:
+        host_note = f" from {embed_hosts[0]}" if embed_hosts else ""
         await _emit_progress(
             progress,
-            f"read_pages: {shell_flagged} page(s) returned the embedding shell, "
-            "not real content — retrying inside the embedded panel",
+            f"read_pages: {shell_flagged} page(s) only showed the site's outer "
+            f"frame because the real content loads in an embedded panel{host_note}. "
+            "Retrying each read inside that panel now",
         )
     if shell_flagged and embed_hosts:
         # @nonobvious(forced-by): retry here, not via instruction — models route
@@ -706,8 +708,8 @@ async def _read_pages_impl(
             clipboard["found_links_frame"] = url_contains
         await _emit_progress(
             progress,
-            f"read_pages: retry inside '{url_contains}' recovered "
-            f"{recovered} of {len(flagged_urls)} page(s)",
+            f"read_pages: reading inside the '{url_contains}' panel recovered "
+            f"the real content for {recovered} of {len(flagged_urls)} page(s)",
         )
 
     if clipboard is not None:
@@ -761,7 +763,7 @@ async def _flag_shell_reads(
     for p in ok_pages:
         if _sig(p) == top_sig:
             p["error"] = (
-                "read the embedding shell, not this page's real content — "
+                "read the embedding shell, not this page's real content: "
                 f"{top_n} pages returned identical text and no embedded panel was "
                 "matched. The content lives inside a cross-origin embed; re-run "
                 "read_pages with frame_url_contains matching one of: "
