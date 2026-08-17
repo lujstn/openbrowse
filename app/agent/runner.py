@@ -237,8 +237,7 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
             include_recent_events=include_recent_events,
         )
 
-    # @nonobvious(forced-by): BrowserSession is a pydantic model with extra='forbid'
-    # and validate_assignment=True, so plain attribute assignment raises; only
+    # @nonobvious(forced-by): BrowserSession is pydantic extra='forbid'; only
     # object.__setattr__ can shadow the method on the instance.
     object.__setattr__(browser_session, "get_browser_state_summary", lean_get)
 
@@ -267,9 +266,8 @@ class _ResponsesChatOpenAI(ChatOpenAI):
 
     def _build_request(self, messages: Any, output_format: Any) -> dict[str, Any]:
         input_messages = ResponsesAPIMessageSerializer.serialize_messages(messages)
-        # @nonobvious(deliberately-missing): no `tools` parameter, ever — declaring
-        # any would let Responses built-ins (web_search, code_interpreter) activate
-        # and act outside the audited browser sandbox.
+        # @nonobvious(deliberately-missing): no `tools`, ever — Responses
+        # built-ins (web_search etc.) must not act outside the browser sandbox.
         params: dict[str, Any] = {
             "model": self.model,
             "input": input_messages,
@@ -279,16 +277,11 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             params["max_output_tokens"] = self.max_completion_tokens
         if self.reasoning_effort is not None:
             reasoning: dict[str, Any] = {"effort": self.reasoning_effort}
-            # @nonobvious(means): "auto" asks for reasoning summaries so the feed
-            # can show a 🧠 card; at effort "none" there is nothing to summarise.
             if self.reasoning_effort != "none" and not getattr(
                 self, "_summary_unsupported", False
             ):
                 reasoning["summary"] = "auto"
             params["reasoning"] = reasoning
-        # @nonobvious(mirrors): same trust model as the chat.completions path —
-        # strict structured output cannot express our action registry, so the
-        # schema rides in the system message and the reply is parsed from text.
         if (
             output_format is not None
             and self.add_schema_to_system_prompt
@@ -353,9 +346,8 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         try:
             return await self.get_client().responses.create(**params)
         except APIStatusError as e:
-            # @nonobvious(forced-by): reasoning summaries need OpenAI org
-            # verification; unverified orgs 400 on the parameter, so drop it
-            # once and remember rather than failing every step.
+            # @nonobvious(forced-by): unverified OpenAI orgs 400 on the summary
+            # parameter — drop it once and remember, not fail every step.
             if (
                 e.status_code == 400
                 and "summary" in str(e).lower()
@@ -373,10 +365,8 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         try:
             return output_format.model_validate_json(text)
         except Exception:
-            # @nonobvious(forced-by): some models append prose after the JSON
-            # object and output_text concatenates every output item, so a strict
-            # parse dies on "trailing characters"; the first balanced JSON
-            # object is the intended reply.
+            # @nonobvious(forced-by): models append prose after the JSON and
+            # output_text concatenates items; the first balanced object wins.
             cleaned = _strip_json_fence(text)
             start = cleaned.find("{")
             if start < 0:
@@ -393,8 +383,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         return ChatInvokeUsage(
             prompt_tokens=usage.input_tokens,
             prompt_cached_tokens=getattr(details, "cached_tokens", None),
-            # @nonobvious(forced-by): the Responses usage object reports cache
-            # reads only; cache writes are not exposed, so creation stays None.
+            # @nonobvious(forced-by): Responses usage exposes no cache writes.
             prompt_cache_creation_tokens=None,
             prompt_image_tokens=None,
             completion_tokens=usage.output_tokens,
@@ -500,9 +489,8 @@ async def _invoke_with_action_repair(
                 return await invoke(list(messages) + [correction, insist])
             except Exception as e3:
                 if is_missing_action_error(e3):
-                    # @nonobvious(forced-by): the raw pydantic dump would
-                    # be replayed into every later step's context; a short
-                    # instructive error keeps the failure cheap.
+                    # @nonobvious(forced-by): the raw pydantic dump would replay
+                    # into every later step's context; keep the failure cheap.
                     raise ValueError(
                         "Your reply omitted the executable 'action' field "
                         "three times, so this step was abandoned. Nothing "
@@ -631,9 +619,7 @@ _THINKING_BUDGETS: dict[str, int] = {
 }
 
 # @nonobvious(forced-by): OpenAI counts reasoning tokens inside the output
-# budget, so higher efforts need proportionally more room above the 4096 the
-# structured reply itself needs; "default" gets the medium tier because the
-# provider reasons at ≈medium when the parameter is omitted.
+# budget; "default" gets the medium tier because omitted ≈ medium.
 _OPENAI_REASONING_HEADROOM: dict[str, int] = {
     "default": 8192,
     "low": 4096,
@@ -662,11 +648,9 @@ class ModelReasoning:
     can_disable: bool
     style: str  # @nonobvious(means): "adaptive" | "budget" | "openai-responses" wire shape
 
-# @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16 —
-# omitting `thinking` runs adaptive at "high" on Claude 5 but WITHOUT thinking
-# on Opus 4.8 and older; Fable/Mythos 400 on a disabled config; GPT-5.6 runs on
-# the Responses endpoint, which accepts "none" through "max" (chat.completions
-# rejects "max") and reasons at ≈medium when omitted. Re-probe before editing.
+# @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16:
+# Fable/Mythos 400 on a disabled config; the Responses endpoint accepts "none"
+# through "max" (chat.completions rejects "max"). Re-probe before editing.
 _MODEL_REASONING: dict[str, ModelReasoning] = {
     "claude-sonnet-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
     "claude-opus-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
@@ -719,8 +703,7 @@ def validate_effort(model: str, effort: str | None) -> str:
 
 def _canonical_stored_effort(value: str | None) -> str:
     effort = (value or "default").strip().lower()
-    # @nonobvious(mirrors): sessions stored before the reasoningEffort rename
-    # hold "off" for disabled reasoning; the canonical value is now "none".
+    # @nonobvious(mirrors): pre-rename session rows stored "off" for "none".
     return "none" if effort == "off" else effort
 
 
@@ -749,15 +732,11 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
             api_key=settings.openai_api_key,
             reasoning_effort=None if effort == "default" else effort,
             max_completion_tokens=completion_budget,
-            # @nonobvious(forced-by): high-effort reasoning turns routinely run
-            # past 90s on the Responses endpoint before the first byte arrives.
             timeout=240 if effort in _OPENAI_LONG_EFFORTS else 90,
             max_retries=3,
-            # @nonobvious(forced-by): OpenAI strict structured output requires every
-            # object to list all properties as required and forbids free-form dicts,
-            # which our action registry cannot satisfy (e.g. add_item's item param);
-            # the schema goes into the system prompt and the reply is parsed
-            # tolerantly instead — the same trust model as the Anthropic path.
+            # @nonobvious(forced-by): OpenAI strict structured output forbids the
+            # free-form dicts our action registry needs, so the schema rides in
+            # the system prompt and the reply is parsed tolerantly.
             add_schema_to_system_prompt=True,
             dont_force_structured_output=True,
         )
@@ -774,11 +753,8 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
     }
     if want_1m:
         kwargs["betas"] = [ONE_M_BETA]
-    # @nonobvious(forced-by): omission is the only spelling of "model default"
-    # the API offers, and on the Claude 5 generation it means adaptive thinking
-    # ON at effort high — so "none" must send an explicit disabled config, never
-    # omit. validate_effort has already rejected "none" for the models that 400
-    # on a disabled config (Fable, Mythos).
+    # @nonobvious(forced-by): omitting `thinking` means adaptive ON at high on
+    # Claude 5, so "none" must send an explicit disabled config, never omit.
     if effort == "none":
         kwargs["thinking"] = {"type": "disabled"}
     elif effort != "default":
@@ -972,10 +948,8 @@ async def _derive_north_star(llm: Any, task: str) -> str:
     return first.strip()[:400] or (task or "").strip()[:400]
 
 
-# @nonobvious(forced-by): "action" sits directly after "thinking" because models
-# emit JSON in schema property order and drop trailing properties under output
-# pressure — with action last, runs lost whole steps to "action Field required"
-# validation errors; the prose cards are optional, so they are the safe tail.
+# @nonobvious(forced-by): models emit JSON in schema order and drop trailing
+# properties under pressure — "action" must sit early, prose cards last.
 _CARD_ORDER = (
     "thinking", "action", "what_i_see", "plan_to_goal", "next_move",
     "evaluation_previous_goal", "memory", "next_goal",
@@ -1022,7 +996,7 @@ def _patch_agent_output_cards() -> None:
                         for k, v in props.items():
                             ordered.setdefault(k, v)
                         schema["properties"] = ordered
-                        # @nonobvious(forced-by): cards stay optional — forcing them required under forced tool_choice made Claude bleed its XML tool-call idiom into the JSON string values.
+                        # @nonobvious(forced-by): required-cards under forced tool_choice made Claude bleed XML into JSON values.
                         return schema
 
                 CardedAgentOutput.__name__ = "AgentOutput"
@@ -1279,9 +1253,8 @@ async def run_agent_session(session_id: str) -> None:
             steps = agent_instance.history.history
             if not steps:
                 return
-            # @nonobvious(forced-by): browser-use fires on_step_end even when the
-            # step was cancelled by step_timeout, in which case no new history entry
-            # exists — re-reading history[-1] would double-log the previous step.
+            # @nonobvious(forced-by): on_step_end also fires for steps cancelled
+            # by step_timeout, where re-reading history[-1] would double-log.
             if len(steps) == logged_history_len["n"]:
                 await crud.create_message(
                     session_id=session_id,
@@ -1410,18 +1383,14 @@ async def run_agent_session(session_id: str) -> None:
             "tools": tools,
             "calculate_cost": True,
             "llm_timeout": 180,
-            # @nonobvious(forced-by): browser-use cancels the WHOLE step (LLM call +
-            # actions) at step_timeout; the default 180 silently killed 180s sandbox
-            # scripts mid-run. Must exceed llm_timeout + the 300s sandbox cap.
+            # @nonobvious(forced-by): must exceed llm_timeout + the 300s sandbox
+            # cap, or step_timeout kills long sandbox scripts mid-run.
             "step_timeout": 520,
-            # @nonobvious(means): >1 lets non-page-changing work (update_item runs,
-            # store reads, file saves) batch into one LLM step; browser-use itself
-            # truncates the chain at the first page-changing action.
+            # @nonobvious(means): lets store/file work batch into one LLM step;
+            # the chain still truncates at the first page-changing action.
             "max_actions_per_step": 8,
-            # @nonobvious(forced-by): browser-use middle-shortens long URLs at the
-            # LLM-input layer (default 25 chars of query+fragment), which makes the
-            # agent read links with long UUID query params as corrupt data; a limit
-            # past the longest real URL early-returns the original, no reverse map.
+            # @nonobvious(forced-by): default URL shortening corrupts long UUID
+            # query params in the LLM's view; a huge limit disables it.
             "_url_shortening_limit": 100_000,
         }
         extension_parts = [
@@ -1488,9 +1457,8 @@ async def run_agent_session(session_id: str) -> None:
             and (history.is_successful() is not False)
             and schema_valid
         )
-        # @nonobvious(means): a run that died before calling done (step timeout,
-        # attrition) but left a complete, valid store has delivered the answer —
-        # the completeness gate's own deficiency check is the arbiter.
+        # @nonobvious(means): a run that died before done but left a complete,
+        # valid store has delivered the answer; the gate check is the arbiter.
         if not is_successful and not history.is_done() and from_store and schema_valid:
             try:
                 from app.agent.tools import _gate_empty_fields
@@ -1595,7 +1563,9 @@ async def run_agent_session(session_id: str) -> None:
         if north_star_task is not None and not north_star_task.done():
             north_star_task.cancel()
         if browser_session:
-            # @nonobvious(forced-by) stop() dispatches SaveStorageStateEvent (full cookies+localStorage, merged with the file on disk) while CDP is still live; export_storage_state here instead rewrites the file with origins:[] and wipes imported localStorage. Shielded + per-profile locked so a shutdown cancel can't truncate the save.
+            # @nonobvious(forced-by): stop() saves full storage state while CDP
+            # is live; export_storage_state here would wipe imported
+            # localStorage. Shielded + locked against shutdown-cancel truncation.
             try:
                 if storage_state_path:
                     async with _storage_lock(storage_state_path):

@@ -111,7 +111,7 @@ def test_url_fields_validated_by_name_suffix():
     model = json_schema_to_pydantic(schema, "Named")
     good = model.model_validate(
         {
-            "applyUrl": "https://jobs.ashbyhq.com/m/x/application",
+            "applyUrl": "https://apply.example.com/m/x/application",
             "sourceURI": "http://a.b/c",
             "href": "https://a.b",
             "hyperLink": "https://a.b",
@@ -130,7 +130,7 @@ def test_url_fields_validated_by_name_suffix():
 def test_url_validation_trims_and_preserves_value():
     schema = {"type": "object", "properties": {"sourceUrl": {"type": "string"}}}
     model = json_schema_to_pydantic(schema, "Trim")
-    url = "https://www.marshmallow.com/jobs?ashby_jid=034a8a61#openings"
+    url = "https://www.example.com/list?embed_jid=034a8a61#openings"
     assert model.model_validate({"sourceUrl": f"  {url} "}).sourceUrl == url
 
 
@@ -171,15 +171,15 @@ def test_email_fields_validated_by_format_and_name():
     model = json_schema_to_pydantic(schema, "Em")
     ok = model.model_validate(
         {
-            "contact": "jobs@marshmallow.com",
+            "contact": "hello@example.com",
             "recruiterEmail": "a.b+tag@sub.example.co.uk",
             "emailBody": "Dear hiring manager, ...",
         }
     )
-    assert ok.contact == "jobs@marshmallow.com"
+    assert ok.contact == "hello@example.com"
     assert ok.emailBody.startswith("Dear")
     assert model.model_validate({"contact": "x@y.z"}).recruiterEmail is None
-    for bad in ("Powered by", "jobs at marshmallow", "a@b", "@y.z", "a@"):
+    for bad in ("Powered by", "hello at example", "a@b", "@y.z", "a@"):
         with pytest.raises(ValidationError, match="not an email"):
             model.model_validate({"contact": bad})
 

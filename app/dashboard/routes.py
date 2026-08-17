@@ -354,8 +354,7 @@ def _strip_thinking(data: str | None) -> str | None:
     if isinstance(parsed, dict):
         parsed.pop("thinking", None)
         parsed.pop("model_reasoning", None)
-        # @nonobvious(mirrors): rows written before the model_reasoning rename
-        # stored the raw reasoning under model_thinking; keep stripping it.
+        # @nonobvious(mirrors): pre-rename rows stored model_thinking.
         parsed.pop("model_thinking", None)
         return json.dumps(parsed)
     return data

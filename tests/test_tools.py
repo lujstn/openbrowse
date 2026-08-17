@@ -1546,9 +1546,9 @@ async def test_read_one_page_skips_frame_filter_on_panel_host(monkeypatch) -> No
     monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
     page = await tools_mod._read_one_page(
         object(),
-        "https://jobs.ashbyhq.com/marshmallow/role-1",
+        "https://board.example.com/acme/item-1",
         "tid-main",
-        "jobs.ashbyhq.com",
+        "board.example.com",
         set(),
         set(),
     )
@@ -1577,7 +1577,7 @@ async def test_read_one_page_falls_back_to_main_doc_when_no_frame(monkeypatch) -
         object(),
         "https://elsewhere.example.com/role-1",
         "tid-main",
-        "jobs.ashbyhq.com",
+        "board.example.com",
         set(),
         set(),
     )
@@ -1605,7 +1605,7 @@ async def test_read_one_page_still_fails_on_hollow_main_doc(monkeypatch) -> None
         object(),
         "https://elsewhere.example.com/role-1",
         "tid-main",
-        "jobs.ashbyhq.com",
+        "board.example.com",
         set(),
         set(),
     )
@@ -1642,21 +1642,21 @@ def test_draft_row_rejects_footer_text_and_fills_apply_url_from_links() -> None:
 
     store = _apply_store()
     page = {
-        "url": "https://x.com/jobs/role-1",
-        "title": "Large Loss Handler",
-        "text": "Large Loss Handler\nApply\nPowered by\nAshbyHQ\n" + "About the role " * 60,
+        "url": "https://x.com/list/item-1",
+        "title": "Senior Widget Fitter",
+        "text": "Senior Widget Fitter\nApply\nPowered by\nBoardVendor\n" + "About the position " * 60,
         "jsonld": None,
         "links": [
             {"text": "Home", "href": "https://x.com/"},
             {
                 "text": "Apply for this job",
-                "href": "https://jobs.ashbyhq.com/m/role-1/application",
+                "href": "https://board.example.com/m/item-1/application",
             },
             {"text": "Powered by", "href": "javascript:void(0)"},
         ],
     }
     row = _draft_row(store, page)
-    assert row.get("applyUrl") == "https://jobs.ashbyhq.com/m/role-1/application"
+    assert row.get("applyUrl") == "https://board.example.com/m/item-1/application"
 
 
 def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
@@ -1664,9 +1664,9 @@ def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
 
     store = _apply_store()
     page = {
-        "url": "https://x.com/jobs/role-1",
+        "url": "https://x.com/list/item-1",
         "title": "Role",
-        "text": "Role\nApply\nPowered by\nAshbyHQ\n" + "About the role " * 60,
+        "text": "Item\nApply\nPowered by\nBoardVendor\n" + "About the position " * 60,
         "jsonld": None,
         "links": [{"text": "Home", "href": "https://x.com/"}],
     }

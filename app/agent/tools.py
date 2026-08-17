@@ -408,13 +408,11 @@ async def _settle_lazy_links(
 
 _READ_PAGES_MAX = 48
 _READ_PAGES_TEXT_CAP = 60_000
-# @nonobvious(mirrors): must stay below BROWSER_USE_ACTION_TIMEOUT_S (set in
-# app/agent/runner.py) which must stay below the agent step_timeout there —
-# read_pages stops itself gracefully; the outer caps must never fire first.
+# @nonobvious(mirrors): must stay below the action timeout and step_timeout in
+# app/agent/runner.py — read_pages must stop itself before the outer caps fire.
 _READ_PAGES_BUDGET_S = 420.0
 _READ_PAGES_MIN_WAVE_S = 30.0
-# @nonobvious(means): measured live — a heavy marketing page took ~12s to DOMContentLoaded
-# with its embed rendering ~2.5s later, so 18s left almost no margin.
+# @nonobvious(means): measured live — heavy pages need ~15s to render an embed.
 _PAGE_READY_TIMEOUT_S = 25.0
 _FRAME_MATCH_GRACE_S = 6.0
 _MIN_PAGE_TEXT_CHARS = 200
@@ -443,10 +441,8 @@ async def _read_one_page(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _PAGE_READY_TIMEOUT_S
 
-    # @nonobvious(forced-by): the frame filter carries over from the listing's
-    # embed, but a link pointing INTO the panel's own host is the panel content
-    # served as a plain page — there is no inner frame to find, and waiting for
-    # one burns the full per-page timeout on every such link.
+    # @nonobvious(forced-by): a link into the panel's own host IS the panel
+    # content — there is no inner frame, and waiting burns the whole timeout.
     if url_contains and url_contains.lower() in (url or "").lower():
         url_contains = None
 
@@ -473,10 +469,8 @@ async def _read_one_page(
                     if _substantial(txt):
                         break
                 elif loop.time() >= frame_grace_end:
-                    # @nonobvious(forced-by): a page with no matching frame but a
-                    # substantial main document is a plain page, not a shell —
-                    # read it rather than failing; the shell-read detector still
-                    # catches genuine embed shells after the fact.
+                    # @nonobvious(forced-by): no frame + substantial main doc is
+                    # a plain page; the shell detector still guards real embeds.
                     ready = await _eval_on_target(
                         browser_session, target_id, "document.readyState"
                     )
@@ -610,11 +604,8 @@ async def _read_pages_impl(
                     allow_sole_candidate=len(pairs) == 1,
                 )
         finally:
-            # @nonobvious(forced-by): closing a FOCUSED target fires browser-use's
-            # focus-detach auto-recovery, which can race the next close and wedge
-            # the session into 'browser not connected' (observed live) — so focus
-            # home before closing, and close in a shielded finally so a cancelled
-            # wave never orphans its tabs.
+            # @nonobvious(forced-by): closing a focused target can wedge the CDP
+            # connection — focus home first, and shield so cancels never orphan tabs.
             await asyncio.shield(_focus_target(browser_session, home_target))
             for _, tid in pairs:
                 await asyncio.shield(_close_spawned_tab(browser_session, tid))
@@ -692,10 +683,8 @@ async def _read_pages_impl(
             "not real content — retrying inside the embedded panel",
         )
     if shell_flagged and embed_hosts:
-        # @nonobvious(forced-by): the platform retries inside the embed itself
-        # rather than instructing the model to — models route around a failed
-        # read using stale files instead of re-reading, so an instruction-based
-        # retry never happens in practice.
+        # @nonobvious(forced-by): retry here, not via instruction — models route
+        # around failed reads with stale files instead of re-reading.
         url_contains = embed_hosts[0]
         flagged_urls = [
             u
@@ -1585,10 +1574,8 @@ def register_code_tools(
             result = await _exec_in_sandbox(code, namespace)
         finally:
             if code_tab is not None:
-                # @nonobvious(forced-by): refocus BEFORE closing — closing the
-                # focused tab fires focus-detach auto-recovery that can race the
-                # close and wedge the browser connection; shielded so a step
-                # cancellation cannot orphan the tab.
+                # @nonobvious(forced-by): refocus before closing (a focused-tab
+                # close can wedge CDP); shielded so cancels never orphan the tab.
                 async def _cleanup() -> None:
                     try:
                         if home_target:
@@ -2679,10 +2666,8 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
         key_tokens = _name_tokens(path.replace(".", " "))
         if not key_tokens:
             continue
-        # @nonobvious(forced-by): try every matching field best-first rather than
-        # only the single best — a tie like locationType/location is broken by
-        # schema order, and if that winner rejects the value (enum vs free text)
-        # the runner-up must still get its chance or the value is silently lost.
+        # @nonobvious(forced-by): try matches best-first, not just the best —
+        # if the tie-winner rejects the value the runner-up must get its chance.
         candidates = sorted(
             (
                 (len(_name_tokens(fname) & key_tokens), fname)
@@ -2692,9 +2677,8 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             key=lambda pair: -pair[0],
         )
         for _score, fname in candidates:
-            # @nonobvious(forced-by): a page boolean may only fill a boolean field —
-            # string coercion would happily store directApply=true as applyUrl="true",
-            # poisoning the draft with a value that looks filled but is junk.
+            # @nonobvious(forced-by): a page boolean may only fill a boolean
+            # field — string coercion would store true as a junk "true" string.
             if isinstance(flat[path], bool) and _peel_optional(
                 fields[fname].annotation
             ) is not bool:
@@ -2721,9 +2705,8 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
 
     if isinstance(page.get("links"), list):
         # @nonobvious(forced-by): visible text near a link is unreliable for URL
-        # fields (Ashby renders "Apply" then "Powered by", which token-matched
-        # applyUrl); the anchors' own hrefs are the trustworthy source, matched
-        # by field-name tokens against the href path and link text.
+        # fields (embed vendors render "Apply" then "Powered by", which
+        # token-matches applyUrl); the anchors' own hrefs are the source.
         for fname in fields:
             if fname in row or not re.fullmatch(
                 r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)", fname
@@ -2988,9 +2971,7 @@ def _store_bridge(
         "update_items": update_items,
         "set_field": set_field,
         "mark_absent": mark_absent,
-        # @nonobvious(forced-by): read_output must hand scripts a dict, not a JSON
-        # string — models write output['items'] and hit "string indices must be
-        # integers" when given text, while read_json already returns parsed data.
+        # @nonobvious(forced-by): scripts index into this — a dict, never a JSON string.
         "read_output": lambda: _awaitable(json.loads(store.read_output())),
         "coverage": lambda: _AwaitableStr(store.coverage_summary()),
     }
@@ -3325,9 +3306,8 @@ def register_completeness_gate(
                         "Then call done again." + hints + date_hint
                     ),
                 )
-        # @nonobvious(forced-by): browser-use's judge evaluates the done text,
-        # not our answer store — without the store's JSON prepended it sees only
-        # prose and returns FAIL against a perfectly complete structured output.
+        # @nonobvious(forced-by): the judge evaluates the done text, so the
+        # store's answer must ride in it or complete runs get judged FAIL.
         if not store.is_empty():
             try:
                 answer = store.read_output()

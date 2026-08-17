@@ -115,9 +115,9 @@ def test_update_item_revalidates_merge():
 
 def test_set_field_valid():
     s = _store()
-    ok, msg = s.set_field("indexPageUrl", "https://co/careers")
+    ok, msg = s.set_field("indexPageUrl", "https://co/about")
     assert ok is True
-    assert s.data["indexPageUrl"] == "https://co/careers"
+    assert s.data["indexPageUrl"] == "https://co/about"
 
 
 def test_set_field_wrong_type_rejected():
@@ -145,13 +145,13 @@ def test_search_output():
     s = _store()
     s.add_item({"title": "Backend Engineer", "url": "https://x/1"})
     s.add_item({"title": "Designer", "url": "https://x/2"})
-    s.set_field("indexPageUrl", "https://co/careers")
+    s.set_field("indexPageUrl", "https://co/about")
     res = json.loads(s.search_output("engineer"))
     assert "items" in res
     assert len(res["items"]) == 1
     assert res["items"][0]["index"] == 0
-    res2 = json.loads(s.search_output("careers"))
-    assert res2.get("indexPageUrl") == "https://co/careers"
+    res2 = json.loads(s.search_output("about"))
+    assert res2.get("indexPageUrl") == "https://co/about"
     assert json.loads(s.search_output("zzz-not-present")) == {}
 
 
@@ -334,7 +334,7 @@ def test_mark_absent_rejects_unknown_field_and_missing_reason():
 
 def test_mark_absent_accepts_top_level_field():
     s = _store()
-    ok, _ = s.mark_absent("indexPageUrl", "checked; no careers page")
+    ok, _ = s.mark_absent("indexPageUrl", "checked; no about page")
     assert ok is True
     assert not any("indexPageUrl" in e for e in s.empty_fields())
 
@@ -403,18 +403,18 @@ def test_read_output_paging_windows_the_array():
     s = _store()
     s.set_field("indexPageUrl", "https://example.com")
     for i in range(5):
-        s.add_item({"title": f"Job {i}", "url": f"https://x.com/{i}"})
+        s.add_item({"title": f"Item {i}", "url": f"https://x.com/{i}"})
 
     full = json.loads(s.read_output())
     assert len(full["items"]) == 5 and "_window" not in full
 
     page = json.loads(s.read_output(offset=1, limit=2))
-    assert [j["title"] for j in page["items"]] == ["Job 1", "Job 2"]
+    assert [j["title"] for j in page["items"]] == ["Item 1", "Item 2"]
     assert "items[1:3] of 5" in page["_window"]
     assert page["indexPageUrl"] == "https://example.com"
 
     tail = json.loads(s.read_output(offset=4, limit=10))
-    assert [j["title"] for j in tail["items"]] == ["Job 4"]
+    assert [j["title"] for j in tail["items"]] == ["Item 4"]
 
 
 def test_read_output_compact_elides_long_values() -> None:

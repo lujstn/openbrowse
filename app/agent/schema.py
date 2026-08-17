@@ -90,10 +90,9 @@ EmailStr = Annotated[str, AfterValidator(_require_email)]
 UuidStr = Annotated[str, AfterValidator(_require_uuid)]
 IdStr = Annotated[str, AfterValidator(_require_id)]
 
-# @nonobvious(deliberately-missing): pydantic's HttpUrl/EmailStr are not used
-# because they normalise values (trailing slash, lowercased host/domain) and
-# some serialise as rich objects; scraped values must round-trip byte-identical,
-# so validated plain strs carry the constraints instead.
+# @nonobvious(deliberately-missing): pydantic's HttpUrl/EmailStr normalise
+# values; scraped data must round-trip byte-identical, so plain strs carry
+# the constraints.
 _FORMAT_GUARDS: dict[str, Any] = {
     "uri": HttpUrlStr,
     "url": HttpUrlStr,
@@ -101,8 +100,7 @@ _FORMAT_GUARDS: dict[str, Any] = {
     "uuid": UuidStr,
 }
 
-# @nonobvious(must-hold): ordered most-specific first — a name like companyUuid
-# must resolve to the UUID guard before the broader Id suffix can claim it.
+# @nonobvious(must-hold): most-specific first — companyUuid is UUID, not Id.
 _NAME_GUARDS: tuple[tuple[re.Pattern[str], tuple[str, ...], Any], ...] = (
     (
         re.compile(r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)"),
@@ -116,8 +114,7 @@ _NAME_GUARDS: tuple[tuple[re.Pattern[str], tuple[str, ...], Any], ...] = (
 
 
 def _name_guard(prop_name: str, node: dict) -> Any | None:
-    # @nonobvious(means): any explicit format is an opt-out — the schema author
-    # has named the string's shape, so a name heuristic must not override it.
+    # @nonobvious(means): any explicit format opts the field out of name guards.
     if node.get("format"):
         return None
     for pattern, exact, guard in _NAME_GUARDS:

@@ -15,8 +15,8 @@ from app.db import crud
 
 router = APIRouter(prefix="/v3/sessions", tags=["sessions"])
 
-# @nonobvious(means): the mapped levels are BU Cloud's thinkingLevel enum, so
-# v3 SDK callers keep working; every other spelling is steered to reasoningEffort.
+# @nonobvious(means): BU Cloud's thinkingLevel enum, mapped so v3 SDK callers
+# keep working; every other spelling is steered to reasoningEffort.
 _THINKING_LEVEL_MAP = {
     "disabled": "none",
     "low": "low",

@@ -112,7 +112,7 @@ def test_scrub_step10_well_formed_and_stray_quote_tags():
     assert ti["plan_to_goal"].startswith("Dismiss cookie banner, then try find_elements")
     assert ti["plan_to_goal"].endswith("since it's the actual page loaded.")
     assert ti["next_move"].startswith("Click Reject all to dismiss cookie banner")
-    assert ti["evaluation_previous_goal"].startswith("search_page for ashby_jid returned 0 matches")
+    assert ti["evaluation_previous_goal"].startswith("search_page for embed_jid returned 0 matches")
     assert ti["memory"].startswith("On tab 7ECC viewing Head of Data Science")
     assert ti["next_goal"] == "Dismiss cookie banner then try find_elements selector for apply button hr"
     for key in ("plan_to_goal", "next_move", "evaluation_previous_goal", "memory", "next_goal"):
@@ -139,7 +139,7 @@ def test_scrub_step12_malformed_tags_and_invoke_restart():
         "full href content."
     )
     assert ti["evaluation_previous_goal"].startswith("find_elements found 2 matching elements")
-    assert ti["memory"].startswith("Still trying to get full untruncated ashby_jid UUIDs")
+    assert ti["memory"].startswith("Still trying to get full untruncated embed_jid UUIDs")
     assert ti["next_goal"].startswith("Retrieve href/content attribute values")
     assert ti["current_plan_item"] == "3"
 
