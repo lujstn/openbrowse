@@ -1217,3 +1217,40 @@ async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypa
 
     assert await llm._drain_stream(FakeStream()) == "final"
     assert pushes == [{"label": _REASONING_LABEL, "spin": True, "stream": None}]
+def test_output_diff_reports_only_what_changed():
+    from app.agent.runner import _output_diff
+
+    before = '{\n  "items": []\n}'
+    after = '{\n  "items": [\n    {"title": "One"}\n  ]\n}'
+    rows, truncated = _output_diff(before, after)
+
+    assert truncated is False
+    kinds = [r["type"] for r in rows]
+    assert "added" in kinds
+    assert all(r["content"].strip() for r in rows)
+    assert not any(r["type"] == "equal" for r in rows)
+
+
+def test_output_diff_is_empty_when_nothing_moved():
+    from app.agent.runner import _output_diff
+
+    same = '{"a": 1}'
+    assert _output_diff(same, same) == ([], False)
+
+
+def test_output_diff_truncates_a_flood():
+    from app.agent.runner import _output_diff
+
+    rows, truncated = _output_diff("", "\n".join(f"line {i}" for i in range(500)), limit=10)
+    assert truncated is True
+    assert len(rows) == 10
+
+
+def test_output_diff_elides_a_single_enormous_line():
+    from app.agent.runner import _DIFF_LINE_CHARS, _output_diff
+
+    huge = '  "body": "' + ("x" * 50_000) + '"'
+    rows, _ = _output_diff("", huge)
+    assert rows
+    assert all(len(r["content"]) < _DIFF_LINE_CHARS + 40 for r in rows)
+    assert "chars>" in rows[0]["content"]

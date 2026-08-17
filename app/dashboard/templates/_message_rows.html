@@ -2,7 +2,7 @@
 {% for m in messages %}
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}
-{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning or md.error_full or md.result_snippet %}
+{% set has_cards = md.see or md.plan or md.next or md.thinking or md.model_reasoning or md.reasoning or md.error_full or md.result_snippet or md.sources or md.output_diff %}
 <div class="msg-row{% if has_cards %} has-cards{% endif %}" data-type="{{ m.type }}" data-mid="{{ m.id }}">
   <span class="msg-left">
     <span class="msg-time" data-ts="{{ m.created_at }}"></span>
@@ -10,17 +10,60 @@
   </span>
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
   <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>
-  <button class="msg-caret" type="button" aria-label="Expand step details"></button>
+  <button class="msg-caret" type="button" aria-label="Expand step details" aria-expanded="false"></button>
   {% if has_cards %}
-  <div class="msg-cards">
-    {% if md.see %}<div class="card card-see"><div class="card-head">🖼️ What I'm seeing</div><div class="card-text">{{ md.see }}</div></div>{% endif %}
-    {% if md.thinking %}<div class="card card-think"><div class="card-head">🧠 What I'm thinking</div><div class="card-text">{{ md.thinking }}</div></div>{% endif %}
-    {% if md.plan %}<div class="card card-plan"><div class="card-head">🛝 How I see things going</div><div class="card-text">{{ md.plan }}</div></div>{% endif %}
-    {% if md.next %}<div class="card card-next"><div class="card-head">➡️ My next step</div><div class="card-text">{{ md.next }}</div></div>{% endif %}
-    {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.model_reasoning | mdlite }}</div></div>{% endif %}
-    {% if md.result_snippet %}<div class="card card-result"><div class="card-head">🧾 What happened</div><div class="card-text">{{ md.result_snippet }}</div></div>{% endif %}
-    {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
-    {% if md.error_full %}<div class="card card-error"><div class="card-head">⚠️ Full error</div><div class="card-text">{{ md.error_full }}</div></div>{% endif %}
+  <div class="msg-cards" inert>
+    <div class="msg-cards-inner">
+      {% if md.see %}<div class="card card-see"><div class="card-head">🖼️ What I'm seeing</div><div class="card-text">{{ md.see }}</div></div>{% endif %}
+      {% if md.thinking %}<div class="card card-think"><div class="card-head">🧠 What I'm thinking</div><div class="card-text">{{ md.thinking }}</div></div>{% endif %}
+      {% if md.plan %}<div class="card card-plan"><div class="card-head">🛝 How I see things going</div><div class="card-text">{{ md.plan }}</div></div>{% endif %}
+      {% if md.next %}<div class="card card-next"><div class="card-head">➡️ My next step</div><div class="card-text">{{ md.next }}</div></div>{% endif %}
+      {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.model_reasoning | mdlite }}</div></div>{% endif %}
+      {% if md.result_snippet %}<div class="card card-result"><div class="card-head">🧾 What happened</div><div class="card-text">{{ md.result_snippet }}</div></div>{% endif %}
+      {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
+      {% if md.error_full %}<div class="card card-error"><div class="card-head">⚠️ Full error</div><div class="card-text">{{ md.error_full }}</div></div>{% endif %}
+      {% if md.output_diff %}
+      <div class="ob-diff">
+        <div class="ob-diff-head">
+          <span>📄 output.json</span>
+          <span class="ob-diff-counts">
+            <span class="ob-diff-plus">+{{ md.output_diff | selectattr('type', 'equalto', 'added') | list | length }}</span>
+            <span class="ob-diff-minus">&minus;{{ md.output_diff | selectattr('type', 'equalto', 'removed') | list | length }}</span>
+          </span>
+        </div>
+        <div class="ob-diff-body">
+          {% for row in md.output_diff %}
+          <div class="ob-diff-row is-{{ row.type }}">
+            <span class="ob-diff-num">{{ row.line }}</span>
+            <span class="ob-diff-sign">{{ '+' if row.type == 'added' else '-' }}</span>
+            <span class="ob-diff-text">{{ row.content }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% if md.output_diff_truncated %}<div class="ob-diff-more">Longer than shown; the full result is in the export.</div>{% endif %}
+      </div>
+      {% endif %}
+      {% if md.sources %}
+      <div class="ob-cites">
+        <div class="ob-cites-head">📚 Sources <span class="ob-cites-count">{{ md.sources | length }}</span></div>
+        <ol class="ob-cites-list">
+          {% for s in md.sources %}
+          {% set href = s.url | safe_url %}
+          <li class="ob-cite">
+            <span class="ob-cite-index">{{ loop.index }}</span>
+            <a class="ob-cite-link"{% if href %} href="{{ href }}" target="_blank" rel="noreferrer noopener"{% endif %}>
+              <span class="ob-cite-title">{{ s.title or s.url }}</span>
+              <span class="ob-cite-domain">{{ s.url | domain_of }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
+      <div class="msg-cards-foot">
+        <button class="msg-copy" type="button">Copy step</button>
+      </div>
+    </div>
   </div>
   {% endif %}
 </div>

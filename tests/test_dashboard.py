@@ -578,3 +578,128 @@ def test_streaming_response_caret_and_handoff_behaviour():
     harness = Path(__file__).parent / "fixtures" / "streaming_response_harness.mjs"
     proc = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+async def test_run_page_composer_keeps_native_submission(client):
+    resp = await client.get("/", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert 'class="ob-composer-field"' in resp.text
+    assert 'class="ob-composer-mirror"' in resp.text
+    assert 'class="ob-composer-input"' in resp.text
+    assert "native: true" in resp.text
+    assert '<button class="run-btn" type="submit" disabled>Run</button>' in resp.text
+
+
+async def test_followup_composer_replaces_the_hidden_input(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="watch a page", keep_alive=True)
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    assert 'class="ob-composer ob-composer-dock"' in resp.text
+    assert 'id="followup-input"' in resp.text
+    assert "OpenBrowseAgents.PromptInput" in resp.text
+    assert 'style="display: none"' not in resp.text.split('id="followup-form"')[1][:200]
+
+
+async def test_codeview_uses_the_shared_renderer(client):
+    resp = await client.get("/codeview")
+    assert resp.status_code == 200
+    assert '<link rel="stylesheet" href="/static/openbrowse.css" />' in resp.text
+    assert '<script defer src="/static/agents.js"></script>' in resp.text
+    assert "agents.renderCode(code, 'python')" in resp.text
+    assert "outerHTML" not in resp.text
+
+
+def test_message_display_passes_sources_through():
+    import json as _json
+
+    from app.dashboard.routes import message_display
+
+    row = {
+        "type": "result",
+        "summary": "read_pages: 2/2 pages -> pages.json",
+        "data": _json.dumps({
+            "category": "read",
+            "action": "read_pages",
+            "sources": [
+                {"url": "https://www.bbc.co.uk/news/one", "title": "One"},
+                {"url": "https://example.com/two", "title": ""},
+            ],
+        }),
+    }
+    md = message_display(row)
+    assert len(md["sources"]) == 2
+    assert md["sources"][0]["title"] == "One"
+
+
+def test_domain_of_strips_the_www():
+    from app.dashboard.routes import _domain_of
+
+    assert _domain_of("https://www.bbc.co.uk/news/one") == "bbc.co.uk"
+    assert _domain_of("https://example.com/two") == "example.com"
+    assert _domain_of("") == ""
+
+
+def test_sources_render_as_citations():
+    import json
+
+    from app.dashboard.routes import _format_relative_time, templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "type": "result",
+            "created_at": "2026-08-17T15:00:00+00:00",
+            "summary": "read_pages: 1/1 pages",
+            "data": json.dumps({
+                "category": "read",
+                "action": "read_pages",
+                "sources": [{"url": "https://www.bbc.co.uk/news/one", "title": "One"}],
+            }),
+        }],
+        format_relative=_format_relative_time,
+    )
+    assert 'class="ob-cites"' in html
+    assert "https://www.bbc.co.uk/news/one" in html
+    assert ">bbc.co.uk<" in html
+    assert "has-cards" in html
+
+
+def test_safe_url_refuses_a_scraped_script_scheme():
+    from app.dashboard.routes import _safe_url
+
+    assert _safe_url("https://example.com/a") == "https://example.com/a"
+    assert _safe_url("http://example.com/a") == "http://example.com/a"
+    assert _safe_url("javascript:alert(document.cookie)") == ""
+    assert _safe_url("  javascript:alert(1)") == ""
+    assert _safe_url("JavaScript:alert(1)") == ""
+    assert _safe_url("data:text/html,<script>alert(1)</script>") == ""
+    assert _safe_url("") == ""
+
+
+def test_a_scripted_source_url_never_becomes_a_link():
+    import json
+
+    from app.dashboard.routes import _format_relative_time, templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "type": "result",
+            "created_at": "2026-08-17T15:00:00+00:00",
+            "summary": "read_pages: 1/1 pages",
+            "data": json.dumps({
+                "category": "read",
+                "action": "read_pages",
+                "sources": [
+                    {"url": "javascript:alert(document.cookie)", "title": "Trap"},
+                    {"url": "https://bbc.co.uk/news/one", "title": "Real"},
+                ],
+            }),
+        }],
+        format_relative=_format_relative_time,
+    )
+    assert 'href="javascript' not in html
+    assert 'href="https://bbc.co.uk/news/one"' in html
+    assert html.count("href=") == 1
+    assert 'class="msg-cards" inert' in html
+    assert 'aria-expanded="false"' in html

@@ -36,9 +36,21 @@ def set_activity(
     }
 
 
+_coverage: dict[str, list[dict]] = {}
+
+
+def set_coverage(session_id: str, items: list[dict]) -> None:
+    _coverage[session_id] = items
+
+
+def get_coverage(session_id: str) -> list[dict] | None:
+    return _coverage.get(session_id)
+
+
 def get_activity(session_id: str) -> dict | None:
     return _activity.get(session_id)
 
 
 def clear_activity(session_id: str) -> None:
     _activity.pop(session_id, None)
+    _coverage.pop(session_id, None)
