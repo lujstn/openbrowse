@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/openbrowse-dark.gif">
+    <img src=".github/assets/openbrowse-light.gif" alt="OpenBrowse" width="432">
+  </picture>
+</p>
+
 # OpenBrowse
 
 **The open-source Browser Use Cloud alternative.** Self-host AI browser agents on a Raspberry Pi or any VPS, drive them through the same v3 REST API the `browser-use-sdk` already speaks, and watch every run live in a real browser. Built on top of the [Browser Use](https://github.com/browser-use/browser-use) SDK. It's cheaper, faster, and more reliable than BU Cloud.
