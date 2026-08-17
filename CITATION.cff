@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use OpenBrowse in your research or project, please cite it as below."
+type: software
+title: "OpenBrowse: Self-hosted AI browser agents"
+version: 1.1.1
+date-released: 2026-08-17
+license: MIT
+authors:
+  - family-names: "Johnston Kurilov"
+    given-names: "Lucas"
+    orcid: "https://orcid.org/0009-0004-3743-2349"
+repository-code: "https://github.com/lujstn/openbrowse"
+url: "https://openbrowse.co"
+abstract: "OpenBrowse is an open-source, self-hosted alternative to Browser Use Cloud: AI browser agents that run on your own hardware, driven through the v3 REST API, with schema-validated structured output, anti-hallucination grounding guards, and a live visual dashboard."
+keywords:
+  - artificial intelligence
+  - ai agents
+  - browser automation
+  - browser agents
+  - structured data extraction
+  - web scraping
+  - self-hosted
