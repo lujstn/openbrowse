@@ -859,7 +859,10 @@ _STATUS_POLL_INTERVAL_S = 0.25
 @router.get("/sse/session/{session_id}/messages")
 async def sse_session_messages(request: Request, session_id: str):
     async def event_generator() -> AsyncGenerator[dict[str, str], None]:
-        last_id: str | None = None
+        # @nonobvious(forced-by): a dropped connection starts a fresh generator,
+        # so a cursor that began at None would replay the whole session into the
+        # feed. EventSource replays the last id it saw, which is where to resume.
+        last_id: str | None = request.headers.get("last-event-id") or None
         last_status_payload: str | None = None
         last_messages_at = 0.0
         while True:
@@ -875,7 +878,7 @@ async def sse_session_messages(request: Request, session_id: str):
                         messages=new_msgs,
                         format_relative=_format_relative_time,
                     )
-                    yield {"event": "messages", "data": html}
+                    yield {"event": "messages", "id": last_id, "data": html}
             session = await crud.get_session(session_id)
             if session:
                 payload = json.dumps({

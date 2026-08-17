@@ -65,6 +65,10 @@ get_live_agent = live.get_live_agent
 
 _REASONING_PUSH_INTERVAL_S = 0.15
 _REASONING_LABEL = "💭 Thinking"
+# @nonobvious(mirrors): the live stream and the persisted reasoning row are the
+# same text rendered twice, so they clip at the same point — a longer live cap
+# would make the card visibly shrink when the settled row takes over.
+_REASONING_MAX_CHARS = 6000
 
 _CARDS_EXTENSION = (
     "Every step, before you act, fill three one-sentence fields: what_i_see (what is "
@@ -610,7 +614,12 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                     if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
                         text = " ".join("".join(parts).split())
-                        set_activity(sid, _REASONING_LABEL, spin=True, stream=text)
+                        set_activity(
+                            sid,
+                            _REASONING_LABEL,
+                            spin=True,
+                            stream=text[:_REASONING_MAX_CHARS],
+                        )
             return await stream.get_final_response()
 
     async def _create(self, params: dict[str, Any]) -> Any:
@@ -726,7 +735,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         if summary:
             self._last_model_reasoning = summary
             if sid:
-                set_activity(sid, _REASONING_LABEL, stream=summary)
+                set_activity(sid, _REASONING_LABEL, stream=summary[:_REASONING_MAX_CHARS])
         await _settle_code_stream(self, result, output_format)
         return result
 
@@ -893,7 +902,12 @@ class _RepairingChatAnthropic(ChatAnthropic):
                     if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
                         text = " ".join("".join(think_parts).split())
-                        set_activity(sid, _REASONING_LABEL, spin=True, stream=text)
+                        set_activity(
+                            sid,
+                            _REASONING_LABEL,
+                            spin=True,
+                            stream=text[:_REASONING_MAX_CHARS],
+                        )
             if observer is None:
                 continue
             if etype == "input_json" and getattr(event, "partial_json", ""):
@@ -909,7 +923,9 @@ class _RepairingChatAnthropic(ChatAnthropic):
             self._last_model_reasoning = thinking_text
             sid = getattr(self, "_activity_session", None)
             if sid:
-                set_activity(sid, _REASONING_LABEL, stream=thinking_text)
+                set_activity(
+                    sid, _REASONING_LABEL, stream=thinking_text[:_REASONING_MAX_CHARS]
+                )
         return result
 
     async def _ainvoke_inner(
@@ -2233,7 +2249,7 @@ async def run_agent_session(session_id: str) -> None:
                         {
                             "category": "reasoning",
                             "action": "model_reasoning",
-                            "reasoning": reasoning_text[:6000],
+                            "reasoning": reasoning_text[:_REASONING_MAX_CHARS],
                         }
                     ),
                     summary=_reasoning_title(reasoning_text),
