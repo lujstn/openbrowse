@@ -1549,26 +1549,42 @@ _CAPTCHA_PROBE_JS = """(function () {
 })()"""
 
 
-async def probe_captcha(browser_session: BrowserSession) -> dict[str, Any] | None:
-    """What challenge the current page is showing, or None.
+async def _probe_captcha_strict(
+    browser_session: BrowserSession,
+) -> dict[str, Any] | None:
+    """The page probe, letting a failed evaluation raise.
 
-    Reports the kind, the site key, the one-shot ``data-s`` Google's "unusual
-    traffic" interstitials carry, and whether clearing it needs a form POST rather
-    than the site's own callback.
+    @nonobvious(must-hold): "the check failed" and "there is no challenge" have to
+    stay tellable apart. Evaluating against a page that is mid-navigation throws,
+    which is the ordinary case while an interstitial submits, and reading that as
+    an all-clear would report a solve that never happened.
     """
-    try:
-        found = await _eval_js(browser_session, _CAPTCHA_PROBE_JS)
-    except Exception:
-        logger.debug("probe_captcha failed", exc_info=True)
-        return None
+    found = await _eval_js(browser_session, _CAPTCHA_PROBE_JS)
     if not isinstance(found, dict) or not found.get("kind"):
         return None
     return found
 
 
+async def probe_captcha(browser_session: BrowserSession) -> dict[str, Any] | None:
+    """What challenge the current page is showing, or None if it cannot be told.
+
+    Reports the kind, the site key, the one-shot ``data-s`` Google's "unusual
+    traffic" interstitials carry, and whether clearing it needs a form POST rather
+    than the site's own callback. Use ``_probe_captcha_strict`` wherever a failed
+    read must not pass for an absent challenge.
+    """
+    try:
+        return await _probe_captcha_strict(browser_session)
+    except Exception:
+        logger.debug("probe_captcha failed", exc_info=True)
+        return None
+
+
 def _cookie_header_for(cookies: list[dict[str, Any]], host: str) -> str:
     """The page's own cookies as a ``name=value;…`` header, scoped to its host."""
     host = (host or "").lower()
+    if ":" in host:
+        host = host.rsplit(":", 1)[0]
     if not host:
         return ""
     parts: list[str] = []
@@ -1638,11 +1654,14 @@ async def _interstitial_cleared(
         try:
             now_url = await _eval_js(browser_session, "window.location.href") or ""
         except Exception:
-            continue
+            now_url = ""
         if now_url and now_url != before_url and "/sorry/" not in now_url:
             return True
-        if await probe_captcha(browser_session) is None:
-            return True
+        try:
+            if await _probe_captcha_strict(browser_session) is None:
+                return True
+        except Exception:
+            logger.debug("captcha re-check failed; retrying", exc_info=True)
     return False
 
 

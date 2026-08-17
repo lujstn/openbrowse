@@ -274,6 +274,31 @@ async def test_interstitial_not_cleared_when_the_challenge_persists() -> None:
     assert cleared is False
 
 
+@pytest.mark.asyncio
+async def test_a_failed_check_is_never_read_as_cleared() -> None:
+    """A page mid-navigation makes Runtime.evaluate throw, which must not pass for
+    an absent challenge: that is the false success this whole path exists to stop.
+    """
+    from app.agent import tools as tools_mod
+
+    async def _always_throws(browser_session, expression: str):
+        raise RuntimeError("Execution context was destroyed")
+
+    with patch.object(tools_mod, "_eval_js", _always_throws):
+        cleared = await tools_mod._interstitial_cleared(
+            object(), "https://www.google.com/sorry/index?q=1", timeout_s=2
+        )
+    assert cleared is False
+
+
+@pytest.mark.asyncio
+async def test_cookies_ignore_a_non_standard_port_on_the_host() -> None:
+    from app.agent.tools import _cookie_header_for
+
+    jar = [{"name": "sid", "value": "1", "domain": "localhost"}]
+    assert _cookie_header_for(jar, "localhost:8420") == "sid=1"
+
+
 def test_item_url_field_prefers_detail_over_company() -> None:
     from app.agent.output_store import OutputStore
     from app.agent.schema import json_schema_to_pydantic
