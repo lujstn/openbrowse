@@ -1565,6 +1565,7 @@ async def test_read_one_page_skips_frame_filter_on_panel_host(monkeypatch) -> No
     assert not page.get("error")
     assert matched["called"] is False
     assert not page.get("frame_matched")
+    assert page.get("frame_skipped_own_host") is True
 
 
 async def test_read_one_page_falls_back_to_main_doc_when_no_frame(monkeypatch) -> None:
@@ -3165,3 +3166,42 @@ async def test_read_one_page_waits_for_panel_seen_in_dom(monkeypatch) -> None:
     assert page.get("frame_matched") is True
     assert not page.get("error")
     assert match_calls["n"] >= 4
+
+
+async def test_read_one_page_keeps_filter_when_needle_only_in_query(
+    monkeypatch,
+) -> None:
+    import app.agent.tools as tools_mod
+
+    async def fake_match(
+        session, tid, needle, claimed, baseline, allow_sole=False, page_url=None,
+        sibling_urls=None,
+    ):
+        return "frame-1"
+
+    async def fake_eval(session, tid, js):
+        if js == tools_mod._BODY_TEXT_JS:
+            return "panel content " * 30
+        if js == tools_mod._JSONLD_JS:
+            return []
+        if js == tools_mod._LINKS_JS:
+            return []
+        if "readyState" in js:
+            return "complete"
+        return "Title"
+
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_JSONLD_GRACE_S", 0.0)
+
+    page = await tools_mod._read_one_page(
+        None,
+        "https://x.com/jobs?board_jid=abc123#openings",
+        "tid-1",
+        "board",
+        set(),
+        set(),
+    )
+    assert page.get("frame_matched") is True
+    assert not page.get("frame_skipped_own_host")
+    assert not page.get("error")

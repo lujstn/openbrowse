@@ -487,10 +487,14 @@ async def _read_one_page(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _PAGE_READY_TIMEOUT_S
 
-    # @nonobvious(forced-by): a link into the panel's own host IS the panel
-    # content — there is no inner frame, and waiting burns the whole timeout.
-    if url_contains and url_contains.lower() in (url or "").lower():
+    # @nonobvious(forced-by): a page ON the panel provider's own host IS the
+    # panel content — no inner frame exists there, and waiting burns the whole
+    # timeout. Host-scoped deliberately: the needle appearing elsewhere in the
+    # URL (an id query param naming the provider) must NOT drop the filter, or
+    # every wave read silently degrades to the embedding shell.
+    if url_contains and url_contains.lower() in urlparse(url or "").netloc.lower():
         url_contains = None
+        page["frame_skipped_own_host"] = True
 
     fallback_ok = False
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
@@ -2323,7 +2327,13 @@ def register_tab_tools(
                     lines.append(
                         f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
                         f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
-                        f"frame {'yes' if p.get('frame_matched') else 'no'}, "
+                        f"frame {'yes' if p.get('frame_matched') else 'no'}"
+                        + (
+                            " (filter skipped: page is on the panel's own host)"
+                            if p.get("frame_skipped_own_host")
+                            else ""
+                        )
+                        + ", "
                         f"{len(p.get('links') or [])} links"
                         + (f" | source row: {link_text}" if link_text else "")
                     )
