@@ -128,6 +128,8 @@ def message_display(m: dict) -> dict:
         if data.get("reasoning"):
             out["reasoning"] = data["reasoning"]
         return out
+    if t == "user_message":
+        return {"category": "user", "label": "you", "summary": summary, "code": False}
     if t == "browser_action_error":
         return {"category": "error", "label": "error", "summary": summary, "code": False}
     if t == "planning":
@@ -459,6 +461,32 @@ async def session_log(session_id: str, scope: str = "full"):
         for m in messages
     ]
     return JSONResponse(export)
+
+
+@router.post("/session/{session_id}/message")
+async def session_followup(session_id: str, task: str = Form(...)):
+    session = await crud.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    if not session.get("keep_alive"):
+        return JSONResponse({"error": "Session was not started as keep-alive"}, status_code=400)
+    if session.get("status") != "idle":
+        return JSONResponse({"error": "Session is not idle"}, status_code=409)
+    text = (task or "").strip()
+    if not text:
+        return JSONResponse({"error": "Message is empty"}, status_code=400)
+    await crud.create_message(
+        session_id=session_id,
+        role="user",
+        msg_type="user_message",
+        summary=text[:2000],
+        count_step=False,
+    )
+    await crud.update_session(session_id, task=text, status="created")
+    dispatched = asyncio.create_task(pool.submit(session_id))
+    _dispatched_tasks.add(dispatched)
+    dispatched.add_done_callback(_dispatched_tasks.discard)
+    return JSONResponse({"ok": True})
 
 
 @router.post("/session/{session_id}/stop")

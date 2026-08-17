@@ -462,6 +462,13 @@ OpenBrowse{% endblock %} {% block head %}
   .msg-cards .card-model-reason .card-text { color: #a1a1aa; font-style: italic; }
   .feed-btn.stop { color: #f87171; border-color: #402020; }
   .feed-btn.stop:hover { border-color: #f87171; }
+  .followup { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #222; background: #0d0d0d; }
+  .followup input { flex: 1; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 8px; color: #e5e5e5; font-family: inherit; font-size: 13px; padding: 9px 12px; }
+  .followup input:focus { outline: none; border-color: #60a5fa; }
+  .followup-send { background: #60a5fa; color: #0a0a0a; border: none; border-radius: 8px; font-weight: 600; font-size: 13px; padding: 8px 16px; cursor: pointer; }
+  .followup-send:hover { background: #7db8fb; }
+  .followup-send:disabled { opacity: 0.4; cursor: not-allowed; }
+  .msg-cat.cat-user { color: #60a5fa; }
 </style>
 {% endblock %} {% block content %}
 <div class="session-header">
@@ -550,6 +557,16 @@ OpenBrowse{% endblock %} {% block head %}
       <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="feed-rows"></div>
     </div>
+    {% if session.keep_alive %}
+    <form id="followup-form" class="followup" {% if session.status != 'idle' %}style="display: none"{% endif %}>
+      <input
+        id="followup-input"
+        placeholder="Send a follow-up task to this session…"
+        autocomplete="off"
+      />
+      <button class="followup-send" type="submit">Send</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 
@@ -667,6 +684,33 @@ OpenBrowse{% endblock %} {% block head %}
     '<div class="queued-sub">Waiting for a free browser slot. Up to ' +
     (document.getElementById("browser-panel").dataset.maxConcurrent || "5") +
     " sessions run at once; this one starts automatically when a slot frees up.</div></div>";
+
+  const followupForm = document.getElementById("followup-form");
+  function syncFollowup(status) {
+    if (followupForm) followupForm.style.display = status === "idle" ? "flex" : "none";
+  }
+  if (followupForm) {
+    followupForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const input = document.getElementById("followup-input");
+      const btn = followupForm.querySelector(".followup-send");
+      const text = input.value.trim();
+      if (!text) return;
+      btn.disabled = true;
+      try {
+        const resp = await fetch("/session/" + SESSION_ID + "/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "task=" + encodeURIComponent(text),
+        });
+        if (resp.ok) {
+          input.value = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 
   const ENDED_SVG =
     '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round">' +
@@ -838,6 +882,7 @@ OpenBrowse{% endblock %} {% block head %}
         "$" + parseFloat(data.capsolverCostUsd || 0).toFixed(4);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       const dstat = displayStatus(data.status, data.isTaskSuccessful);
+      syncFollowup(data.status);
       document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-d-" + dstat;

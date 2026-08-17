@@ -323,3 +323,57 @@ async def test_settings_restart_outcome_banners(client, tmp_path, monkeypatch):
         f"/settings?restarted={int(now) + 60}", headers=_basic("admin", "secret-key")
     )
     assert "does not appear to have" in resp.text
+
+
+async def test_followup_message_redispatches_idle_keepalive_session(
+    client, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    submit = AsyncMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "now check the pricing page"},
+    )
+    assert resp.status_code == 200
+    updated = await crud.get_session(session["id"])
+    assert updated["task"] == "now check the pricing page"
+    assert updated["status"] == "created"
+    messages, _ = await crud.list_messages(session["id"], limit=10)
+    assert any(
+        m["type"] == "user_message" and m["summary"] == "now check the pricing page"
+        for m in messages
+    )
+    submit.assert_called_once()
+
+
+async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    plain = await crud.create_session(task="t", keep_alive=False)
+    await crud.update_session(plain["id"], status="idle")
+    resp = await client.post(
+        f"/session/{plain['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "x"},
+    )
+    assert resp.status_code == 400
+
+    busy = await crud.create_session(task="t", keep_alive=True)
+    await crud.update_session(busy["id"], status="running")
+    resp = await client.post(
+        f"/session/{busy['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "x"},
+    )
+    assert resp.status_code == 409
