@@ -116,7 +116,7 @@ The `--bg` flag runs the funnel as a background daemon managed by Tailscale — 
 Your URL will be in the format:
 
 ```
-https://llmpi.tail12345.ts.net
+https://your-pi.tail0a1b2c.ts.net
 ```
 
 Find your exact hostname:
@@ -128,7 +128,7 @@ tailscale status
 Test the public endpoint:
 
 ```bash
-curl https://llmpi.tail12345.ts.net/health
+curl https://your-pi.tail0a1b2c.ts.net/health
 # {"status":"ok","active_sessions":0}
 ```
 
@@ -228,7 +228,7 @@ Profiles persist browser cookies across sessions, so the agent stays logged in t
 ### Create a profile
 
 ```bash
-curl -X POST https://llmpi.tail12345.ts.net/v3/profiles \
+curl -X POST https://your-pi.tail0a1b2c.ts.net/v3/profiles \
   -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-profile"}'
@@ -239,7 +239,7 @@ Response includes the profile `id` — use this as `profileId` when creating ses
 ### List profiles
 
 ```bash
-curl https://llmpi.tail12345.ts.net/v3/profiles \
+curl https://your-pi.tail0a1b2c.ts.net/v3/profiles \
   -H "Authorization: Bearer <API_KEY>"
 ```
 
@@ -264,7 +264,7 @@ A bundle (a JSON list, or `{"profiles": [...]}`) carries an id per entry, so a s
 **Or the API** (this is what the in-app importer calls):
 
 ```bash
-curl -X PUT https://llmpi.tail12345.ts.net/v3/profiles/<profile-id>/storage-state \
+curl -X PUT https://your-pi.tail0a1b2c.ts.net/v3/profiles/<profile-id>/storage-state \
   -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
   --data @personal_profile.storage_state.json
 ```
