@@ -377,3 +377,95 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
         data={"task": "x"},
     )
     assert resp.status_code == 409
+
+
+async def test_session_detail_wires_the_streaming_component(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    assert 'id="stream-bar"' in resp.text
+    assert "OpenBrowseAgents.StreamingResponse" in resp.text
+    assert '<link rel="stylesheet" href="/static/openbrowse.css" />' in resp.text
+    assert '<script defer src="/static/agents.js"></script>' in resp.text
+
+
+def test_mdlite_bold_and_code():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("**bold** and `code`")) == "<strong>bold</strong> and <code>code</code>"
+
+
+def test_mdlite_bold_spans_a_line_break():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("**foo\nbar** baz")) == "<strong>foo<br>bar</strong> baz"
+
+
+def test_mdlite_unterminated_bold_stays_literal():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("checking the **access token with no closer"))
+    assert out == "checking the **access token with no closer"
+    assert "<strong>" not in out
+
+
+def test_mdlite_unterminated_backtick_stays_literal():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("run `find_elements with no closer"))
+    assert out == "run `find_elements with no closer"
+    assert "<code>" not in out
+
+
+def test_mdlite_closed_fence_renders_bounded_code_block():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("before\n```python\nprint(1)\n```\nafter"))
+    assert out == "before<br><pre><code>print(1)\n</code></pre>after"
+
+
+def test_mdlite_unclosed_fence_runs_to_end_as_code():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("before\n```python\nprint(1)\nstill going"))
+    assert out == "before<br><pre><code>print(1)\nstill going</code></pre>"
+
+
+def test_mdlite_bullet_list():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("- one\n- **two**\nplain after"))
+    assert out == "<ul><li>one</li><li><strong>two</strong></li></ul><br>plain after"
+
+
+def test_mdlite_escapes_html():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("<script>alert(1)</script>")) == "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_activity_payload_carries_a_growing_stream_never_a_slice():
+    from app.agent.activity import clear_activity, get_activity, set_activity
+
+    sid = "activity-shape-test"
+    clear_activity(sid)
+    set_activity(sid, "💭 Thinking", spin=True, stream="checking the")
+    first = get_activity(sid)
+    assert first["stream"] == "checking the"
+    assert first["spin"] is True
+    assert first["label"] == "💭 Thinking"
+
+    set_activity(sid, "💭 Thinking", spin=True, stream="checking the accessibility tree")
+    second = get_activity(sid)
+    assert second["stream"] == "checking the accessibility tree"
+    assert second["stream"].startswith(first["stream"])
+
+    set_activity(sid, "Running actions")
+    third = get_activity(sid)
+    assert third["stream"] is None
+    assert third["label"] == "Running actions"
+    clear_activity(sid)
