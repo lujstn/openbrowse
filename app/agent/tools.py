@@ -1098,13 +1098,13 @@ class _SandboxBrowser:
 
     async def evaluate(self, js: str) -> Any:
         result = await _eval_js(self._session, js)
-        # @nonobvious(deliberately-missing): only page-text-shaped string reads
-        # get the embed caveat appended — annotating arbitrary short values
-        # (titles, ids) would corrupt data the script stores verbatim.
+        # @nonobvious(deliberately-missing): only whole-page body reads get the
+        # embed caveat appended — annotating scoped reads (an h1's textContent,
+        # an id) would corrupt short values the script stores verbatim.
         if (
             isinstance(result, str)
             and len(result.strip()) < _MIN_PAGE_TEXT_CHARS
-            and any(t in js for t in ("innerText", "textContent", "outerHTML", "innerHTML"))
+            and "document.body" in js
         ):
             caveat = await self._main_frame_caveat()
             if caveat:

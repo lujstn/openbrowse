@@ -2413,6 +2413,9 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
     title = await sb.evaluate("document.title")
     assert title == "thin shell text"
 
+    heading = await sb.evaluate("document.querySelector('h1').textContent")
+    assert heading == "thin shell text"
+
     html = await sb.get_html()
     assert html.startswith("<div>shell</div>")
     assert "MAIN page only" in html
