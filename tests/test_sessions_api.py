@@ -40,7 +40,7 @@ async def client():
         yield c
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_create_session_with_task(mock_submit, client):
     resp = await client.post(
         "/v3/sessions",
@@ -58,6 +58,37 @@ async def test_create_session_with_task(mock_submit, client):
     assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
         "Go to google.com"
     ]
+
+
+async def test_start_returns_while_pool_is_full(client, monkeypatch):
+    import asyncio
+
+    import app.agent.pool as pool_mod
+    from app.agent.pool import SessionPool
+
+    release = asyncio.Event()
+
+    async def fake_run(session_id: str) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
+    busy_pool = SessionPool(max_concurrent=1)
+    monkeypatch.setattr("app.api.sessions.pool", busy_pool)
+
+    first = await client.post("/v3/sessions", json={"task": "one"})
+    assert first.status_code == 200
+    await asyncio.sleep(0)
+    assert busy_pool.active_count == 1
+
+    second = await asyncio.wait_for(
+        client.post("/v3/sessions", json={"task": "two"}), timeout=5
+    )
+    assert second.status_code == 200
+    assert busy_pool.queued_count == 1
+
+    release.set()
+    await asyncio.sleep(0.01)
+    await busy_pool.shutdown()
 
 
 async def test_create_session_without_task(client):

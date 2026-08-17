@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -77,7 +77,7 @@ async def test_sessions_page_still_serves(client):
     assert resp.status_code == 200
 
 
-@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+@patch("app.dashboard.routes.pool.submit_nowait")
 async def test_run_creates_and_dispatches(mock_submit, client):
     import asyncio
 
@@ -345,6 +345,58 @@ async def test_settings_save_updates_and_removes_values(client, tmp_path, monkey
     assert "NEW_VAR=hello" in text
 
 
+async def test_settings_save_refused_while_sessions_running(client, tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=supersecret\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    restarts = []
+    monkeypatch.setattr(
+        "app.dashboard.routes._schedule_restart", lambda: restarts.append(1)
+    )
+    monkeypatch.setattr(
+        "app.dashboard.routes.pool", type("P", (), {"active_count": 1})()
+    )
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={"key": ["API_KEY", "NEW_VAR"], "value": ["supersecret", "hello"]},
+    )
+    assert resp.status_code == 200
+    assert "Not saved" in resp.text
+    assert "restart anyway" in resp.text
+    assert "hello" in resp.text
+    assert restarts == []
+    assert "NEW_VAR" not in env.read_text()
+
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={
+            "key": ["API_KEY", "NEW_VAR"],
+            "value": ["supersecret", "hello"],
+            "force": "1",
+        },
+    )
+    assert resp.status_code == 200
+    assert restarts == [1]
+    assert "NEW_VAR=hello" in env.read_text()
+
+
+async def test_settings_save_atomic_leaves_no_tmp(client, tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=supersecret\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("app.dashboard.routes._schedule_restart", lambda: None)
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={"key": ["API_KEY"], "value": ["supersecret"]},
+    )
+    assert resp.status_code == 200
+    assert not (tmp_path / ".env.tmp").exists()
+    assert env.read_text() == "API_KEY=supersecret\n"
+
+
 async def test_settings_requires_auth(client):
     resp = await client.get("/settings")
     assert resp.status_code == 401
@@ -385,8 +437,8 @@ async def test_followup_message_redispatches_idle_keepalive_session(
 
     from app.db import crud
 
-    submit = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    submit = MagicMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
 
@@ -412,7 +464,7 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
 
     from app.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
     plain = await crud.create_session(task="t", keep_alive=False)
     await crud.update_session(plain["id"], status="idle")
     resp = await client.post(
