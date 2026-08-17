@@ -29,6 +29,7 @@ class DisplaySlot:
     novnc_proc: subprocess.Popen | None = None
     chrome_proc: asyncio.subprocess.Process | None = None
     user_data_dir: str | None = None
+    vnc_ready: bool = False
 
 
 class DisplayManager:
@@ -60,26 +61,55 @@ class DisplayManager:
                 cdp_port=cdp_port,
             )
 
-            try:
-                # Start Xvfb
-                slot.xvfb_proc = subprocess.Popen(
-                    [
-                        "Xvfb",
-                        f":{display_num}",
-                        "-screen", "0", "1920x1080x24",
-                        "-ac",
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                await asyncio.sleep(0.5)
+            # @nonobvious(deliberately-missing): x11vnc and websockify are not
+            # started here — they cost continuous framebuffer-polling CPU per
+            # session, so ensure_vnc() starts them on the first viewer instead.
+            slot.xvfb_proc = subprocess.Popen(
+                [
+                    "Xvfb",
+                    f":{display_num}",
+                    "-screen", "0", "1920x1080x24",
+                    "-ac",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await asyncio.sleep(0.5)
 
-                # Start x11vnc
+            self._slots[display_num] = slot
+            logger.info(
+                "Allocated display :%d (VNC :%d, noVNC :%d, CDP :%d)",
+                display_num, vnc_port, novnc_port, cdp_port,
+            )
+            return slot
+
+    async def ensure_vnc(self, display_num: int) -> bool:
+        """Start x11vnc + websockify for a slot if they are not already running,
+        then wait until websockify answers. Returns False when the slot is gone
+        or the stream never becomes ready. Idempotent; x11vnc runs with -forever
+        -shared so the first viewer starts it for the slot's remaining lifetime.
+        """
+        from app.browser.vnc import wait_for_novnc
+
+        async with self._lock:
+            slot = self._slots.get(display_num)
+            if slot is None:
+                return False
+            if (
+                slot.vnc_ready
+                and slot.vnc_proc is not None
+                and slot.vnc_proc.poll() is None
+                and slot.novnc_proc is not None
+                and slot.novnc_proc.poll() is None
+            ):
+                return True
+            if slot.vnc_proc is None or slot.vnc_proc.poll() is not None:
+                slot.vnc_ready = False
                 slot.vnc_proc = subprocess.Popen(
                     [
                         "x11vnc",
                         "-display", f":{display_num}",
-                        "-rfbport", str(vnc_port),
+                        "-rfbport", str(slot.vnc_port),
                         "-nopw",
                         "-forever",
                         "-shared",
@@ -88,32 +118,27 @@ class DisplayManager:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-
-                # Start noVNC websockify proxy
+            if slot.novnc_proc is None or slot.novnc_proc.poll() is not None:
+                slot.vnc_ready = False
                 slot.novnc_proc = subprocess.Popen(
                     [
                         "websockify",
                         "--web", "/usr/share/novnc",
-                        str(novnc_port),
-                        f"localhost:{vnc_port}",
+                        str(slot.novnc_port),
+                        f"localhost:{slot.vnc_port}",
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            except Exception:
-                # Clean up any processes that did start
-                for proc_name in ("novnc_proc", "vnc_proc", "xvfb_proc"):
-                    proc = getattr(slot, proc_name)
-                    if proc and proc.poll() is None:
-                        proc.terminate()
-                raise
+            novnc_port = slot.novnc_port
 
-            self._slots[display_num] = slot
-            logger.info(
-                "Allocated display :%d (VNC :%d, noVNC :%d, CDP :%d)",
-                display_num, vnc_port, novnc_port, cdp_port,
-            )
-            return slot
+        # @nonobvious(must-hold): never poll readiness while holding the manager
+        # lock — the poll can take 10s and would freeze allocate/release for
+        # every session. A release() racing in just makes the poll fail.
+        ready = await wait_for_novnc(novnc_port)
+        if ready:
+            slot.vnc_ready = True
+        return ready
 
     async def release(self, display_num: int) -> None:
         """Release a display slot and clean up processes."""

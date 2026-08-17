@@ -35,6 +35,7 @@ from app.agent.runner import (
 )
 from app.api.sessions import _to_session_response
 from app.auth import dashboard_auth_ok, require_dashboard_auth
+from app.browser.factory import display_manager
 from app.config import settings
 from app.db import crud
 from app.profiles.storage import cookie_domains, read_state_file
@@ -351,14 +352,28 @@ def _novnc_port_for_display(display_num: int) -> int:
     return settings.novnc_base_port + (display_num - settings.xvfb_base_display)
 
 
-async def _novnc_port_for_session(session_id: str) -> int | None:
+async def _display_num_for_session(session_id: str) -> int | None:
     session = await crud.get_session(session_id)
     if not session:
         return None
     display_num = session.get("display_num")
     if display_num is None:
         return None
-    return _novnc_port_for_display(int(display_num))
+    return int(display_num)
+
+
+async def _novnc_port_for_session(session_id: str) -> int | None:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return None
+    return _novnc_port_for_display(display_num)
+
+
+async def _ensure_vnc_for_session(session_id: str) -> bool:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return False
+    return await display_manager.ensure_vnc(display_num)
 
 
 def _live_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -988,6 +1003,7 @@ _VNC_VIEW_HTML = """<!doctype html>
 async def vnc_view(request: Request, session_id: str):
     if not dashboard_auth_ok(request.headers.get("authorization"), request):
         return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
+    await _ensure_vnc_for_session(session_id)
     return HTMLResponse(_VNC_VIEW_HTML)
 
 
@@ -998,6 +1014,8 @@ async def vnc_asset(request: Request, session_id: str, asset: str):
     port = await _novnc_port_for_session(session_id)
     if port is None:
         return Response(status_code=404)
+    if not await _ensure_vnc_for_session(session_id):
+        return Response(status_code=502)
     target = asset or "vnc.html"
     async with httpx.AsyncClient() as client:
         try:
@@ -1059,6 +1077,9 @@ async def vnc_ws(websocket: WebSocket, session_id: str, ws_path: str):
         return
     port = await _novnc_port_for_session(session_id)
     if port is None:
+        await websocket.close(code=1011)
+        return
+    if not await _ensure_vnc_for_session(session_id):
         await websocket.close(code=1011)
         return
     requested = websocket.headers.get("sec-websocket-protocol", "")
