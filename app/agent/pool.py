@@ -19,23 +19,22 @@ class SessionPool:
         self._max = max_concurrent or settings.max_concurrent_sessions
         self._semaphore = asyncio.Semaphore(self._max)
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._running: set[str] = set()
 
     @property
     def active_count(self) -> int:
-        return self._max - self._semaphore._value
+        return len(self._running)
 
-    async def submit(self, session_id: str) -> None:
-        if self.active_count >= self._max:
-            # @nonobvious(forced-by): a keep-alive session parked between
-            # follow-ups still holds its display slot, and this call is awaited
-            # inside an HTTP handler — without reclaiming the slot, a one-slot
-            # host would leave the new session waiting on a browser nobody is
-            # using, forever.
-            await live.release_idle_slot(
-                "display slot handed to a newly started session"
-            )
-        await self._semaphore.acquire()
-        task = asyncio.create_task(self._run_and_release(session_id))
+    @property
+    def queued_count(self) -> int:
+        return len(self._tasks) - len(self._running)
+
+    def submit_nowait(self, session_id: str) -> None:
+        """Queue a session and return immediately; the semaphore gates inside the
+        task, so an over-cap submit queues instead of blocking the caller, and a
+        cancel while queued raises out of acquire without ever taking a permit.
+        """
+        task = asyncio.get_running_loop().create_task(self._run_gated(session_id))
         self._tasks[session_id] = task
 
     async def follow_up(self, session_id: str, text: str) -> str:
@@ -47,13 +46,27 @@ class SessionPool:
         """
         return live.deliver(session_id, text)
 
-    async def _run_and_release(self, session_id: str) -> None:
+    async def _run_gated(self, session_id: str) -> None:
         try:
-            await run_agent_session(session_id)
+            if self.active_count >= self._max:
+                # @nonobvious(forced-by): a keep-alive session parked between
+                # follow-ups still holds its display slot — without reclaiming
+                # it, a one-slot host would leave the new session queued behind
+                # a browser nobody is using, forever.
+                await live.release_idle_slot(
+                    "display slot handed to a newly started session"
+                )
+            async with self._semaphore:
+                self._running.add(session_id)
+                try:
+                    await run_agent_session(session_id)
+                finally:
+                    self._running.discard(session_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Unhandled error in session %s", session_id)
         finally:
-            self._semaphore.release()
             self._tasks.pop(session_id, None)
 
     async def cancel(self, session_id: str) -> bool:

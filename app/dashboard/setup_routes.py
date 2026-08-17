@@ -67,7 +67,9 @@ async def setup_save(
             lines.append(f"{name}={value.strip()}")
     if max_concurrent_sessions.strip().isdigit():
         lines.append(f"MAX_CONCURRENT_SESSIONS={max_concurrent_sessions.strip()}")
-    _env_path.write_text("\n".join(lines) + "\n")
+    tmp = _env_path.with_suffix(_env_path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(_env_path)
     return templates.TemplateResponse(
         request,
         "setup.html",

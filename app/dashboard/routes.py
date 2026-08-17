@@ -510,9 +510,7 @@ async def run_task(
         summary=task[:2000],
         count_step=False,
     )
-    dispatched = asyncio.create_task(pool.submit(session["id"]))
-    _dispatched_tasks.add(dispatched)
-    dispatched.add_done_callback(_dispatched_tasks.discard)
+    pool.submit_nowait(session["id"])
     return RedirectResponse(f"/session/{session['id']}", status_code=303)
 
 
@@ -666,9 +664,7 @@ async def session_followup(session_id: str, task: str = Form(...)):
         )
         return JSONResponse({"ok": True, "continued": True})
     await crud.update_session(session_id, task=text, status="created", **topped_up)
-    dispatched = asyncio.create_task(pool.submit(session_id))
-    _dispatched_tasks.add(dispatched)
-    dispatched.add_done_callback(_dispatched_tasks.discard)
+    pool.submit_nowait(session_id)
     return JSONResponse({"ok": True, "continued": False})
 
 
@@ -744,6 +740,14 @@ def _schedule_restart() -> None:
     async def _go() -> None:
         await asyncio.sleep(0.7)
         try:
+            await asyncio.wait_for(pool.shutdown(), timeout=20)
+        except Exception:
+            logger.warning("pool shutdown before restart failed", exc_info=True)
+        try:
+            await display_manager.cleanup_all()
+        except Exception:
+            logger.warning("display cleanup before restart failed", exc_info=True)
+        try:
             subprocess.Popen(
                 ["sudo", "-n", "systemctl", "restart", "browser-use.service"]
             )
@@ -760,6 +764,14 @@ def _schedule_restart() -> None:
     task.add_done_callback(_dispatched_tasks.discard)
 
 
+def write_env_file(path: Path, entries: dict[str, str]) -> None:
+    """Atomic .env replacement — a crash mid-write must never truncate the only
+    copy of the host's secrets."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(f"{k}={v}" for k, v in entries.items()) + "\n")
+    os.replace(tmp, path)
+
+
 @router.post("/settings")
 async def settings_save(request: Request):
     form = await request.form()
@@ -768,7 +780,42 @@ async def settings_save(request: Request):
         k, v = str(k).strip(), str(v).strip()
         if k and v:
             new[k] = v
-    _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
+    if pool.active_count > 0 and not form.get("force"):
+        grouped_keys: set[str] = set()
+        groups = []
+        for title, keys in _ENV_GROUPS:
+            grouped_keys.update(keys)
+            groups.append(
+                {
+                    "title": title,
+                    "rows": [
+                        {
+                            "key": k,
+                            "value": new.get(k, ""),
+                            "present": k in new,
+                            "secret": _is_secret_var(k),
+                        }
+                        for k in keys
+                    ],
+                }
+            )
+        other = [
+            {"key": k, "value": v, "present": True, "secret": _is_secret_var(k)}
+            for k, v in new.items()
+            if k not in grouped_keys
+        ]
+        if other:
+            groups.append({"title": "Other", "rows": other})
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            context={
+                "groups": groups,
+                "restart_failed": False,
+                "active_sessions": pool.active_count,
+            },
+        )
+    write_env_file(_ENV_PATH, new)
     _schedule_restart()
     return templates.TemplateResponse(
         request, "restarting.html", context={"saved_at": int(time.time())}

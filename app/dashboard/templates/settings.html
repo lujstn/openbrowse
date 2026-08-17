@@ -150,6 +150,14 @@
     to apply the changes.
   </div>
   {% endif %}
+  {% if active_sessions %}
+  <div class="failed-banner">
+    Not saved: {{ active_sessions }} session{{ "s" if active_sessions != 1 else "" }}
+    currently running would be killed by the restart. Wait for
+    {{ "them" if active_sessions != 1 else "it" }} to finish, or tick
+    "restart anyway" below to save and restart regardless.
+  </div>
+  {% endif %}
   <form id="settings-form" method="post" action="/settings">
     {% for group in groups %}
     <div class="settings-card">
@@ -191,7 +199,12 @@
         Values are written to .env; clearing a value removes the variable.
         Saving restarts the server, which interrupts any sessions currently running.
       </span>
-      <button class="save-btn" type="submit" disabled>Save and restart</button>
+      {% if active_sessions %}
+      <label class="settings-note" style="white-space: nowrap">
+        <input type="checkbox" name="force" value="1" /> restart anyway
+      </label>
+      {% endif %}
+      <button class="save-btn" type="submit" {% if not active_sessions %}disabled{% endif %}>Save and restart</button>
     </div>
   </form>
 </div>
