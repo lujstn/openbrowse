@@ -494,6 +494,7 @@ async def _read_one_page(
 
     fallback_ok = False
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
+    panel_in_dom: bool | None = None
 
     def _substantial(txt: Any) -> bool:
         return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
@@ -516,6 +517,24 @@ async def _read_one_page(
                     if _substantial(txt):
                         break
                 elif loop.time() >= frame_grace_end:
+                    # @nonobvious(forced-by): the DOM shows a matching iframe
+                    # long before its CDP target attaches — when the panel is
+                    # demonstrably in the page, keep waiting for it instead of
+                    # falling back to the shell (cold embeds under load attach
+                    # after the grace; reading the shell wastes the whole pass).
+                    if panel_in_dom is None:
+                        srcs = (
+                            await _eval_on_target(
+                                browser_session, target_id, _IFRAME_SRC_JS
+                            )
+                            or []
+                        )
+                        panel_in_dom = any(
+                            url_contains.lower() in str(s).lower() for s in srcs
+                        )
+                    if panel_in_dom:
+                        await asyncio.sleep(0.5)
+                        continue
                     # @nonobvious(forced-by): no frame + substantial main doc is
                     # a plain page; the shell detector still guards real embeds.
                     ready = await _eval_on_target(

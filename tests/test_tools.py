@@ -3127,3 +3127,41 @@ async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> N
     monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", two_hosts)
     await tools_mod._read_pages_impl(session, ["https://x.com/a"], None, {})
     assert seen_filters == [None]
+
+
+async def test_read_one_page_waits_for_panel_seen_in_dom(monkeypatch) -> None:
+    import app.agent.tools as tools_mod
+
+    match_calls = {"n": 0}
+
+    async def fake_match(
+        session, tid, needle, claimed, baseline, allow_sole=False, page_url=None,
+        sibling_urls=None,
+    ):
+        match_calls["n"] += 1
+        return "frame-1" if match_calls["n"] >= 4 else None
+
+    async def fake_eval(session, tid, js):
+        if js == tools_mod._IFRAME_SRC_JS:
+            return ["https://board.example.com/acme/embed"]
+        if js == tools_mod._BODY_TEXT_JS:
+            return "panel content " * 30
+        if js == tools_mod._JSONLD_JS:
+            return []
+        if js == tools_mod._LINKS_JS:
+            return []
+        if "readyState" in js:
+            return "complete"
+        return "Title"
+
+    monkeypatch.setattr(tools_mod, "_match_frame_target", fake_match)
+    monkeypatch.setattr(tools_mod, "_eval_on_target", fake_eval)
+    monkeypatch.setattr(tools_mod, "_FRAME_MATCH_GRACE_S", 0.0)
+    monkeypatch.setattr(tools_mod, "_JSONLD_GRACE_S", 0.0)
+
+    page = await tools_mod._read_one_page(
+        None, "https://x.com/j1", "tid-1", "board.example.com", set(), set()
+    )
+    assert page.get("frame_matched") is True
+    assert not page.get("error")
+    assert match_calls["n"] >= 4
