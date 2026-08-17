@@ -186,3 +186,14 @@ def test_message_display_error_full_card():
     assert md["category"] == "error"
     assert "Fields: title, description" in md["error_full"]
     assert md["thinking"] == "settling absent fields"
+
+
+def test_usd_filter_rounds_up_to_cent():
+    from app.dashboard.routes import _usd
+
+    assert _usd(0.399) == "0.40"
+    assert _usd(0.2358) == "0.24"
+    assert _usd(0.401) == "0.41"
+    assert _usd(0.40) == "0.40"
+    assert _usd(0) == "0.00"
+    assert _usd(None) == "0.00"

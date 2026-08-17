@@ -535,12 +535,12 @@ OpenBrowse{% endblock %} {% block head %}
   </dd>
   <dt>Cost</dt>
   <dd class="cost-cell">
-    <span id="cost-total">${{ '{:.4f}'.format(session.total_cost_usd or 0) }}</span>
+    <span id="cost-total">${{ session.total_cost_usd | usd }}</span>
     <span class="cost-tip">
       <span id="cost-provider">{{ model_provider(session.model) }}</span>:
-      <span id="cost-llm">${{ '{:.4f}'.format(session.llm_cost_usd or 0) }}</span
+      <span id="cost-llm">${{ session.llm_cost_usd | usd }}</span
       ><br />CapSolver:
-      <span id="cost-capsolver">${{ '{:.4f}'.format(session.capsolver_cost_usd or 0) }}</span>
+      <span id="cost-capsolver">${{ session.capsolver_cost_usd | usd }}</span>
     </span>
   </dd>
   <dt>Started</dt>
@@ -904,12 +904,13 @@ OpenBrowse{% endblock %} {% block head %}
       document.getElementById("stat-steps").textContent = data.stepCount || 0;
       const tokens = (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
       document.getElementById("stat-tokens").textContent = tokens.toLocaleString();
+      const usdUp = (v) => (Math.ceil((parseFloat(v || 0) * 100) - 1e-9) / 100).toFixed(2);
       document.getElementById("cost-total").textContent =
-        "$" + parseFloat(data.totalCostUsd || data.llmCostUsd || 0).toFixed(4);
+        "$" + usdUp(data.totalCostUsd || data.llmCostUsd);
       document.getElementById("cost-llm").textContent =
-        "$" + parseFloat(data.llmCostUsd || 0).toFixed(4);
+        "$" + usdUp(data.llmCostUsd);
       document.getElementById("cost-capsolver").textContent =
-        "$" + parseFloat(data.capsolverCostUsd || 0).toFixed(4);
+        "$" + usdUp(data.capsolverCostUsd);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       const dstat = displayStatus(data.status, data.isTaskSuccessful);
       syncFollowup(data.status);

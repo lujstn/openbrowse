@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -94,6 +95,15 @@ def _mdlite(text: str) -> Markup:
 
 
 templates.env.filters["mdlite"] = _mdlite
+
+
+def _usd(value: Any) -> str:
+    """Costs render at whole cents, rounded UP — the amount actually charged."""
+    cents = math.ceil(float(value or 0) * 100 - 1e-9)
+    return f"{cents / 100:.2f}"
+
+
+templates.env.filters["usd"] = _usd
 
 _SELECTOR_RE = re.compile(
     r"^[a-zA-Z][a-zA-Z0-9]*(\[[a-zA-Z_:][\w:-]*(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\])*$"
