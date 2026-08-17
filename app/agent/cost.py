@@ -2,10 +2,11 @@
 
 Prompt caching is provider-managed and always on: browser-use marks the system prompt and the
 latest state message as ``cache=True`` for Anthropic (prefix caching) and the structured-output
-tool schema is cached unconditionally, while OpenAI caches automatically server-side. Tool schemas,
-tool_use/tool_result blocks, fetched page content, python-sandbox output, and screenshot vision
-tokens are all counted inside the API-returned token totals, so costing from real usage prices every
-tool and fetch at model rates with nothing extra to add.
+tool schema is cached unconditionally, while OpenAI and Gemini cache automatically server-side.
+Gemini reports implicit cache hits but never a cache-write count, so its write rates are zero.
+Tool schemas, tool_use/tool_result blocks, fetched page content, python-sandbox output, and
+screenshot vision tokens are all counted inside the API-returned token totals, so costing from real
+usage prices every tool and fetch at model rates with nothing extra to add.
 """
 
 from __future__ import annotations
@@ -73,6 +74,10 @@ _PRICING: dict[str, ModelPricing] = {
         long=_p(0.4, 0.04, 0.5, 0, 1.8),
         long_threshold=_OPENAI_LONG_THRESHOLD,
     ),
+    # @nonobvious(must-hold): introductory rates — input and output both double
+    # on 2027-01-01, and until this row is updated every Gemini run bills at half
+    # its true cost and its max_cost_usd guard trips late.
+    "gemini-3.7-flash": ModelPricing(_p(0.75, 0.075, 0, 0, 3.75)),
 }
 
 

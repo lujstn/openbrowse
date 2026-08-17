@@ -62,6 +62,8 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | OpenBrowse | gpt-5.6-terra | high | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | gpt-5.6-terra | none | **11** | **1m 47s** | **202k** | **$0.24** | 14/14 |
 | OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | gemini-3.7-flash | low | TBD | TBD | TBD | TBD | TBD |
+| OpenBrowse | gemini-3.7-flash | medium | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
 
@@ -71,13 +73,13 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of describing how the platform works in "steps" (the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed), so it can't be disabled.
 
-**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime. Models will have different default reasoning levels depending on their provider, so it's a good idea to set this value explicitly.
+**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime. Models will have different default reasoning levels depending on their provider, so it's a good idea to set this value explicitly. Not every model can turn reasoning off: Gemini and the Fable/Mythos Claudes have no off switch, so `"reasoningEffort": "none"` is rejected for them rather than quietly downgraded.
 
 ### All supported models
 
 - OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
 - Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
-- Google: ⚠️ Coming soon
+- Google: `gemini-3.7-flash`
 
 ## Quick start
 
@@ -88,7 +90,7 @@ uv sync
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8420
 ```
 
-Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
+Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / Gemini / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
 
 Then from any `browser-use-sdk` client:
 

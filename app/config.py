@@ -32,6 +32,9 @@ class Settings:
     openai_api_key: str = field(
         default_factory=lambda: os.environ.get("OPENAI_API_KEY", "")
     )
+    gemini_api_key: str = field(
+        default_factory=lambda: os.environ.get("GEMINI_API_KEY", "")
+    )
     capsolver_api_key: str = field(
         default_factory=lambda: os.environ.get("CAPSOLVER_API_KEY", "")
     )

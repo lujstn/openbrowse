@@ -45,7 +45,10 @@ _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
-    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CAPSOLVER_API_KEY"]),
+    (
+        "Model providers",
+        ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "CAPSOLVER_API_KEY"],
+    ),
     ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
@@ -233,6 +236,7 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-opus-5", "Claude Opus 5"),
     ("claude-fable-5", "Claude Fable 5"),
     ("claude-mythos-5", "Claude Mythos 5 (Project Glasswing only)"),
+    ("gemini-3.7-flash", "Gemini 3.7 Flash"),
     ("claude-opus-4-8", "Claude Opus 4.8"),
     ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
     ("claude-opus-4-7", "Claude Opus 4.7"),
@@ -308,6 +312,8 @@ def model_provider(model: str | None) -> str:
         key = key[:-4]
     if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
         return "OpenAI"
+    if key.startswith(("gemini", "gemma")):
+        return "Google"
     return "Anthropic"
 
 

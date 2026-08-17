@@ -16,10 +16,13 @@ from app.agent.runner import (
 )
 
 
-def _fake_settings(*, anthropic: str = "", openai: str = "") -> types.SimpleNamespace:
+def _fake_settings(
+    *, anthropic: str = "", openai: str = "", gemini: str = ""
+) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         anthropic_api_key=anthropic,
         openai_api_key=openai,
+        gemini_api_key=gemini,
         default_model="claude-sonnet-5",
     )
 
@@ -150,7 +153,12 @@ def test_every_model_is_priced():
     from app.agent import cost
 
     now = datetime(2026, 8, 15, tzinfo=timezone.utc)
-    for model_id in set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values()):
+    all_ids = (
+        set(runner._ANTHROPIC_MODELS.values())
+        | set(runner._OPENAI_MODELS.values())
+        | set(runner._GOOGLE_MODELS.values())
+    )
+    for model_id in all_ids:
         assert cost._lookup(model_id, now) is not None, model_id
 
 
@@ -170,7 +178,7 @@ def test_validate_effort_semantics():
     ):
         with pytest.raises(ValueError, match="not a valid reasoning effort"):
             validate_effort(model, bad)
-    for model in ("claude-fable-5", "claude-mythos-5"):
+    for model in ("claude-fable-5", "claude-mythos-5", "gemini-3.7-flash"):
         with pytest.raises(ValueError, match="reasoning cannot be disabled"):
             validate_effort(model, "none")
 
@@ -191,12 +199,17 @@ def test_resolve_default_effort_per_generation():
     assert resolve_default_effort("claude-sonnet-4-6") == "none"
     assert resolve_default_effort("gpt-5.6-terra") == "medium"
     assert resolve_default_effort("gpt-5.6-sol") == "medium"
+    assert resolve_default_effort("gemini-3.7-flash") == "medium"
 
 
 def test_registry_covers_every_model():
     import app.agent.runner as runner
 
-    all_ids = set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values())
+    all_ids = (
+        set(runner._ANTHROPIC_MODELS.values())
+        | set(runner._OPENAI_MODELS.values())
+        | set(runner._GOOGLE_MODELS.values())
+    )
     assert all_ids == set(runner._MODEL_REASONING)
 
 
@@ -225,6 +238,367 @@ def test_build_llm_wire_shapes(monkeypatch):
     assert llm.reasoning_effort == "xhigh"
     _, _, llm = runner._build_llm("gpt-5.6-terra", "max")
     assert llm.reasoning_effort == "max"
+
+
+def test_resolve_google_gemini():
+    assert _resolve_model("gemini-3.7-flash") == ("google", "gemini-3.7-flash")
+    for bad in ("gemini", "gemini-flash", "gemini-2.5-flash", "gemini-3-flash"):
+        with pytest.raises(ValueError, match="not a valid model"):
+            _resolve_model(bad)
+
+
+def test_gemini_reasoning_ladder_has_no_off_switch():
+    assert valid_efforts("gemini-3.7-flash") == ["default", "low", "medium", "high"]
+    for bad in ("none", "off", "minimal", "xhigh", "max"):
+        with pytest.raises(ValueError):
+            validate_effort("gemini-3.7-flash", bad)
+
+
+def test_build_llm_google_wire_shape(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+
+    _, model_id, llm = runner._build_llm("gemini-3.7-flash", "default")
+    assert model_id == "gemini-3.7-flash"
+    assert llm.config["thinking_config"] == {"include_thoughts": True}
+
+    for effort, level in (("low", "LOW"), ("medium", "MEDIUM"), ("high", "HIGH")):
+        _, _, llm = runner._build_llm("gemini-3.7-flash", effort)
+        assert llm.config["thinking_config"]["thinking_level"] == level
+        assert llm.config["thinking_config"]["include_thoughts"] is True
+
+
+def test_build_llm_google_omits_sampling_knobs(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+    assert llm.temperature is None
+    assert llm.top_p is None
+    assert llm.thinking_budget is None
+    assert llm.thinking_level is None
+    assert llm.supports_structured_output is False
+    assert llm.max_output_tokens == 32768
+
+
+def test_build_llm_google_missing_key(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini=""))
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        runner._build_llm("gemini-3.7-flash", "default")
+
+
+async def test_gemini_thinking_config_survives_browser_use_assembly(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use.llm.messages import UserMessage as _UserMessage
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "high")
+
+    captured: dict[str, object] = {}
+
+    class _Models:
+        async def generate_content(self, *, model, contents, config):
+            captured["model"] = model
+            captured["config"] = dict(config)
+            raise RuntimeError("captured")
+
+    class _Aio:
+        models = _Models()
+
+    class _Client:
+        aio = _Aio()
+
+    monkeypatch.setattr(type(llm), "get_client", lambda self: _Client())
+    try:
+        await llm.ainvoke([_UserMessage(content="hi")])
+    except Exception:
+        pass
+
+    assert "config" in captured, "the request never reached the API stub"
+    assert captured["model"] == "gemini-3.7-flash"
+    config = captured["config"]
+    assert config["thinking_config"]["thinking_level"] == "HIGH"
+    assert config["thinking_config"]["include_thoughts"] is True
+    assert "temperature" not in config
+    assert "top_p" not in config
+
+
+async def test_gemini_default_effort_sends_no_thinking_level(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use.llm.messages import UserMessage as _UserMessage
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "default")
+
+    captured: dict[str, object] = {}
+
+    class _Models:
+        async def generate_content(self, *, model, contents, config):
+            captured["config"] = dict(config)
+            raise RuntimeError("captured")
+
+    class _Aio:
+        models = _Models()
+
+    class _Client:
+        aio = _Aio()
+
+    monkeypatch.setattr(type(llm), "get_client", lambda self: _Client())
+    try:
+        await llm.ainvoke([_UserMessage(content="hi")])
+    except Exception:
+        pass
+
+    assert "config" in captured, "the request never reached the API stub"
+    thinking = captured["config"]["thinking_config"]
+    assert "thinking_level" not in thinking
+    assert thinking == {"include_thoughts": True}
+
+
+def _gemini_chunk(pairs, usage=None):
+    from google.genai import types as genai_types
+
+    parts = [genai_types.Part(text=text, thought=thought) for text, thought in pairs]
+    return genai_types.GenerateContentResponse(
+        candidates=[{"content": {"parts": parts, "role": "model"}}],
+        usage_metadata=usage,
+    )
+
+
+class _FakeStreamModels:
+    def __init__(self, chunks, fail_after=None):
+        self._chunks = chunks
+        self._fail_after = fail_after
+        self.plain_calls = 0
+
+    async def generate_content_stream(self, *, model, contents, config):
+        chunks, fail_after = self._chunks, self._fail_after
+
+        async def _gen():
+            for i, chunk in enumerate(chunks):
+                if fail_after is not None and i == fail_after:
+                    raise ConnectionError("stream died mid-flight")
+                yield chunk
+
+        return _gen()
+
+    async def generate_content(self, *, model, contents, config):
+        self.plain_calls += 1
+        return "plain"
+
+
+async def test_gemini_stream_merges_chunks_and_separates_thoughts(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    usage = {"prompt_token_count": 11, "candidates_token_count": 5, "total_token_count": 16}
+    models = _FakeStreamModels(
+        [
+            _gemini_chunk([("Considering ", True), ('{"a"', False)]),
+            _gemini_chunk([("the options", True), (": 1}", False)], usage=usage),
+        ]
+    )
+
+    collected = await llm._consume_stream(models, "gemini-3.7-flash", [], {})
+    merged = llm._merge_stream(*collected)
+
+    assert merged.text == '{"a": 1}'
+    assert llm._thought_text(merged) == "Considering the options"
+    assert merged.usage_metadata.prompt_token_count == 11
+    assert models.plain_calls == 0
+
+
+async def test_gemini_stream_pushes_reasoning_to_the_feed(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+    llm._activity_session = "sid-1"
+
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        runner, "set_activity", lambda sid, text, **kw: pushed.append((sid, text))
+    )
+
+    models = _FakeStreamModels([_gemini_chunk([("Thinking it through", True)])])
+    await llm._consume_stream(models, "gemini-3.7-flash", [], {})
+
+    assert pushed, "no reasoning reached the feed"
+    assert pushed[0][0] == "sid-1"
+    assert "Thinking it through" in pushed[0][1]
+
+
+async def test_gemini_falls_back_to_a_plain_call_when_streaming_breaks(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    from browser_use import ChatGoogle
+
+    models = _FakeStreamModels([])  # no chunks -> the merge raises
+    client = types.SimpleNamespace(aio=types.SimpleNamespace(models=models))
+    monkeypatch.setattr(ChatGoogle, "get_client", lambda self: client)
+
+    proxied = llm.get_client()
+    result = await proxied.aio.models.generate_content(
+        model="gemini-3.7-flash", contents=[], config={}
+    )
+    assert result == "plain"
+    assert models.plain_calls == 1
+
+
+async def test_gemini_mid_stream_failure_propagates_instead_of_re_issuing(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use import ChatGoogle
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    models = _FakeStreamModels(
+        [_gemini_chunk([("partial", False)]), _gemini_chunk([("more", False)])],
+        fail_after=1,
+    )
+    client = types.SimpleNamespace(aio=types.SimpleNamespace(models=models))
+    monkeypatch.setattr(ChatGoogle, "get_client", lambda self: client)
+
+    proxied = llm.get_client()
+    with pytest.raises(ConnectionError):
+        await proxied.aio.models.generate_content(
+            model="gemini-3.7-flash", contents=[], config={}
+        )
+    assert models.plain_calls == 0
+
+
+def test_gemini_schema_anchor_only_when_the_last_message_is_not_text(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use.llm.messages import ContentPartTextParam, UserMessage
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    vision = [UserMessage(content=[ContentPartTextParam(text="state")])]
+    anchored = llm._with_schema_anchor(vision, dict)
+    assert len(anchored) == 2
+    assert isinstance(anchored[-1].content, str)
+
+    plain = [UserMessage(content="already text")]
+    assert llm._with_schema_anchor(plain, dict) is plain
+    assert llm._with_schema_anchor(vision, None) is vision
+
+
+async def test_gemini_merge_extracts_json_when_a_schema_is_expected(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    noisy = 'Here you go:\n```json\n{"a": 1}\n```\nHope that helps.'
+
+    async def _merged(expect_json):
+        # @nonobvious(must-hold): a fresh chunk per call — the merge rewrites
+        # the response parts in place, so a reused chunk carries the last result.
+        models = _FakeStreamModels([_gemini_chunk([(noisy, False)])])
+        collected = await llm._consume_stream(models, "gemini-3.7-flash", [], {})
+        llm._expect_json = expect_json
+        return llm._merge_stream(*collected).text
+
+    assert await _merged(True) == '{"a": 1}'
+    assert await _merged(False) == noisy
+
+
+async def test_gemini_empty_generation_is_returned_not_re_issued(monkeypatch):
+    import app.agent.runner as runner
+    from browser_use import ChatGoogle
+    from google.genai import types as genai_types
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    blocked = genai_types.GenerateContentResponse(
+        candidates=[{"finish_reason": "MAX_TOKENS"}]
+    )
+    models = _FakeStreamModels([blocked])
+    client = types.SimpleNamespace(aio=types.SimpleNamespace(models=models))
+    monkeypatch.setattr(ChatGoogle, "get_client", lambda self: client)
+
+    proxied = llm.get_client()
+    result = await proxied.aio.models.generate_content(
+        model="gemini-3.7-flash", contents=[], config={}
+    )
+    assert result is blocked
+    assert models.plain_calls == 0
+
+
+async def test_gemini_harvests_thought_summary_into_the_feed(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(gemini="AIza-x"))
+    _, _, llm = runner._build_llm("gemini-3.7-flash", "low")
+
+    response = types.SimpleNamespace(
+        candidates=[
+            types.SimpleNamespace(
+                content=types.SimpleNamespace(
+                    parts=[
+                        types.SimpleNamespace(thought=True, text="Weighing  the options"),
+                        types.SimpleNamespace(thought=None, text="The answer"),
+                    ]
+                )
+            )
+        ],
+        usage_metadata=None,
+    )
+    llm._get_usage(response)
+    assert llm._last_thoughts == "Weighing the options"
+
+
+def test_free_form_dict_params_cannot_survive_a_gemini_response_schema():
+    from typing import Any
+
+    from browser_use.llm.google.chat import ChatGoogle
+    from browser_use.llm.schema import SchemaOptimizer
+    from pydantic import BaseModel
+
+    class AddItem(BaseModel):
+        item: dict[str, Any]
+
+    schema = ChatGoogle(model="gemini-3.7-flash", api_key="k")._fix_gemini_schema(
+        SchemaOptimizer.create_gemini_optimized_schema(AddItem)
+    )
+    item = schema["properties"]["item"]
+    assert item["type"] == "object"
+    assert not item.get("properties")
+
+
+def test_models_that_cannot_disable_reasoning_are_flagged():
+    import app.agent.runner as runner
+
+    for model in ("gemini-3.7-flash", "claude-fable-5", "claude-mythos-5"):
+        assert runner.model_reasoning(model).can_disable is False
+    for model in ("claude-sonnet-5", "gpt-5.6-terra"):
+        assert runner.model_reasoning(model).can_disable is True
+
+
+def test_cap_output_tokens_picks_the_name_each_client_declares(monkeypatch):
+    import app.agent.runner as runner
+
+    monkeypatch.setattr(
+        runner, "settings", _fake_settings(anthropic="k", openai="k", gemini="k")
+    )
+    for model, attr in (
+        ("claude-sonnet-5", "max_tokens"),
+        ("gpt-5.6-terra", "max_completion_tokens"),
+        ("gemini-3.7-flash", "max_output_tokens"),
+    ):
+        _, _, llm = runner._build_llm(model, "default")
+        runner._cap_output_tokens(llm, 300)
+        assert getattr(llm, attr) == 300, model
 
 
 def test_build_llm_openai_output_budget_scales_with_effort(monkeypatch):

@@ -26,6 +26,7 @@ def test_model_options_curated_list():
         "claude-opus-5",
         "claude-fable-5",
         "claude-mythos-5",
+        "gemini-3.7-flash",
         "claude-opus-4-8",
         "claude-opus-4-8[1m]",
         "claude-opus-4-7",
@@ -76,12 +77,18 @@ def test_reasoning_options_per_generation():
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
     assert sonnet46["default"] == "none"
+    gemini = options_map["gemini-3.7-flash"]
+    assert "none" not in dict(gemini["options"])
+    assert "xhigh" not in dict(gemini["options"])
+    assert dict(gemini["options"])["medium"] == "Medium (Default)"
+    assert gemini["default"] == "medium"
 
 
 def test_model_provider_labels():
     assert model_provider("gpt-5.6-luna") == "OpenAI"
     assert model_provider("claude-opus-4-8[1m]") == "Anthropic"
     assert model_provider("claude-sonnet-5") == "Anthropic"
+    assert model_provider("gemini-3.7-flash") == "Google"
     assert model_provider(None) == "Anthropic"
 
 

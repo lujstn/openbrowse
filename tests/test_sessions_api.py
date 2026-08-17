@@ -67,6 +67,10 @@ async def test_create_session_resolves_reasoning_default(client):
     resp = await client.post("/v3/sessions", json={"model": "gpt-5.6-terra"})
     assert resp.json()["reasoningEffort"] == "medium"
 
+    resp = await client.post("/v3/sessions", json={"model": "gemini-3.7-flash"})
+    assert resp.status_code == 200
+    assert resp.json()["reasoningEffort"] == "medium"
+
 
 async def test_create_session_accepts_reasoning_effort(client):
     resp = await client.post(
@@ -169,6 +173,20 @@ async def test_create_session_rejects_invalid_effort_per_model(client):
         json={"model": "claude-sonnet-4-6", "reasoningEffort": "xhigh"},
     )
     assert resp.status_code == 422
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "gemini-3.7-flash", "reasoningEffort": "none"},
+    )
+    assert resp.status_code == 422
+    assert "cannot be disabled" in resp.json()["detail"]
+
+    for bad in ("minimal", "xhigh", "max"):
+        resp = await client.post(
+            "/v3/sessions",
+            json={"model": "gemini-3.7-flash", "reasoningEffort": bad},
+        )
+        assert resp.status_code == 422, bad
 
 
 async def test_create_session_rejects_removed_aliases(client):
