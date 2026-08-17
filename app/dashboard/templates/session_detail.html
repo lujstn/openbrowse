@@ -424,7 +424,11 @@ OpenBrowse{% endblock %} {% block head %}
   .j-null { color: #94a3b8; }
   .status-d-running .status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); }
   .status-d-queued .status-dot { background: #9ca3af; }
-  .queued-dot { width: 14px; height: 14px; border-radius: 50%; background: #6b7280; display: inline-block; }
+  .no-live.queued { flex-direction: column; gap: 12px; }
+  .queued-dot { width: 12px; height: 12px; border-radius: 50%; background: #9ca3af; animation: qpulse 2s ease-in-out infinite; }
+  @keyframes qpulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+  .queued-title { color: #d4d4d8; font-weight: 600; letter-spacing: 0.02em; font-size: 15px; }
+  .queued-sub { color: #666; font-size: 13px; max-width: 340px; text-align: center; line-height: 1.5; }
   .status-d-success .status-dot { background: #34d399; }
   .status-d-warning .status-dot { background: #f59e0b; }
   .status-d-failed .status-dot { background: #f87171; }
@@ -504,9 +508,14 @@ OpenBrowse{% endblock %} {% block head %}
     id="browser-panel"
     data-status="{{ session.status }}"
     data-live-url="{{ session.live_url or '' }}"
+    data-max-concurrent="{{ max_concurrent }}"
   >
     {% if session.status == 'created' %}
-    <div class="no-live"><span class="queued-dot"></span><div>Queued: waiting for a free browser slot</div></div>
+    <div class="no-live queued">
+      <span class="queued-dot"></span>
+      <div class="queued-title">Queued</div>
+      <div class="queued-sub">Waiting for a free browser slot. Up to {{ max_concurrent }} sessions run at once; this one starts automatically when a slot frees up.</div>
+    </div>
     {% else %}
     <div class="no-live"><div class="spinner"></div><div>Starting browser…</div></div>
     {% endif %}
@@ -652,6 +661,12 @@ OpenBrowse{% endblock %} {% block head %}
     return `/vnc/${id}/view?path=vnc/${id}/websockify`;
   }
 
+  const QUEUED_HTML =
+    '<div class="no-live queued"><span class="queued-dot"></span><div class="queued-title">Queued</div>' +
+    '<div class="queued-sub">Waiting for a free browser slot. Up to ' +
+    (document.getElementById("browser-panel").dataset.maxConcurrent || "5") +
+    " sessions run at once; this one starts automatically when a slot frees up.</div></div>";
+
   const ENDED_SVG =
     '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round">' +
     '<rect x="3" y="5" width="18" height="12" rx="2"/><line x1="9" y1="11" x2="15" y2="11"/>' +
@@ -671,9 +686,7 @@ OpenBrowse{% endblock %} {% block head %}
       browserPanel.appendChild(iframe);
     } else if (!browserPanel.querySelector("iframe")) {
       browserPanel.innerHTML =
-        status === "created"
-          ? '<div class="no-live"><span class="queued-dot"></span><div>Queued: waiting for a free browser slot</div></div>'
-          : '<div class="no-live"><div class="spinner"></div><div>Starting browser…</div></div>';
+        status === "created" ? QUEUED_HTML : '<div class="no-live"><div class="spinner"></div><div>Starting browser…</div></div>';
     }
   }
 

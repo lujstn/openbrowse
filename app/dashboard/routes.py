@@ -333,6 +333,7 @@ async def session_detail(request: Request, session_id: str):
         context={
             "session": session,
             "messages": messages,
+            "max_concurrent": settings.max_concurrent_sessions,
             "output_types": ["planning", "result", "completion"],
             "format_duration": _format_duration,
             "format_relative": _format_relative_time,
