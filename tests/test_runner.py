@@ -1,5 +1,6 @@
 """Agent runner tests — model registry, provider routing, reasoning, LLM builder."""
 
+import asyncio
 import json
 import types
 
@@ -768,9 +769,13 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-1"
-    pushes: list[str] = []
+    pushes: list[dict] = []
     monkeypatch.setattr(
-        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
     )
 
     final = _fake_response(reasoning_summary="thinking about the page layout")
@@ -815,7 +820,8 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
     result = await llm.ainvoke(_messages())
     assert result.completion == "ok"
     assert llm._last_model_reasoning == "thinking about the page layout"
-    assert any(p.startswith("💭 thinking about") for p in pushes)
+    assert any((p["stream"] or "").startswith("thinking about") for p in pushes)
+    assert all(p["label"] == "💭 Thinking" for p in pushes if p["stream"])
 
 
 async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
@@ -824,9 +830,13 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
 
     llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
     llm._activity_session = "sess-2"
-    pushes: list[str] = []
+    pushes: list[dict] = []
     monkeypatch.setattr(
-        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
     )
 
     events = [
@@ -855,7 +865,70 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
             return "final"
 
     assert await llm._drain_stream(FakeStream()) == "final"
-    assert any(p.startswith("💭 checking the") for p in pushes)
+    assert any((p["stream"] or "").startswith("checking the") for p in pushes)
+    assert all(p["label"] == "💭 Thinking" for p in pushes if p["stream"])
+
+
+async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced(
+    monkeypatch,
+):
+    import app.agent.runner as runner_mod
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-3"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None: (
+            pushes.append(stream) if stream is not None else None
+        ),
+    )
+
+    chunk = "checking the accessibility tree for interactive elements and scoring candidates "
+    chunks = [chunk] * 6
+    final = _fake_response(reasoning_summary="".join(chunks))
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.2)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeResponses:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+
+    await llm.ainvoke(_messages())
+
+    assert len(pushes) >= 3
+    for earlier, later in zip(pushes, pushes[1:]):
+        assert later.startswith(earlier)
+        assert len(later) >= len(earlier)
+    assert len(pushes[-2]) > 140
+    assert pushes[-2].startswith("checking the accessibility")
+    assert pushes[-1] == "".join(chunks).strip()
 
 
 def _review_history(done: bool, verdict, reason: str = "needs work", steps: int = 1):
