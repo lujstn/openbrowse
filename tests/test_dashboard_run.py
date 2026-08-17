@@ -197,3 +197,24 @@ def test_usd_filter_rounds_up_to_cent():
     assert _usd(0.40) == "0.40"
     assert _usd(0) == "0.00"
     assert _usd(None) == "0.00"
+
+
+def test_message_display_result_snippet_card():
+    import json as _json
+
+    from app.dashboard.routes import message_display
+
+    row = {
+        "type": "result",
+        "summary": "Read every page from the saved link set",
+        "data": _json.dumps(
+            {
+                "step": 3,
+                "category": "read",
+                "action": "read_pages",
+                "result_snippet": "Read 14 of 14 pages; full content saved to 'pages.json'.",
+            }
+        ),
+    }
+    md = message_display(row)
+    assert md["result_snippet"].startswith("Read 14 of 14 pages")

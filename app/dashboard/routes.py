@@ -198,7 +198,7 @@ def message_display(m: dict) -> dict:
 
     cards = {
         k: data.get(k)
-        for k in ("see", "plan", "next", "thinking", "model_reasoning")
+        for k in ("see", "plan", "next", "thinking", "model_reasoning", "result_snippet")
         if data.get(k)
     }
     label = action or category

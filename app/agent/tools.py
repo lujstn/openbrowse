@@ -4095,6 +4095,7 @@ def register_completeness_gate(
     store: OutputStore,
     on_incomplete,
     clipboard: dict[str, Any] | None = None,
+    on_complete=None,
 ) -> None:
     """One-shot soft gate on ``done``: the first time the agent tries to finish with
     schema fields still empty, bounce it back to fill them; accept the next done
@@ -4182,6 +4183,11 @@ def register_completeness_gate(
                         + date_hint
                     ),
                 )
+        if on_complete is not None:
+            try:
+                await on_complete(store.coverage_summary())
+            except Exception:
+                logger.debug("completeness pass event emit failed", exc_info=True)
         # @nonobvious(forced-by): the judge evaluates the done text, so the
         # store's answer must ride in it or complete runs get judged FAIL.
         if not store.is_empty():

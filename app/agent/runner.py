@@ -719,6 +719,17 @@ class _RepairingChatAnthropic(ChatAnthropic):
             )
         except Exception:
             logger.debug("action-leak repair pass failed", exc_info=True)
+        try:
+            thinking = "\n".join(
+                t
+                for b in (getattr(response, "content", None) or [])
+                if getattr(b, "type", None) == "thinking"
+                and (t := getattr(b, "thinking", ""))
+            )
+            if thinking.strip():
+                self._last_model_reasoning = thinking
+        except Exception:
+            logger.debug("thinking capture failed", exc_info=True)
         return response
 
     async def _stream_message(self, **params: Any) -> Any:
@@ -1078,16 +1089,32 @@ def _action_detail(actions: list) -> tuple[str, bool]:
     if name == "read_pages" and isinstance(params, dict):
         urls = params.get("urls") or []
         frame = params.get("frame_url_contains")
-        base = f"{len(urls)} urls" if urls else "found_links"
+        base = (
+            f"Read {len(urls)} pages in parallel"
+            if urls
+            else "Read every page from the saved link set"
+        )
         return ((f"{base} (frame: {frame})" if frame else base)[:200], False)
     if name == "update_items" and isinstance(params, dict):
-        return (f"{len(params.get('updates') or [])} updates", False)
+        return (f"Update {len(params.get('updates') or [])} item(s) in the output", False)
     if name == "mark_absent" and isinstance(params, dict):
         return (str(params.get("field", ""))[:200], False)
     if name == "run_code_file" and isinstance(params, dict):
         url = params.get("url")
         base = str(params.get("name", ""))
         return ((f"{base} @ {url}" if url else base)[:200], False)
+    if name in ("read_file", "add_items_from_file", "update_items_from_file") and isinstance(
+        params, dict
+    ):
+        fname = str(params.get("file_name") or params.get("name") or "")
+        verb = {
+            "read_file": "Read saved file",
+            "add_items_from_file": "Add output rows from",
+            "update_items_from_file": "Update output rows from",
+        }[name]
+        return (f"{verb} {fname}".strip()[:200], False)
+    if name == "read_output":
+        return ("Check the output built so far", False)
 
     detail = ""
     if isinstance(params, dict):
@@ -1099,6 +1126,19 @@ def _action_detail(actions: list) -> tuple[str, bool]:
                 break
     is_code = bool(detail) and any(k in name.lower() for k in _CODE_ACTIONS)
     return detail, is_code
+
+
+def _reasoning_title(text: str) -> str:
+    """One plain-prose sentence for the reasoning row — markdown stripped, the
+    full formatted text lives in the expandable card.
+    """
+    plain = re.sub(r"[*_`#>\[\]]+", "", text or "")
+    plain = " ".join(plain.split())
+    for stop in (". ", "? ", "! "):
+        cut = plain.find(stop)
+        if 0 < cut < 160:
+            return plain[: cut + 1] + "…"
+    return plain[:160] + ("…" if len(plain) > 160 else "")
 
 
 def _friendly_error(error: str) -> str:
@@ -1394,7 +1434,19 @@ async def run_agent_session(session_id: str) -> None:
                     count_step=False,
                 )
 
-            register_completeness_gate(tools, store, _on_incomplete_done, clipboard)
+            async def _on_complete_done(coverage: str) -> None:
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "schema", "action": "completeness"}),
+                    summary=("Completeness check passed — " + coverage)[:200],
+                    count_step=False,
+                )
+
+            register_completeness_gate(
+                tools, store, _on_incomplete_done, clipboard, _on_complete_done
+            )
 
         register_output_guard_overrides(tools)
         register_search_page_flow(tools, clipboard)
@@ -1606,6 +1658,14 @@ async def run_agent_session(session_id: str) -> None:
                     val = getattr(step.model_output, src, None)
                     if val:
                         row_data[key] = str(val)[:1500]
+            # @nonobvious(forced-by): some models reply with a bare action and no
+            # prose at all; the action's own output is the only honest narrative
+            # left, so it becomes the step's expandable card.
+            if not any(k in row_data for k in ("see", "plan", "next", "thinking")):
+                for result in step.result or []:
+                    if result.extracted_content:
+                        row_data["result_snippet"] = str(result.extracted_content)[:600]
+                        break
             native_reasoning = getattr(llm, "_last_model_reasoning", None)
             if native_reasoning:
                 llm._last_model_reasoning = None
@@ -1621,7 +1681,7 @@ async def run_agent_session(session_id: str) -> None:
                             "reasoning": reasoning_text[:6000],
                         }
                     ),
-                    summary=" ".join(reasoning_text.split())[:200],
+                    summary=_reasoning_title(reasoning_text),
                     count_step=False,
                 )
             await crud.create_message(

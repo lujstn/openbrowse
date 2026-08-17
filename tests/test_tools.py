@@ -3456,3 +3456,29 @@ def test_coerce_scalar_unwraps_json_strings_for_container_fields() -> None:
     assert _coerce_scalar('{"k": "v"}', dict[str, str]) == {"k": "v"}
     assert _coerce_scalar('["a"]', str) == '["a"]'
     assert _coerce_scalar("plain", list[str]) == "plain"
+
+
+async def test_gate_emits_pass_event_on_clean_done() -> None:
+    from app.agent.tools import register_completeness_gate, register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item(
+        {"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 40}
+    )
+    register_output_store_tools(tools, store, {"_visited": {"https://x.com/a"}})
+    passes: list[str] = []
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(fields):
+        bounces.append(fields)
+
+    async def on_complete(coverage):
+        passes.append(coverage)
+
+    register_completeness_gate(tools, store, on_incomplete, {}, on_complete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all collected", success=True)
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert result.is_done, getattr(result, "extracted_content", "")
+    assert passes and not bounces

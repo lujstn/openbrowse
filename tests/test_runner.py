@@ -1002,3 +1002,33 @@ def test_friendly_error_clips_to_first_sentence():
     assert len(short) < 160
     assert "is not a schema field" in short
     assert _friendly_error("tiny error") == "tiny error"
+
+
+def test_reasoning_title_strips_markdown_and_clips():
+    from app.agent.runner import _reasoning_title
+
+    t = _reasoning_title("**Finding links in iframes** I need to interact with an iframe. Then more.")
+    assert "**" not in t
+    assert t.endswith("…")
+    assert t.startswith("Finding links in iframes")
+    assert _reasoning_title("Short thought") == "Short thought"
+
+
+def test_action_detail_humanises_bare_steps():
+    from app.agent.runner import _action_detail
+
+    class _Act:
+        def __init__(self, payload):
+            self._p = payload
+
+        def model_dump(self, exclude_none=False):
+            return self._p
+
+    detail, _ = _action_detail([_Act({"read_pages": {}})])
+    assert detail == "Read every page from the saved link set"
+    detail, _ = _action_detail([_Act({"read_file": {"file_name": "rows_draft.json"}})])
+    assert detail == "Read saved file rows_draft.json"
+    detail, _ = _action_detail([_Act({"add_items_from_file": {"name": "rows.json"}})])
+    assert detail == "Add output rows from rows.json"
+    detail, _ = _action_detail([_Act({"read_output": {}})])
+    assert detail == "Check the output built so far"
