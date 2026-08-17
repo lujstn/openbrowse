@@ -282,14 +282,17 @@
     this.container.setAttribute("aria-busy", activity.spin ? "true" : "false");
     this._setIndicator(!!activity.spin);
     this._pinToBottom = !!activity.spin;
-    this.typewriter.setTarget(text);
-    if (!activity.spin) {
+    // @nonobvious(forced-by): finishInstantly renders synchronously and reads
+    // _settled to decide on the caret, and it stops the loop, so nothing paints
+    // again afterwards — the flag has to be true before the call, not after.
+    this._settled = !activity.spin;
+    if (this._settled) {
+      this.typewriter.setTarget(text);
       this.typewriter.finishInstantly();
-      this._settled = true;
       this.container.classList.add("is-settled");
     } else {
-      this._settled = false;
       this.container.classList.remove("is-settled");
+      this.typewriter.setTarget(text);
     }
   };
 

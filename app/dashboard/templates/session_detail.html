@@ -617,6 +617,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const completionCard = document.getElementById("completion-card");
   const browserPanel = document.getElementById("browser-panel");
 
+  const seenRowIds = new Set();
   let completionSummary = "";
   let currentOutput = "";
   let activityState = null;
@@ -839,6 +840,11 @@ document.addEventListener("DOMContentLoaded", function () {
     formatTimes(tpl.content);
     const isLiveBatch = firstMessagesBatchDone;
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
+      const mid = row.dataset.mid;
+      if (mid) {
+        if (seenRowIds.has(mid)) return;
+        seenRowIds.add(mid);
+      }
       const type = row.dataset.type || "info";
       const sumEl = row.querySelector(".msg-summary");
       const summary = (sumEl ? sumEl.textContent : "").trim();

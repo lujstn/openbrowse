@@ -3,6 +3,7 @@
 import asyncio
 import types
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -1105,3 +1106,71 @@ def test_action_detail_humanises_bare_steps():
     assert detail == "Add output rows from rows.json"
     detail, _ = _action_detail([_Act({"read_output": {}})])
     assert detail == "Check the output built so far"
+
+
+async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeypatch):
+    """A live card longer than the row that replaces it would visibly shrink at
+    handoff, so both clip at the same character.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_MAX_CHARS
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-cap"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None: (
+            pushes.append(stream) if stream is not None else None
+        ),
+    )
+
+    chunk = "reasoning about the page " * 40
+    chunks = [chunk] * 16
+    whole = "".join(chunks)
+    assert len(whole) > _REASONING_MAX_CHARS * 2, "the fixture must outgrow the cap"
+    final = _fake_response(reasoning_summary=whole)
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.2)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeStreamHost:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(
+        type(llm),
+        "get_client",
+        lambda self: types.SimpleNamespace(responses=FakeStreamHost()),
+    )
+
+    await llm.ainvoke(_messages())
+
+    settled = " ".join(whole.split())[:_REASONING_MAX_CHARS]
+    assert pushes, "reasoning must reach the feed"
+    for push in pushes:
+        assert len(push) <= _REASONING_MAX_CHARS, "a live push outgrew the persisted row"
+        assert settled.startswith(push), "the live card must be a head slice, never a tail"
+    assert pushes[-1] == settled, "the last live card must match the row that replaces it"

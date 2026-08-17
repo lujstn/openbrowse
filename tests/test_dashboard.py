@@ -1,5 +1,6 @@
 """Tests for dashboard Basic auth, run form, and API fail-closed behaviour."""
 
+import asyncio
 import base64
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
@@ -469,3 +470,111 @@ def test_activity_payload_carries_a_growing_stream_never_a_slice():
     assert third["stream"] is None
     assert third["label"] == "Running actions"
     clear_activity(sid)
+
+
+class _StubRequest:
+    """Enough Request for the SSE generator: resume header plus a liveness check."""
+
+    def __init__(self, last_event_id=None):
+        self.headers = {"last-event-id": last_event_id} if last_event_id else {}
+
+    async def is_disconnected(self):
+        return False
+
+
+async def _drain_feed(session_id, *, last_event_id=None, want=1, timeout=3.0):
+    """Pull frames off the feed generator directly — the ASGI transport never
+    reports a disconnect, so an end-to-end stream would never terminate.
+    """
+    from app.dashboard.routes import sse_session_messages
+
+    resp = await sse_session_messages(_StubRequest(last_event_id), session_id)
+    gen = resp.body_iterator
+    frames = []
+    try:
+        async with asyncio.timeout(timeout):
+            async for ev in gen:
+                frames.append(ev)
+                if sum(1 for f in frames if f.get("event") == "messages") >= want:
+                    break
+    except (TimeoutError, asyncio.TimeoutError):
+        pass
+    finally:
+        await gen.aclose()
+    return frames
+
+
+async def _seed_session_with_messages(n=3):
+    from app.db import crud
+
+    session = await crud.create_session(task="t", model="claude-sonnet-5")
+    ids = []
+    for i in range(n):
+        m = await crud.create_message(
+            session_id=session["id"], msg_type="event", summary=f"step {i}"
+        )
+        ids.append(m["id"])
+    return session["id"], ids
+
+
+def _message_frames(frames):
+    return [f for f in frames if f.get("event") == "messages"]
+
+
+async def test_sse_feed_replays_history_to_a_fresh_listener():
+    sid, ids = await _seed_session_with_messages()
+
+    rows = _message_frames(await _drain_feed(sid))
+    assert rows, "a fresh listener must receive the backlog"
+    for mid in ids:
+        assert mid in rows[0]["data"]
+    assert rows[0]["id"] == ids[-1], "the batch must carry a resumable id"
+
+
+async def test_sse_feed_resumes_after_last_event_id_instead_of_replaying():
+    sid, ids = await _seed_session_with_messages()
+
+    rows = _message_frames(await _drain_feed(sid, last_event_id=ids[-1], timeout=2.0))
+    assert rows == [], f"a reconnect must not replay delivered rows, got {rows}"
+
+
+async def test_sse_feed_resumes_and_delivers_only_what_is_new():
+    from app.db import crud
+
+    sid, ids = await _seed_session_with_messages()
+    fresh = await crud.create_message(session_id=sid, msg_type="event", summary="brand new")
+
+    rows = _message_frames(await _drain_feed(sid, last_event_id=ids[-1]))
+    assert len(rows) == 1
+    assert fresh["id"] in rows[0]["data"]
+    for mid in ids:
+        assert mid not in rows[0]["data"]
+
+
+def test_message_rows_carry_an_id_the_client_can_dedupe_on():
+    from app.dashboard.routes import templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "id": "msg-abc-123",
+            "type": "event",
+            "data": "",
+            "summary": "did a thing",
+            "created_at": "2026-08-17T12:00:00+00:00",
+        }],
+        format_relative=lambda *_: "now",
+    )
+    assert 'data-mid="msg-abc-123"' in html
+
+
+def test_streaming_response_caret_and_handoff_behaviour():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the streaming-response harness needs it")
+    harness = Path(__file__).parent / "fixtures" / "streaming_response_harness.mjs"
+    proc = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
