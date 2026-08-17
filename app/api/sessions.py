@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.agent.pool import pool
 from app.agent.runner import resolve_default_effort, validate_effort
@@ -34,7 +35,7 @@ class RunTaskRequest(BaseModel):
     model: str = "claude-sonnet-5"
     sessionId: str | None = None
     keepAlive: bool = False
-    maxCostUsd: float | None = None
+    maxCostUsd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     profileId: str | None = None
     outputSchema: dict[str, Any] | None = None
     sensitiveData: dict[str, str] | None = None
@@ -190,7 +191,17 @@ def _to_message_response(row: dict[str, Any]) -> MessageResponseModel:
 def _local_budget(cloud_max: float | None) -> float | None:
     if cloud_max is None:
         return None
-    return cloud_max * settings.cloud_max_cost_factor
+    # @nonobvious(must-hold): rounding up keeps a small cap off zero, which is
+    # read as "no budget at all" where the cap is enforced.
+    return math.ceil(cloud_max * settings.cloud_max_cost_factor * 100 - 1e-9) / 100
+
+
+def _resolved_effort(model: str, requested: str | None) -> str:
+    try:
+        effort = validate_effort(model, requested or "default")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return resolve_default_effort(model) if effort == "default" else effort
 
 
 @router.post("", response_model=SessionResponse)
@@ -199,13 +210,7 @@ async def create_session(
     _: str = Depends(require_api_key),
 ):
     body = body or RunTaskRequest()
-
-    try:
-        effort = validate_effort(body.model, body.reasoningEffort or "default")
-        if effort == "default":
-            effort = resolve_default_effort(body.model)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    sent = body.model_fields_set
 
     if body.sessionId:
         existing = await crud.get_session(body.sessionId)
@@ -219,17 +224,33 @@ async def create_session(
             raise HTTPException(
                 status_code=422, detail="Task is required when targeting an existing session"
             )
-        session = await crud.update_session(
-            body.sessionId,
-            task=body.task,
-            model=body.model,
-            output_schema=json.dumps(body.outputSchema) if body.outputSchema else None,
-            sensitive_data=json.dumps(body.sensitiveData) if body.sensitiveData else None,
-            system_prompt_extension=body.systemPromptExtension,
-            max_cost_usd=_local_budget(body.maxCostUsd),
-            keep_alive=int(body.keepAlive),
-            reasoning_effort=effort,
-        )
+
+        # @nonobvious(must-hold): each column named here is overwritten, so a
+        # follow-up run may only name the fields its caller actually sent.
+        updates: dict[str, Any] = {"task": body.task}
+        if "model" in sent:
+            updates["model"] = body.model
+        if "outputSchema" in sent:
+            updates["output_schema"] = (
+                json.dumps(body.outputSchema) if body.outputSchema else None
+            )
+        if "sensitiveData" in sent:
+            updates["sensitive_data"] = (
+                json.dumps(body.sensitiveData) if body.sensitiveData else None
+            )
+        if "systemPromptExtension" in sent:
+            updates["system_prompt_extension"] = body.systemPromptExtension
+        if "maxCostUsd" in sent:
+            updates["max_cost_usd"] = _local_budget(body.maxCostUsd)
+        if "keepAlive" in sent:
+            updates["keep_alive"] = int(body.keepAlive)
+        if sent & {"model", "reasoningEffort"}:
+            updates["reasoning_effort"] = _resolved_effort(
+                body.model if "model" in sent else existing.get("model") or body.model,
+                body.reasoningEffort,
+            )
+
+        session = await crud.update_session(body.sessionId, **updates)
         await pool.submit(body.sessionId)
         return _to_session_response(session)
 
@@ -242,7 +263,7 @@ async def create_session(
         system_prompt_extension=body.systemPromptExtension,
         max_cost_usd=_local_budget(body.maxCostUsd),
         keep_alive=body.keepAlive,
-        reasoning_effort=effort,
+        reasoning_effort=_resolved_effort(body.model, body.reasoningEffort),
     )
 
     if body.task:

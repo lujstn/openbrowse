@@ -23,14 +23,17 @@ async def setup(tmp_path, monkeypatch):
         dashboard_user="admin",
         dashboard_password="",
         allow_insecure_no_auth=False,
+        cloud_max_cost_factor=1.0,
     )
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)
     monkeypatch.setattr("app.auth.settings", test_settings)
+    monkeypatch.setattr("app.api.sessions.settings", test_settings)
     monkeypatch.setattr("app.dashboard.routes.settings", test_settings)
     monkeypatch.setattr("app.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
+    return test_settings
 
 
 @pytest.fixture
@@ -379,52 +382,16 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
     assert resp.status_code == 409
 
 
-async def test_api_scales_incoming_max_cost(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=0.5)
-    )
-    resp = await client.post(
-        "/v3/sessions",
-        json={"maxCostUsd": 6},
-        headers={"Authorization": "Bearer secret-key"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["maxCostUsd"] == "3.0"
-
-
-async def test_api_does_not_scale_when_factor_one(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=1.0)
-    )
-    resp = await client.post(
-        "/v3/sessions",
-        json={"maxCostUsd": 6},
-        headers={"Authorization": "Bearer secret-key"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["maxCostUsd"] == "6.0"
-
-
-async def test_api_none_budget_stays_none(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.sessions.settings", replace(settings, cloud_max_cost_factor=0.5)
-    )
-    resp = await client.post(
-        "/v3/sessions",
-        json={},
-        headers={"Authorization": "Bearer secret-key"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["maxCostUsd"] is None
-
-
 @patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
-async def test_dashboard_run_budget_not_scaled(mock_submit, client):
+async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monkeypatch):
     import asyncio
 
-    from app.db import crud
     from app.dashboard import routes
+    from app.db import crud
 
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
     resp = await client.post(
         "/run",
         data={

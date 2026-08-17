@@ -61,6 +61,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
+| `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
 
 Generate a secure `API_KEY`:
 

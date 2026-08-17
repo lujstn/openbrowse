@@ -20,13 +20,16 @@ async def setup(tmp_path, monkeypatch):
         profiles_dir=tmp_path / "data" / "profiles",
         api_key="",
         allow_insecure_no_auth=True,
+        cloud_max_cost_factor=1.0,
     )
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)
     monkeypatch.setattr("app.auth.settings", test_settings)
+    monkeypatch.setattr("app.api.sessions.settings", test_settings)
     monkeypatch.setattr("app.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
+    return test_settings
 
 
 @pytest.fixture
@@ -205,3 +208,110 @@ async def test_list_messages_empty(client):
     resp = await client.get(f"/v3/sessions/{sid}/messages")
     assert resp.status_code == 200
     assert resp.json()["messages"] == []
+
+
+async def test_incoming_budget_scaled_to_local_cost(client, setup, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post("/v3/sessions", json={"maxCostUsd": 6})
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "3.0"
+
+
+async def test_budget_untouched_at_default_factor(client):
+    resp = await client.post("/v3/sessions", json={"maxCostUsd": 6})
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "6.0"
+
+
+async def test_absent_budget_stays_absent(client, setup, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post("/v3/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] is None
+
+
+async def test_scaled_budget_rounds_to_cents(client, setup, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.6)
+    )
+    resp = await client.post("/v3/sessions", json={"maxCostUsd": 6})
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "3.6"
+
+
+async def test_tiny_scaled_budget_keeps_a_cent_floor(client, setup, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    resp = await client.post("/v3/sessions", json={"maxCostUsd": 0.01})
+    assert resp.status_code == 200
+    assert resp.json()["maxCostUsd"] == "0.01"
+
+
+async def test_rejects_budget_that_would_disable_the_cap(client):
+    for bad in (0, -1):
+        resp = await client.post("/v3/sessions", json={"maxCostUsd": bad})
+        assert resp.status_code == 422, bad
+
+
+async def test_rejects_non_finite_budget(client):
+    for raw in ("Infinity", "-Infinity", "NaN"):
+        resp = await client.post(
+            "/v3/sessions",
+            content=f'{{"maxCostUsd": {raw}}}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 422, raw
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_rerun_keeps_settings_the_caller_omitted(
+    mock_submit, client, setup, monkeypatch
+):
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    created = await client.post(
+        "/v3/sessions",
+        json={
+            "model": "claude-opus-4-8",
+            "maxCostUsd": 6,
+            "keepAlive": True,
+            "outputSchema": {"type": "object"},
+            "systemPromptExtension": "be brief",
+        },
+    )
+    assert created.status_code == 200
+    sid = created.json()["id"]
+    assert created.json()["maxCostUsd"] == "3.0"
+
+    again = await client.post("/v3/sessions", json={"sessionId": sid, "task": "next"})
+    assert again.status_code == 200
+    data = again.json()
+    assert data["maxCostUsd"] == "3.0"
+    assert data["model"] == "claude-opus-4-8"
+    assert data["outputSchema"] == {"type": "object"}
+    stored = await crud.get_session(sid)
+    assert stored["keep_alive"] == 1
+    assert stored["system_prompt_extension"] == "be brief"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_rerun_scales_a_budget_the_caller_resends(
+    mock_submit, client, setup, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    again = await client.post(
+        "/v3/sessions", json={"sessionId": sid, "task": "next", "maxCostUsd": 4}
+    )
+    assert again.status_code == 200
+    assert again.json()["maxCostUsd"] == "2.0"

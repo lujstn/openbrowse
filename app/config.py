@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,11 +14,18 @@ load_dotenv()
 _BASE = Path(__file__).resolve().parent.parent
 
 
-def _env_float(name: str, default: float) -> float:
+def _cost_factor() -> float:
+    raw = os.environ.get("CLOUD_MAX_COST_FACTOR", "")
+    if not raw.strip():
+        return 1.0
+    limits = "must be a number greater than 0 and at most 1"
     try:
-        return float(os.environ[name])
-    except (KeyError, ValueError):
-        return default
+        factor = float(raw)
+    except ValueError:
+        raise ValueError(f"CLOUD_MAX_COST_FACTOR {limits}; got {raw!r}.") from None
+    if not math.isfinite(factor) or not 0 < factor <= 1:
+        raise ValueError(f"CLOUD_MAX_COST_FACTOR {limits}; got {raw!r}.")
+    return factor
 
 
 @dataclass(frozen=True)
@@ -51,9 +59,7 @@ class Settings:
     max_concurrent_sessions: int = field(
         default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_SESSIONS", "1"))
     )
-    cloud_max_cost_factor: float = field(
-        default_factory=lambda: _env_float("CLOUD_MAX_COST_FACTOR", 1.0)
-    )
+    cloud_max_cost_factor: float = field(default_factory=_cost_factor)
     default_model: str = "claude-sonnet-5"
     stale_session_minutes: int = 15
     reconcile_interval_seconds: int = 60
