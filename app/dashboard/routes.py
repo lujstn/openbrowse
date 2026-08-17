@@ -271,12 +271,15 @@ def message_display(m: dict) -> dict:
         else:
             cleaned = "Submitted for review"
     sources = data.get("sources")
+    diff = data.get("output_diff")
     return {
         "category": category,
         "label": label,
         "summary": cleaned,
         "code": code,
         "sources": sources if isinstance(sources, list) else None,
+        "output_diff": diff if isinstance(diff, list) else None,
+        "output_diff_truncated": bool(data.get("output_diff_truncated")),
         **cards,
     }
 

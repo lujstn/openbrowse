@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import re
@@ -165,6 +166,29 @@ _GOAL_PROMPT = (
     "the substance (never with a phrase like 'the goal is'); name the purpose, "
     "not the output's shape; do not list fields or restate the schema."
 )
+
+
+def _output_diff(
+    before: str, after: str, limit: int = 60
+) -> tuple[list[dict[str, Any]], bool]:
+    """The lines a step added to or removed from the output, as diff rows.
+
+    Only changed lines are kept: the question this answers is what a step
+    contributed, and surrounding context would bury it.
+    """
+    old = before.splitlines()
+    new = after.splitlines()
+    rows: list[dict[str, Any]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new).get_opcodes():
+        if tag in ("replace", "delete"):
+            for k in range(i1, i2):
+                rows.append({"type": "removed", "line": k + 1, "content": old[k]})
+        if tag in ("replace", "insert"):
+            for k in range(j1, j2):
+                rows.append({"type": "added", "line": k + 1, "content": new[k]})
+        if len(rows) > limit:
+            break
+    return rows[:limit], len(rows) > limit
 
 
 class BudgetExceededError(Exception):
@@ -1442,6 +1466,7 @@ async def run_agent_session(session_id: str) -> None:
         register_code_tools(tools, clipboard, store, _code_progress)
         register_clipboard_tools(tools, clipboard)
         read_sources: list[dict[str, str]] = []
+        output_snapshot: dict[str, str] = {"text": ""}
         register_tab_tools(
             tools, tab_manager, clipboard, store, _read_progress, read_sources
         )
@@ -1669,6 +1694,18 @@ async def run_agent_session(session_id: str) -> None:
             step_sources = read_sources[:]
             del read_sources[:]
 
+            diff_rows: list[dict[str, Any]] = []
+            diff_truncated = False
+            if store is not None:
+                try:
+                    current = store.read_output()
+                    diff_rows, diff_truncated = _output_diff(
+                        output_snapshot["text"], current
+                    )
+                    output_snapshot["text"] = current
+                except Exception:
+                    logger.debug("output diff failed", exc_info=True)
+
             row_data: dict[str, Any] = {
                 "step": step_count,
                 "duration_s": duration_s,
@@ -1680,6 +1717,9 @@ async def run_agent_session(session_id: str) -> None:
                 row_data["error_full"] = full_error[:6000]
             if step_sources:
                 row_data["sources"] = step_sources[:40]
+            if diff_rows:
+                row_data["output_diff"] = diff_rows
+                row_data["output_diff_truncated"] = diff_truncated
             if action_name == "done" and review_state["round"]:
                 changed = bool(
                     store is not None
