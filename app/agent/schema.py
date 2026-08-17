@@ -10,11 +10,13 @@ Zod/Pydantic emit for Optional) and enums as ``{"type": "string", "enum": [...]}
 Supported: object / array / primitive types, ``anyOf``/``oneOf`` and ``type``-array
 Optional (``[T, null]``), string ``enum`` (as ``Literal``), nested objects and
 arrays, ``$ref``/``$defs``, ``additionalProperties`` (loose -> allow, false -> forbid)
-and ``description`` preservation. String fields declaring ``format: uri``/``url``,
-or named with a ``Url``/``Uri``/``Href``/``Link`` suffix, validate as absolute
-http(s) URLs. A genuine multi-branch union (more than one non-null branch)
-raises :class:`SchemaConversionError`, letting the caller fall back to prose
-rather than crash.
+and ``description`` preservation. String fields gain automatic shape guards from
+``format`` (uri/url/email/uuid) or from their name suffix (``*Url``-family ->
+absolute http(s) URL, ``*Email`` -> email, ``*Uuid`` -> UUID, ``*Id`` -> single
+whitespace-free token); an explicit non-guard ``format`` opts a field out. A
+genuine multi-branch union (more than one non-null branch) raises
+:class:`SchemaConversionError`, letting the caller fall back to prose rather
+than crash.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal, Optional
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model
 
@@ -49,30 +52,78 @@ def _require_http_url(v: str) -> str:
     return v.strip()
 
 
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def _require_email(v: str) -> str:
+    if not _EMAIL_RE.fullmatch(v.strip()):
+        raise ValueError(
+            f"'{v[:80]}' is not an email address — copy the address as shown "
+            "on the page, or mark_absent if none is published"
+        )
+    return v.strip()
+
+
+def _require_uuid(v: str) -> str:
+    try:
+        UUID(v.strip())
+    except Exception:
+        raise ValueError(
+            f"'{v[:80]}' is not a UUID — copy the identifier exactly as the "
+            "page or its data exposes it, or mark_absent if none is published"
+        )
+    return v.strip()
+
+
+def _require_id(v: str) -> str:
+    trimmed = v.strip()
+    if not trimmed or len(trimmed) > 128 or re.search(r"\s", trimmed):
+        raise ValueError(
+            f"'{v[:80]}' is not an identifier — an id is a single token with no "
+            "spaces; copy it exactly, or mark_absent if none is published"
+        )
+    return trimmed
+
+
 HttpUrlStr = Annotated[str, AfterValidator(_require_http_url)]
+EmailStr = Annotated[str, AfterValidator(_require_email)]
+UuidStr = Annotated[str, AfterValidator(_require_uuid)]
+IdStr = Annotated[str, AfterValidator(_require_id)]
 
-# @nonobvious(deliberately-missing): pydantic's HttpUrl is not used because it
-# normalises URLs (trailing slash, lowercased host) and serialises as a Url
-# object; scraped links must round-trip byte-identical, so a validated plain
-# str carries the constraint instead.
-_URL_NAME_RE = re.compile(r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)")
+# @nonobvious(deliberately-missing): pydantic's HttpUrl/EmailStr are not used
+# because they normalise values (trailing slash, lowercased host/domain) and
+# some serialise as rich objects; scraped values must round-trip byte-identical,
+# so validated plain strs carry the constraints instead.
+_FORMAT_GUARDS: dict[str, Any] = {
+    "uri": HttpUrlStr,
+    "url": HttpUrlStr,
+    "email": EmailStr,
+    "uuid": UuidStr,
+}
+
+# @nonobvious(must-hold): ordered most-specific first — a name like companyUuid
+# must resolve to the UUID guard before the broader Id suffix can claim it.
+_NAME_GUARDS: tuple[tuple[re.Pattern[str], tuple[str, ...], Any], ...] = (
+    (
+        re.compile(r".*(?:Url|URL|Uri|URI|Href|HREF|Link|LINK)"),
+        ("url", "uri", "href", "link"),
+        HttpUrlStr,
+    ),
+    (re.compile(r".*(?:Email|EMAIL)"), ("email",), EmailStr),
+    (re.compile(r".*(?:Uuid|UUID)"), ("uuid",), UuidStr),
+    (re.compile(r".*(?:Id|ID)"), ("id",), IdStr),
+)
 
 
-def _is_url_field(prop_name: str, node: dict) -> bool:
-    fmt = node.get("format")
-    if fmt in ("uri", "url"):
-        return True
-    # @nonobvious(means): any other explicit format is an opt-out — the schema
-    # author has named a different string shape, so the name heuristic must not
-    # override it.
-    if fmt:
-        return False
-    return bool(_URL_NAME_RE.fullmatch(prop_name)) or prop_name.lower() in (
-        "url",
-        "uri",
-        "href",
-        "link",
-    )
+def _name_guard(prop_name: str, node: dict) -> Any | None:
+    # @nonobvious(means): any explicit format is an opt-out — the schema author
+    # has named the string's shape, so a name heuristic must not override it.
+    if node.get("format"):
+        return None
+    for pattern, exact, guard in _NAME_GUARDS:
+        if pattern.fullmatch(prop_name) or prop_name.lower() in exact:
+            return guard
+    return None
 
 
 def _is_null(node: Any) -> bool:
@@ -159,8 +210,8 @@ class _Converter:
                     inner_type = Optional[inner_type]
                 return list[inner_type]  # type: ignore[valid-type]
             return list
-        if node_type == "string" and node.get("format") in ("uri", "url"):
-            return HttpUrlStr
+        if node_type == "string" and node.get("format") in _FORMAT_GUARDS:
+            return _FORMAT_GUARDS[node.get("format")]
         if node_type in _PRIMITIVES:
             return _PRIMITIVES[node_type]
         return Any
@@ -184,8 +235,10 @@ class _Converter:
             py_type = self.resolve_type(
                 inner_node, _safe_identifier(f"{name}_{prop_name}")
             )
-            if py_type is str and _is_url_field(prop_name, inner_node):
-                py_type = HttpUrlStr
+            if py_type is str:
+                guard = _name_guard(prop_name, inner_node)
+                if guard is not None:
+                    py_type = guard
             description = inner_node.get("description") or prop_schema.get("description")
             in_required = prop_name in required
             if in_required and not nullable:

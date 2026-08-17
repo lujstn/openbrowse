@@ -157,3 +157,84 @@ def test_url_format_inside_array_items():
     assert model.model_validate({"recordingUrls": ["https://a.b/x"]}).recordingUrls
     with pytest.raises(ValidationError, match="absolute http"):
         model.model_validate({"recordingUrls": ["https://a.b/x", "nope"]})
+
+
+def test_email_fields_validated_by_format_and_name():
+    schema = {
+        "type": "object",
+        "properties": {
+            "contact": {"type": "string", "format": "email"},
+            "recruiterEmail": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "emailBody": {"type": "string"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Em")
+    ok = model.model_validate(
+        {
+            "contact": "jobs@marshmallow.com",
+            "recruiterEmail": "a.b+tag@sub.example.co.uk",
+            "emailBody": "Dear hiring manager, ...",
+        }
+    )
+    assert ok.contact == "jobs@marshmallow.com"
+    assert ok.emailBody.startswith("Dear")
+    assert model.model_validate({"contact": "x@y.z"}).recruiterEmail is None
+    for bad in ("Powered by", "jobs at marshmallow", "a@b", "@y.z", "a@"):
+        with pytest.raises(ValidationError, match="not an email"):
+            model.model_validate({"contact": bad})
+
+
+def test_uuid_fields_validated_by_format_and_name():
+    schema = {
+        "type": "object",
+        "properties": {
+            "token": {"type": "string", "format": "uuid"},
+            "companyUuid": {"type": "string"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Uu")
+    u = "3dee50f9-717b-4311-b1f3-1da2cef18c20"
+    ok = model.model_validate({"token": u, "companyUuid": u.upper()})
+    assert ok.token == u
+    with pytest.raises(ValidationError, match="not a UUID"):
+        model.model_validate({"token": "not-a-uuid", "companyUuid": u})
+
+
+def test_id_fields_reject_prose_but_stay_broad():
+    schema = {
+        "type": "object",
+        "properties": {
+            "companySourceId": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "id": {"type": "string"},
+            "idea": {"type": "string"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "Ids")
+    ok = model.model_validate(
+        {"companySourceId": "acme-42_x", "id": "12345", "idea": "free text here"}
+    )
+    assert ok.companySourceId == "acme-42_x"
+    assert ok.idea == "free text here"
+    for bad in ("Powered by", "two words", "", " ", "x" * 129):
+        with pytest.raises(ValidationError, match="not an identifier"):
+            model.model_validate({"companySourceId": bad, "id": "1"})
+
+
+def test_explicit_format_opts_out_of_all_name_guards():
+    schema = {
+        "type": "object",
+        "properties": {
+            "recordId": {"type": "string", "format": "date-time"},
+            "shareLink": {"type": "string", "format": "date-time"},
+        },
+    }
+    model = json_schema_to_pydantic(schema, "OptOut2")
+    ok = model.model_validate({"recordId": "yesterday at noon", "shareLink": "n/a"})
+    assert ok.recordId == "yesterday at noon"
+
+
+def test_uuid_suffix_wins_over_id_suffix():
+    schema = {"type": "object", "properties": {"companyUuid": {"type": "string"}}}
+    model = json_schema_to_pydantic(schema, "Prec")
+    with pytest.raises(ValidationError, match="not a UUID"):
+        model.model_validate({"companyUuid": "plain-token"})
