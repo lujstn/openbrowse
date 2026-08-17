@@ -98,7 +98,7 @@ Confirm the API is responding:
 
 ```bash
 curl http://<pi-ip>:8420/health
-# {"status":"ok","active_sessions":0}
+# {"status":"ok"}
 ```
 
 ---
@@ -129,7 +129,7 @@ Test the public endpoint:
 
 ```bash
 curl https://your-pi.tail0a1b2c.ts.net/health
-# {"status":"ok","active_sessions":0}
+# {"status":"ok"}
 ```
 
 To disable the funnel later:
