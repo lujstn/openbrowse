@@ -122,6 +122,15 @@ _OVERLAY_EXTENSION = (
     "shows is real."
 )
 
+_CAPTCHA_EXTENSION = (
+    "A CAPTCHA or an 'unusual traffic' interstitial is not solved for you here, and "
+    "solve_captcha is yours to call: calling it IS the fix. Switching to another "
+    "search engine or another site is a retreat rather than a solution, so solve the "
+    "challenge first and only reroute once the solver has told you the page is still "
+    "refusing. Judge it the way you judge any other blocker, by the page actually "
+    "moving on, and pass the site key if you can read it off the widget."
+)
+
 _CLIPBOARD_EXTENSION = (
     "You carry a clipboard: remember(key, value) keeps anything you need to remember "
     "between pages, recall(key) brings it back, and startUrl is already stored there."
@@ -157,6 +166,75 @@ _GOAL_PROMPT = (
     "correct result looks like, in the task's own words. Start directly with "
     "the substance (never with a phrase like 'the goal is'); name the purpose, "
     "not the output's shape; do not list fields or restate the schema."
+)
+
+
+_CAPTCHA_CLAIM_FIXES: tuple[tuple[str, str], ...] = (
+    (
+        "CAPTCHAs are automatically solved by the browser. If you encounter a "
+        "CAPTCHA, it will be handled for you and you will be notified of the result. "
+        "Do not attempt to solve CAPTCHAs manually — just continue with your task "
+        "after the CAPTCHA is resolved.",
+        "No CAPTCHA is solved on your behalf here. When you hit one, solve it "
+        "yourself with the solve_captcha action and then carry on with your task.",
+    ),
+    (
+        "CAPTCHAs are handled automatically.",
+        "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    ),
+    (
+        "CAPTCHAs are solved automatically.",
+        "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    ),
+    ("auto-solved CAPTCHAs", "CAPTCHAs you solved"),
+    (
+        "Captcha appeared twice on this site. Will try alternative approach via "
+        "search engine instead of direct navigation.",
+        "Captcha appeared twice on this site. Solved it with solve_captcha both "
+        "times and carried on.",
+    ),
+)
+
+
+def _captcha_corrected_system_prompt(
+    llm: Any, max_actions: int
+) -> tuple[str | None, int]:
+    """Upstream's own system prompt with its "CAPTCHAs are solved for you" claims put
+    right, and how many of them were found.
+
+    @nonobvious(forced-by): those claims hold only on Browser-Use's cloud browsers,
+    whose proxy emits the CDP events the captcha watchdog waits for. Nothing emits
+    them here, so the stock prompt forbids the one action that gets past a challenge.
+    Rebuilding through upstream's SystemPrompt keeps whichever template it would have
+    picked, and keeps inheriting its later edits.
+    """
+    try:
+        from browser_use.agent.prompts import SystemPrompt
+
+        model_name = str(getattr(llm, "model", "") or "")
+        message = SystemPrompt(
+            max_actions_per_step=max_actions,
+            is_anthropic=isinstance(llm, ChatAnthropic),
+            is_browser_use_model="browser-use/" in model_name.lower(),
+            model_name=model_name,
+        ).get_system_message()
+        base = message.content
+    except Exception:
+        logger.warning("could not rebuild the system prompt", exc_info=True)
+        return None, 0
+    if not isinstance(base, str):
+        return None, 0
+    hits = 0
+    for stale, corrected in _CAPTCHA_CLAIM_FIXES:
+        found = base.count(stale)
+        if found:
+            hits += found
+            base = base.replace(stale, corrected)
+    return base, hits
+
+
+_STALE_CAPTCHA_CLAIM_RE = re.compile(
+    r"CAPTCHAs?[^.\n]{0,90}?(automatically|handled for you|solved for you)", re.I
 )
 
 
@@ -1425,6 +1503,17 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
+        async def _captcha_progress(label: str) -> None:
+            set_activity(session_id, label, spin=True)
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "interaction", "action": "captcha"}),
+                summary=label[:200],
+                count_step=False,
+            )
+
         code_observer = CodeStreamObserver(browser_session, clipboard, _code_progress)
         object.__setattr__(llm, "stream_observer", code_observer)
 
@@ -1433,7 +1522,12 @@ async def run_agent_session(session_id: str) -> None:
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
-        register_capsolver_tool(tools, capsolver_costs)
+        register_capsolver_tool(tools, capsolver_costs, _captcha_progress)
+        if not settings.capsolver_api_key:
+            await _captcha_progress(
+                "CAPTCHA solving is off: no CAPSOLVER_API_KEY is configured, so a "
+                "challenge will block this session."
+            )
 
         if store is not None:
             register_output_store_tools(tools, store, clipboard)
@@ -1752,6 +1846,19 @@ async def run_agent_session(session_id: str) -> None:
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,
         ]
+        if settings.capsolver_api_key:
+            extension_parts.append(_CAPTCHA_EXTENSION)
+            corrected, claim_hits = _captcha_corrected_system_prompt(
+                llm, agent_kwargs["max_actions_per_step"]
+            )
+            if corrected and claim_hits:
+                agent_kwargs["override_system_message"] = corrected
+                logger.info("corrected %d CAPTCHA claims in the system prompt", claim_hits)
+            elif corrected is None or _STALE_CAPTCHA_CLAIM_RE.search(corrected):
+                await _captcha_progress(
+                    "Could not correct the model's built-in CAPTCHA instructions, so "
+                    "it may ignore solve_captcha on a challenge."
+                )
         if store is not None:
             extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
         extension_parts.append(_BEGIN_EXTENSION)

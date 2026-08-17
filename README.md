@@ -141,7 +141,7 @@ sudo tailscale funnel --bg 8420
 - **Grounding guards**: shell-read detection with automatic in-frame retry, evidence-checked enum writes, URL fields validated as absolute http(s) links at the store boundary, honest failure over invented data.
 - **Profile import**: bring BU Cloud profiles (cookies + localStorage) via CLI or the dashboard.
 - **Dashboard**: live session feed with model reasoning, per-step costs, JSON export (full / steps / output-only), profile management.
-- **CAPTCHA solving**: optional CapSolver integration.
+- **CAPTCHA solving**: optional CapSolver integration for reCAPTCHA v2 and v3, hCaptcha and Cloudflare Turnstile. Set `CAPSOLVER_API_KEY` and the agent is told to solve challenges itself rather than route around them, sending the page's own cookies so the solve stays coherent with the session. An "unusual traffic" interstitial is submitted and then re-checked, so a solve is only reported as cleared once the page has actually moved on. Per-solve cost is billed by CapSolver and shown against the session. hCaptcha and Cloudflare's managed challenge remain hard, and the feed says so rather than pretending.
 - **Multi-provider**: Anthropic and OpenAI models behind one API, with per-provider repair layers for each family's failure modes.
 
 ## Citation

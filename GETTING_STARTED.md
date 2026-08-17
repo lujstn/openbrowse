@@ -58,7 +58,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `API_KEY`                 | A secret bearer token used to authenticate API requests                        |
 | `ANTHROPIC_API_KEY`       | Your Anthropic API key (`sk-ant-...`), for `claude-*` models                   |
 | `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
-| `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
+| `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving. Without it a challenge simply blocks the session, and the feed says so. Billed per solve by Capsolver, typically well under a cent, and shown against the session |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |

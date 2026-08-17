@@ -45,7 +45,8 @@ _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
-    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CAPSOLVER_API_KEY"]),
+    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
+    ("CAPTCHA solving", ["CAPSOLVER_API_KEY"]),
     ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")

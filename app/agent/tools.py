@@ -1489,6 +1489,121 @@ def register_fetch_tool(tools: Tools) -> None:
             return ActionResult(error=f"HTTP request failed: {e}")
 
 
+_CAPTCHA_PROBE_JS = """(function () {
+  var out = { kind: "", siteKey: "", dataS: "", interstitial: false, invisible: false };
+  function attr(el, names) {
+    for (var i = 0; i < names.length; i++) {
+      var v = el && el.getAttribute(names[i]);
+      if (v) return v;
+    }
+    return "";
+  }
+  function frameParam(part, name) {
+    var f = document.querySelector('iframe[src*="' + part + '"]');
+    if (!f) return "";
+    try {
+      return new URL(f.getAttribute("src"), location.href).searchParams.get(name) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+  var ts = document.querySelector(".cf-turnstile,[data-cf-turnstile-sitekey]");
+  var hc = document.querySelector(".h-captcha,[data-hcaptcha-sitekey]");
+  var rc = document.querySelector(".g-recaptcha,[data-sitekey]");
+  if (ts) {
+    out.kind = "turnstile";
+    out.siteKey = attr(ts, ["data-sitekey", "data-cf-turnstile-sitekey"]);
+  } else if (hc) {
+    out.kind = "hcaptcha";
+    out.siteKey =
+      attr(hc, ["data-sitekey", "data-hcaptcha-sitekey"]) ||
+      frameParam("hcaptcha.com", "sitekey");
+  } else if (rc) {
+    out.kind = "recaptcha_v2";
+    out.siteKey = attr(rc, ["data-sitekey"]) || frameParam("recaptcha/api2/anchor", "k");
+    out.dataS = attr(rc, ["data-s"]);
+    out.invisible = attr(rc, ["data-size"]) === "invisible";
+  } else if (document.querySelector('iframe[src*="challenges.cloudflare.com"]')) {
+    out.kind = "turnstile";
+  } else if (document.querySelector('iframe[src*="hcaptcha.com"]')) {
+    out.kind = "hcaptcha";
+    out.siteKey = frameParam("hcaptcha.com", "sitekey");
+  } else if (document.querySelector('iframe[src*="recaptcha/api2/anchor"]')) {
+    out.kind = "recaptcha_v2";
+    out.siteKey = frameParam("recaptcha/api2/anchor", "k");
+  } else {
+    var v3 = document.querySelector('script[src*="recaptcha/api.js?render="]');
+    if (v3) {
+      out.kind = "recaptcha_v3";
+      try {
+        out.siteKey =
+          new URL(v3.getAttribute("src"), location.href).searchParams.get("render") || "";
+      } catch (e) {}
+    }
+  }
+  if (document.querySelector('form#captcha-form, form[action*="/sorry/"]')) {
+    out.interstitial = true;
+    if (!out.kind) out.kind = "recaptcha_v2";
+  }
+  return out.kind ? out : null;
+})()"""
+
+
+async def probe_captcha(browser_session: BrowserSession) -> dict[str, Any] | None:
+    """What challenge the current page is showing, or None.
+
+    Reports the kind, the site key, the one-shot ``data-s`` Google's "unusual
+    traffic" interstitials carry, and whether clearing it needs a form POST rather
+    than the site's own callback.
+    """
+    try:
+        found = await _eval_js(browser_session, _CAPTCHA_PROBE_JS)
+    except Exception:
+        logger.debug("probe_captcha failed", exc_info=True)
+        return None
+    if not isinstance(found, dict) or not found.get("kind"):
+        return None
+    return found
+
+
+def _cookie_header_for(cookies: list[dict[str, Any]], host: str) -> str:
+    """The page's own cookies as a ``name=value;…`` header, scoped to its host."""
+    host = (host or "").lower()
+    if not host:
+        return ""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for c in cookies:
+        domain = str(c.get("domain") or "").lstrip(".").lower()
+        name = str(c.get("name") or "")
+        if not domain or not name or name in seen:
+            continue
+        if host != domain and not host.endswith("." + domain):
+            continue
+        seen.add(name)
+        parts.append(f"{name}={c.get('value') or ''}")
+    return ";".join(parts)
+
+
+async def _page_cookie_header(browser_session: BrowserSession, host: str) -> str:
+    try:
+        jar = await browser_session._cdp_get_cookies()
+    except Exception:
+        logger.debug("reading cookies for the captcha task failed", exc_info=True)
+        return ""
+    return _cookie_header_for([dict(c) for c in (jar or [])], host)
+
+
+_CAPTCHA_TASK_TYPES: dict[str, str] = {
+    "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
+    "recaptcha_v3": "ReCaptchaV3TaskProxyLess",
+    "hcaptcha": "HCaptchaTaskProxyLess",
+    "turnstile": "AntiTurnstileTaskProxyLess",
+}
+
+_OPTIONAL_TASK_FIELDS = ("cookies", "recaptchaDataSValue")
+
+
 def _parse_capsolver_cost(result: dict[str, Any]) -> float:
     """Read the per-solve USD cost Capsolver returns in its task result."""
     try:
@@ -1497,11 +1612,49 @@ def _parse_capsolver_cost(result: dict[str, Any]) -> float:
         return 0.0
 
 
-def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) -> None:
+async def _create_capsolver_task(
+    client: httpx.AsyncClient, task_payload: dict[str, Any]
+) -> dict[str, Any]:
+    resp = await client.post(
+        f"{CAPSOLVER_API}/createTask",
+        json={"clientKey": settings.capsolver_api_key, "task": task_payload},
+        timeout=30.0,
+    )
+    return resp.json()
+
+
+async def _interstitial_cleared(
+    browser_session: BrowserSession, before_url: str, timeout_s: float = 25.0
+) -> bool:
+    """Whether the interstitial actually let us through.
+
+    Judged by the page moving on, never by the token landing in a field: the same
+    standard the agent is held to for any other blocking overlay.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        await asyncio.sleep(1.0)
+        try:
+            now_url = await _eval_js(browser_session, "window.location.href") or ""
+        except Exception:
+            continue
+        if now_url and now_url != before_url and "/sorry/" not in now_url:
+            return True
+        if await probe_captcha(browser_session) is None:
+            return True
+    return False
+
+
+def register_capsolver_tool(
+    tools: Tools, cost_sink: list[float] | None = None, progress: Any = None
+) -> None:
     """Register the Capsolver CAPTCHA-solving tool on a Tools instance.
 
     Each solved CAPTCHA's real cost (from Capsolver's response) is appended to
     ``cost_sink`` if given, so the caller can fold it into the run's total cost.
+    ``progress`` is an async callable receiving each attempt's outcome, so a solve
+    and its failure are both visible in the session feed rather than only in logs.
     """
 
     if not settings.capsolver_api_key:
@@ -1509,8 +1662,10 @@ def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) 
         return
 
     @tools.action(
-        "Solve a CAPTCHA challenge on the current page. "
-        "Call this when you encounter a Cloudflare challenge, reCAPTCHA, hCaptcha, or similar."
+        "Solve the CAPTCHA blocking the current page. Nothing else solves it for "
+        "you here, so call this the moment a reCAPTCHA, hCaptcha, Cloudflare "
+        "Turnstile or an 'unusual traffic' interstitial stands between you and the "
+        "page you need."
     )
     async def solve_captcha(
         captcha_type: str,
@@ -1529,67 +1684,101 @@ def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) 
             current_url = await _eval_js(browser_session, "window.location.href") or ""
         except Exception:
             pass
+        host = urlparse(current_url).netloc
 
-        task_type_map: dict[str, str] = {
-            "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
-            "recaptcha_v3": "ReCaptchaV3TaskProxyLess",
-            "hcaptcha": "HCaptchaTaskProxyLess",
-            "turnstile": "AntiTurnstileTaskProxyLess",
-        }
-        task_type = task_type_map.get(captcha_type)
-        if not task_type:
+        probe = await probe_captcha(browser_session) or {}
+        kind = captcha_type if captcha_type in _CAPTCHA_TASK_TYPES else ""
+        if not kind:
+            kind = str(probe.get("kind") or "")
+        if not kind:
             return ActionResult(
                 error=f"Unknown captcha type: {captcha_type}. "
-                f"Supported: {', '.join(task_type_map.keys())}"
+                f"Supported: {', '.join(_CAPTCHA_TASK_TYPES)}"
             )
+        task_type = _CAPTCHA_TASK_TYPES[kind]
 
-        if not site_key:
-            try:
-                site_key = await _eval_js(
-                    browser_session,
-                    """(function() {
-                        var rc = document.querySelector('[data-sitekey]');
-                        if (rc) return rc.getAttribute('data-sitekey');
-                        var cf = document.querySelector('[data-cf-turnstile-sitekey]')
-                            || document.querySelector('.cf-turnstile');
-                        if (cf) return cf.getAttribute('data-sitekey')
-                            || cf.getAttribute('data-cf-turnstile-sitekey');
-                        return null;
-                    })()""",
-                )
-            except Exception:
-                pass
-
+        site_key = site_key or str(probe.get("siteKey") or "")
         if not site_key:
             return ActionResult(
-                error="Could not detect CAPTCHA site key. "
-                "Please provide the site_key parameter."
+                error="Could not detect the CAPTCHA site key on this page. Read the "
+                "widget's data-sitekey (or the anchor iframe's 'k' query parameter) "
+                "and pass it as site_key."
             )
 
-        task_payload: dict[str, str | float] = {
+        interstitial = bool(probe.get("interstitial"))
+        await _emit_progress(
+            progress, f"captcha: solving {kind} on {host or 'this page'}"
+        )
+
+        task_payload: dict[str, Any] = {
             "type": task_type,
             "websiteURL": current_url,
             "websiteKey": site_key,
         }
-        if captcha_type == "recaptcha_v3":
+        if kind == "recaptcha_v3":
             task_payload["pageAction"] = "verify"
             task_payload["minScore"] = 0.9
+        data_s = str(probe.get("dataS") or "")
+        if data_s:
+            # @nonobvious(forced-by): Google's interstitials mint a one-shot data-s
+            # per page load; a token solved without it answers a challenge instance
+            # that no longer exists.
+            task_payload["recaptchaDataSValue"] = data_s
+        cookies = await _page_cookie_header(browser_session, host)
+        if cookies:
+            task_payload["cookies"] = cookies
+
+        async def redeem(token: str) -> ActionResult:
+            await _inject_token(browser_session, kind, token, submit=interstitial)
+            if not interstitial:
+                await _emit_progress(
+                    progress, f"captcha: {kind} token placed on {host}"
+                )
+                return ActionResult(
+                    extracted_content=(
+                        f"A {kind} token is now in the page on {host}. The widget is "
+                        "satisfied but the page has not moved on its own: carry on "
+                        "with whatever the form needed, then check the page actually "
+                        "accepted it."
+                    ),
+                    long_term_memory=f"solve_captcha: {kind} token placed on {host}",
+                )
+            if await _interstitial_cleared(browser_session, current_url):
+                await _emit_progress(progress, f"captcha: cleared on {host}")
+                return ActionResult(
+                    extracted_content=f"CAPTCHA cleared: {host} let the page through.",
+                    long_term_memory=f"solve_captcha: cleared {kind} on {host}",
+                )
+            await _emit_progress(
+                progress, f"captcha: {host} still challenging after a solve"
+            )
+            return ActionResult(
+                error=(
+                    f"A {kind} token was solved and submitted, but {host} is still "
+                    "showing the challenge. Do not try the same route again: reach "
+                    "what you need by another path, or from a different source."
+                )
+            )
 
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{CAPSOLVER_API}/createTask",
-                    json={
-                        "clientKey": settings.capsolver_api_key,
-                        "task": task_payload,
-                    },
-                    timeout=30.0,
-                )
-                result = resp.json()
+                result = await _create_capsolver_task(client, task_payload)
+                if result.get("errorId", 0) != 0 and any(
+                    f in task_payload for f in _OPTIONAL_TASK_FIELDS
+                ):
+                    # @nonobvious(forced-by): Capsolver rejects a whole task when it
+                    # does not recognise an optional field, and which ones it accepts
+                    # varies by task type, so a refusal costs one retry rather than the solve.
+                    lean = {
+                        k: v
+                        for k, v in task_payload.items()
+                        if k not in _OPTIONAL_TASK_FIELDS
+                    }
+                    result = await _create_capsolver_task(client, lean)
                 if result.get("errorId", 0) != 0:
-                    return ActionResult(
-                        error=f"Capsolver error: {result.get('errorDescription', 'unknown')}"
-                    )
+                    detail = result.get("errorDescription", "unknown")
+                    await _emit_progress(progress, f"captcha: Capsolver refused ({detail})")
+                    return ActionResult(error=f"Capsolver error: {detail}")
 
                 task_id = result.get("taskId")
                 if not task_id:
@@ -1598,13 +1787,8 @@ def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) 
                     if token:
                         if cost_sink is not None:
                             cost_sink.append(_parse_capsolver_cost(result))
-                        await _inject_token(browser_session, captcha_type, token)
-                        return ActionResult(
-                            extracted_content="CAPTCHA solved successfully"
-                        )
+                        return await redeem(token)
                     return ActionResult(error="No taskId or immediate solution returned")
-
-                import asyncio
 
                 for _ in range(60):
                     await asyncio.sleep(2)
@@ -1628,26 +1812,45 @@ def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) 
                             or solution.get("text")
                         )
                         if token:
-                            await _inject_token(browser_session, captcha_type, token)
-                            return ActionResult(
-                                extracted_content="CAPTCHA solved successfully"
-                            )
+                            return await redeem(token)
                         return ActionResult(error="Solution has no token")
                     elif status == "failed":
-                        return ActionResult(
-                            error=f"Capsolver failed: {result.get('errorDescription', 'unknown')}"
-                        )
+                        detail = result.get("errorDescription", "unknown")
+                        await _emit_progress(progress, f"captcha: solve failed ({detail})")
+                        return ActionResult(error=f"Capsolver failed: {detail}")
 
+                await _emit_progress(progress, "captcha: Capsolver timed out")
                 return ActionResult(error="Capsolver timed out after 2 minutes")
 
         except httpx.HTTPError as e:
+            await _emit_progress(progress, f"captcha: Capsolver unreachable ({e})")
             return ActionResult(error=f"Capsolver HTTP error: {e}")
 
 
+_SUBMIT_INTERSTITIAL_JS = """(function () {
+  var f =
+    document.querySelector("form#captcha-form") ||
+    document.querySelector('form[action*="/sorry/"]');
+  if (!f) return false;
+  if (f.requestSubmit) f.requestSubmit();
+  else f.submit();
+  return true;
+})()"""
+
+
 async def _inject_token(
-    browser_session: BrowserSession, captcha_type: str, token: str
+    browser_session: BrowserSession,
+    captcha_type: str,
+    token: str,
+    submit: bool = False,
 ) -> None:
-    """Inject the solved CAPTCHA token into the page via CDP."""
+    """Inject the solved CAPTCHA token into the page via CDP.
+
+    An ordinary site takes it from here through its own widget callback. An
+    interstitial has no such callback and stays put until its form is POSTed, which
+    is also what mints the exemption cookie against this browser rather than the
+    solver's.
+    """
     token_json = json.dumps(token)
     if captcha_type in ("recaptcha_v2", "recaptcha_v3"):
         await _eval_js(
@@ -1685,6 +1888,16 @@ async def _inject_token(
                 if (window.turnstile) turnstile.getResponse = function() {{ return token; }};
             }})()""",
         )
+
+    if submit:
+        # @nonobvious(must-hold): the widget callback sometimes navigates on its own,
+        # so this waits and re-queries; a form that has already gone leaves nothing
+        # to match and the submit becomes a no-op rather than a double POST.
+        await asyncio.sleep(0.8)
+        try:
+            await _eval_js(browser_session, _SUBMIT_INTERSTITIAL_JS)
+        except Exception:
+            logger.debug("interstitial form submit failed", exc_info=True)
 
 
 class _AwaitableStr(str):

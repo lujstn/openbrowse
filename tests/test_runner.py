@@ -1032,3 +1032,34 @@ def test_action_detail_humanises_bare_steps():
     assert detail == "Add output rows from rows.json"
     detail, _ = _action_detail([_Act({"read_output": {}})])
     assert detail == "Check the output built so far"
+
+
+def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    corrected, hits = _captcha_corrected_system_prompt(llm, 8)
+
+    assert corrected is not None
+    assert hits >= 4
+    assert "Do not attempt to solve CAPTCHAs manually" not in corrected
+    assert "solve_captcha" in corrected
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
+
+
+def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
+    from unittest.mock import patch
+
+    from app.agent.runner import _captcha_corrected_system_prompt
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch(
+        "browser_use.agent.prompts.SystemPrompt", side_effect=RuntimeError("gone")
+    ):
+        corrected, hits = _captcha_corrected_system_prompt(llm, 8)
+
+    assert corrected is None
+    assert hits == 0

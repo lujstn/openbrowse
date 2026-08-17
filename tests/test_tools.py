@@ -1,7 +1,8 @@
 """Tool registration tests (no live API calls)."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from browser_use import Tools
 
 
@@ -62,6 +63,215 @@ def test_parse_capsolver_cost() -> None:
     assert _parse_capsolver_cost({}) == 0.0
     assert _parse_capsolver_cost({"cost": None}) == 0.0
     assert _parse_capsolver_cost({"cost": "not-a-number"}) == 0.0
+
+
+def test_cookie_header_scoped_to_host() -> None:
+    from app.agent.tools import _cookie_header_for
+
+    jar = [
+        {"name": "NID", "value": "1", "domain": ".google.com"},
+        {"name": "SID", "value": "2", "domain": "www.google.com"},
+        {"name": "other", "value": "3", "domain": ".example.com"},
+        {"name": "", "value": "4", "domain": ".google.com"},
+    ]
+    header = _cookie_header_for(jar, "www.google.com")
+    assert "NID=1" in header
+    assert "SID=2" in header
+    assert "other" not in header
+    assert _cookie_header_for(jar, "") == ""
+
+
+class _FakeCaptchaBrowser:
+    """A browser session standing in for a page showing a Google interstitial."""
+
+    def __init__(self, cookies: list[dict] | None = None) -> None:
+        self.cookies = cookies or []
+        self.submitted = False
+
+    async def _cdp_get_cookies(self) -> list[dict]:
+        return self.cookies
+
+
+def _fake_eval(session: _FakeCaptchaBrowser, probe: dict | None, url: str):
+    async def _eval(browser_session, expression: str):
+        if "interstitial" in expression:
+            return probe
+        if "location.href" in expression:
+            return url
+        if "captcha-form" in expression:
+            session.submitted = True
+            return True
+        return None
+
+    return _eval
+
+
+_INTERSTITIAL_PROBE = {
+    "kind": "recaptcha_v2",
+    "siteKey": "6LeSITE",
+    "dataS": "one-shot-blob",
+    "interstitial": True,
+    "invisible": False,
+}
+
+
+def _solve_action(tools: Tools):
+    return tools.registry.registry.actions["solve_captcha"].function
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_sends_cookies_and_data_s() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser([{"name": "NID", "value": "abc", "domain": ".google.com"}])
+    seen: dict = {}
+
+    async def fake_create(client, payload):
+        seen.update(payload)
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": "0.0008"}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(tools_mod, "_eval_js", _fake_eval(session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index")),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=True)),
+        ):
+            await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert seen["websiteKey"] == "6LeSITE"
+    assert seen["recaptchaDataSValue"] == "one-shot-blob"
+    assert "NID=abc" in seen["cookies"]
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_reports_failure_when_page_still_challenges() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+
+    async def fake_create(client, payload):
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(tools_mod, "_eval_js", _fake_eval(session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index")),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=False)),
+        ):
+            result = await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert result.error
+    assert "still" in result.error.lower()
+    assert not result.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_does_not_claim_success_on_an_ordinary_widget() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser()
+    probe = dict(_INTERSTITIAL_PROBE, interstitial=False, dataS="")
+
+    async def fake_create(client, payload):
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(tools_mod, "_eval_js", _fake_eval(session, probe, "https://shop.example.com/checkout")),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+        ):
+            result = await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert not result.error
+    assert "solved successfully" not in (result.extracted_content or "")
+    assert "has not moved" in (result.extracted_content or "")
+
+
+@pytest.mark.asyncio
+async def test_solve_captcha_retries_without_optional_fields_when_refused() -> None:
+    from app.agent import tools as tools_mod
+
+    session = _FakeCaptchaBrowser([{"name": "NID", "value": "abc", "domain": ".google.com"}])
+    payloads: list[dict] = []
+
+    async def fake_create(client, payload):
+        payloads.append(dict(payload))
+        if "cookies" in payload or "recaptchaDataSValue" in payload:
+            return {"errorId": 1, "errorDescription": "ERROR_INVALID_TASK_DATA"}
+        return {"errorId": 0, "solution": {"gRecaptchaResponse": "tok"}, "cost": 0}
+
+    with patch("app.agent.tools.settings") as st:
+        st.capsolver_api_key = "test-key"
+        tools = Tools()
+        tools_mod.register_capsolver_tool(tools)
+        with (
+            patch.object(tools_mod, "_eval_js", _fake_eval(session, _INTERSTITIAL_PROBE, "https://www.google.com/sorry/index")),
+            patch.object(tools_mod, "_create_capsolver_task", fake_create),
+            patch.object(tools_mod, "_interstitial_cleared", AsyncMock(return_value=True)),
+        ):
+            result = await _solve_action(tools)(
+                captcha_type="recaptcha_v2", browser_session=session
+            )
+
+    assert len(payloads) == 2
+    assert "cookies" not in payloads[1]
+    assert not result.error
+
+
+@pytest.mark.asyncio
+async def test_interstitial_cleared_waits_for_the_page_to_move() -> None:
+    from app.agent import tools as tools_mod
+
+    urls = iter(
+        [
+            "https://www.google.com/sorry/index?q=1",
+            "https://www.google.com/search?q=andy",
+        ]
+    )
+
+    async def _eval(browser_session, expression: str):
+        if "location.href" in expression:
+            return next(urls, "https://www.google.com/search?q=andy")
+        return None
+
+    with patch.object(tools_mod, "_eval_js", _eval):
+        cleared = await tools_mod._interstitial_cleared(
+            object(), "https://www.google.com/sorry/index?q=1", timeout_s=5
+        )
+    assert cleared is True
+
+
+@pytest.mark.asyncio
+async def test_interstitial_not_cleared_when_the_challenge_persists() -> None:
+    from app.agent import tools as tools_mod
+
+    async def _eval(browser_session, expression: str):
+        if "out.interstitial" in expression:
+            return _INTERSTITIAL_PROBE
+        if "location.href" in expression:
+            return "https://www.google.com/sorry/index?q=1"
+        return None
+
+    with patch.object(tools_mod, "_eval_js", _eval):
+        cleared = await tools_mod._interstitial_cleared(
+            object(), "https://www.google.com/sorry/index?q=1", timeout_s=2
+        )
+    assert cleared is False
 
 
 def test_item_url_field_prefers_detail_over_company() -> None:
