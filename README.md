@@ -23,9 +23,11 @@ Given the same real-world extraction task (a careers page with 16 records behind
 
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
-| BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
+| BU Cloud | claude-sonnet-5 | high | 10 | 2m 36s | 859k | $0.78 | 14/14<sup>1</sup> |
 | **OpenBrowse** | **claude-sonnet-5** | **high** | **10** | **4m 02s** | **242k** | **$0.40** | **14/14** |
 | **OpenBrowse** | **gpt-5.6-terra** | **none** | **11** | **1m 47s** | **202k** | **$0.24** | **14/14** |
+
+<sup>1</sup> Extracted data successfully, but also sent incorrect data for fields that did not appear in our benchmark (e.g. job seniority). See "Anti-hallucination" below.
 
 ## Why OpenBrowse over BU Cloud?
 
@@ -35,7 +37,7 @@ Given the same real-world extraction task (a careers page with 16 records behind
 | How it works | Code-first: the agent scripts its way through pages | Visual-first: the agent opens real tabs you can watch live, like a human working |
 | Bulk page reads | One page at a time | `read_pages` opens whole listings in parallel tab waves, one step |
 | Structured output | Schema-validated | Schema-validated, plus a live answer store with a completeness gate the agent must pass before finishing |
-| Anti-fabrication | Prompt rules | Enforced: enum values with no on-page evidence are refused at the store boundary |
+| Anti-hallucination | Often fills fields the page never shows | On-screen data first, enriched from the page's own structured data (JSON-LD, APIs), never guessed: values without evidence are refused at the store boundary |
 | Profiles | Cloud profiles | Import your BU Cloud profiles (cookies and localStorage) with one command |
 | Live view | Replay | Real-time VNC of the actual browser, a step feed with the model's reasoning, and an IDE-style code tab that streams the agent's sandbox scripts live as they're written |
 | API | v3 REST | The same v3 REST surface: point `browser-use-sdk` at your box and change nothing but `baseUrl` and `apiKey` |
@@ -56,7 +58,7 @@ The same real-world extraction task (a careers page with 16 records behind an em
 
 | Runtime | Model | Reasoning | Steps | Time | Tokens | LLM cost | Records |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
-| BU Cloud | claude-sonnet-5 | high | 18 | 4m 30s | 1.4M | $0.86 | 16/16 |
+| BU Cloud | claude-sonnet-5 | high | 10 | 2m 36s | 859k | $0.78 | 14/14<sup>1</sup> |
 | OpenBrowse | claude-sonnet-5 | high | **10** | **4m 02s** | **242k** | **$0.40** | 14/14 |
 | OpenBrowse | claude-sonnet-5 | none | 9 | 5m 18s | 237k | $0.51 | 14/14 |
 | OpenBrowse | gpt-5.6-terra | high | 17 | 5m 05s | 434k | $0.66 | 14/14 |
@@ -64,6 +66,8 @@ The same real-world extraction task (a careers page with 16 records behind an em
 | OpenBrowse | gpt-5.6-luna | max | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | high | TBD | TBD | TBD | TBD | TBD |
 | OpenBrowse | claude-opus-5 | none | TBD | TBD | TBD | TBD | TBD |
+
+<sup>1</sup> Extracted data successfully, but also sent incorrect data for fields that did not appear in our benchmark (e.g. job seniority). See "Anti-hallucination" above.
 
 OpenAI and Anthropic models are generally at their best at the opposite ends of the reasoning dial. For example, OpenAI's GPT-5.6-Terra performs better with less reasoning, spending less time planning ahead and more time reacting to the page in front of it, while Anthropic's 5-series Claude models lean towards rabbit holes and need reasoning time to refocus on the goal.
 
