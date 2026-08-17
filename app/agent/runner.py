@@ -1192,8 +1192,7 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
             max_retries=3,
             # @nonobvious(forced-by): a free-form dict parameter (e.g. add_item's
             # item) becomes a property-less {"type": "object"}, and a
-            # response_schema built from that can only ever emit {}; the schema
-            # rides in the prompt and the reply is parsed tolerantly instead.
+            # response_schema built from that can only ever emit {}.
             supports_structured_output=False,
             config={"thinking_config": thinking},
         )
