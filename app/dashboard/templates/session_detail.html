@@ -629,6 +629,7 @@ OpenBrowse{% endblock %} {% block head %}
         <div id="completion-card" class="completion-card hidden"></div>
       </div>
       <div id="activity-bar" class="activity-bar hidden"></div>
+      <div id="stream-bar" class="hidden"></div>
       <div id="feed-rows"></div>
     </div>
     {% if session.keep_alive %}
@@ -645,6 +646,7 @@ OpenBrowse{% endblock %} {% block head %}
 </div>
 
 <script>
+document.addEventListener("DOMContentLoaded", function () {
   const TERMINAL = ["stopped", "error", "idle", "expired"];
   const BUSY = ["running", "created"];
   const SESSION_ID = "{{ session.id }}";
@@ -662,7 +664,11 @@ OpenBrowse{% endblock %} {% block head %}
     browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
   let browserLive = browserPanel.dataset.browserLive === "1";
   let activityIndicatorType = null;
+  let firstMessagesBatchDone = false;
   const activityBar = document.getElementById("activity-bar");
+  const streamingResponse = new OpenBrowseAgents.StreamingResponse(
+    document.getElementById("stream-bar")
+  );
 
   function buildSpinBars() {
     let bars = "";
@@ -674,7 +680,7 @@ OpenBrowse{% endblock %} {% block head %}
   }
 
   function renderActivity() {
-    if (!activityState || TERMINAL.includes(lastStatus)) {
+    if (!activityState || TERMINAL.includes(lastStatus) || activityState.stream) {
       activityBar.classList.add("hidden");
       activityIndicatorType = null;
       return;
@@ -908,6 +914,7 @@ OpenBrowse{% endblock %} {% block head %}
     const tpl = document.createElement("template");
     tpl.innerHTML = (html || "").trim();
     formatTimes(tpl.content);
+    const isLiveBatch = firstMessagesBatchDone;
     tpl.content.querySelectorAll(".msg-row").forEach(function (row) {
       const type = row.dataset.type || "info";
       const sumEl = row.querySelector(".msg-summary");
@@ -921,8 +928,20 @@ OpenBrowse{% endblock %} {% block head %}
         renderCompletion();
         return;
       }
-      feedRows.insertBefore(row.cloneNode(true), feedRows.firstChild);
+      const isReasoning = isLiveBatch && !!row.querySelector(".cat-reasoning");
+      const wasStreaming = isReasoning && streamingResponse.hasLiveContent();
+      const node = row.cloneNode(true);
+      feedRows.insertBefore(node, feedRows.firstChild);
+      if (isReasoning) {
+        if (wasStreaming) {
+          streamingResponse.hide();
+          OpenBrowseAgents.handoff.revealCards(node);
+        } else {
+          OpenBrowseAgents.handoff.fadeRowIn(node);
+        }
+      }
     });
+    firstMessagesBatchDone = true;
     detectOverflow(feedRows);
     outputPanel.scrollTop = 0;
   }
@@ -1034,6 +1053,11 @@ OpenBrowse{% endblock %} {% block head %}
       const successChanged = nextIsSuccessful !== lastIsSuccessful;
       lastIsSuccessful = nextIsSuccessful;
       activityState = data.activity || null;
+      if (activityState && activityState.stream && !TERMINAL.includes(lastStatus)) {
+        streamingResponse.update(activityState);
+      } else {
+        streamingResponse.hide();
+      }
       renderActivity();
       syncControls();
       if (data.output && data.output !== currentOutput) {
@@ -1045,5 +1069,6 @@ OpenBrowse{% endblock %} {% block head %}
       setBrowser(data.status, data.liveUrl);
     } catch (e) {}
   });
+});
 </script>
 {% endblock %}
