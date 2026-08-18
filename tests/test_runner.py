@@ -1,5 +1,6 @@
 """Agent runner tests — model registry, provider routing, reasoning, LLM builder."""
 
+import json
 import types
 
 import pytest
@@ -1327,3 +1328,99 @@ def test_every_stale_captcha_claim_has_a_replacement_for_both_modes() -> None:
 
     assert len(_SOLVING_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)
     assert len(_UNSOLVABLE_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)
+
+
+_SALVAGE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items", "indexPageUrl"],
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "url"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                },
+            },
+        },
+        "indexPageUrl": {"type": "string"},
+    },
+}
+
+
+def _salvage_parts(*, complete: bool):
+    from app.agent.output_store import OutputStore
+    from app.agent.schema import json_schema_to_pydantic
+
+    model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
+    store = OutputStore(model)
+    store.add_item({"title": "Engineer", "url": "https://example.com/1"})
+    if complete:
+        store.set_field("indexPageUrl", "https://example.com/jobs")
+    return store, model
+
+
+def _agent_with_result(text: str | None):
+    file = types.SimpleNamespace(read=lambda: text)
+    fs = types.SimpleNamespace(get_file=lambda name: file if text is not None else None)
+    return types.SimpleNamespace(file_system=fs)
+
+
+def test_budget_salvage_keeps_a_complete_store_as_a_success():
+    from app.agent.runner import _budget_salvage
+
+    store, model = _salvage_parts(complete=True)
+    output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
+
+    assert is_successful is True
+    assert json.loads(output)["items"][0]["title"] == "Engineer"
+
+
+def test_budget_salvage_keeps_an_incomplete_store_but_calls_it_a_failure():
+    from app.agent.runner import _budget_salvage
+
+    store, model = _salvage_parts(complete=False)
+    output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
+
+    assert is_successful is False
+    assert json.loads(output)["items"][0]["url"] == "https://example.com/1"
+
+
+def test_budget_salvage_falls_back_to_result_json_when_the_store_is_empty():
+    from app.agent.output_store import OutputStore
+    from app.agent.runner import _budget_salvage
+    from app.agent.schema import json_schema_to_pydantic
+
+    model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
+    empty = OutputStore(model)
+    text = json.dumps({"items": [], "indexPageUrl": "https://example.com/jobs"})
+
+    output, is_successful = _budget_salvage(_agent_with_result(text), empty, {}, model)
+
+    assert output == text
+    assert is_successful is False
+
+
+def test_budget_salvage_reports_nothing_when_there_is_nothing_to_keep():
+    from app.agent.output_store import OutputStore
+    from app.agent.runner import _budget_salvage
+    from app.agent.schema import json_schema_to_pydantic
+
+    model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
+    empty = OutputStore(model)
+
+    assert _budget_salvage(_agent_with_result(None), empty, {}, model) == ("", False)
+
+
+def test_budget_salvage_never_claims_success_without_a_schema():
+    """No schema means no completeness gate, so nothing can vouch for the answer."""
+    from app.agent.runner import _budget_salvage
+
+    output, is_successful = _budget_salvage(_agent_with_result("some prose"), None, {}, None)
+
+    assert output == "some prose"
+    assert is_successful is False
