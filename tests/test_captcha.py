@@ -51,6 +51,27 @@ def _ctx(**kw):
     return SolveContext(**base)
 
 
+def test_solve_captcha_action_registers():
+    from browser_use import Tools
+    from app.agent.captcha.tools import register_captcha_tools
+    with patch("app.agent.captcha.tools.settings") as s:
+        s.capsolver_api_key = "k"
+        s.captcha_proxy = ""
+        tools = Tools()
+        register_captcha_tools(tools, [], None)
+        assert "solve_captcha" in tools.registry.registry.actions
+
+
+def test_solve_captcha_absent_without_key():
+    from browser_use import Tools
+    from app.agent.captcha.tools import register_captcha_tools
+    with patch("app.agent.captcha.tools.settings") as s:
+        s.capsolver_api_key = ""
+        tools = Tools()
+        register_captcha_tools(tools, [], None)
+        assert "solve_captcha" not in tools.registry.registry.actions
+
+
 def test_all_strategies_registered_and_unique():
     strats = all_strategies()
     kinds = [s.kind for s in strats]

@@ -86,7 +86,7 @@ def register_captcha_tools(
 
     @tools.action(_SOLVE_DESCRIPTION)
     async def solve_captcha(
-        browser_session: BrowserSession,
+        browser_session,
         hint_type: str | None = None,
         hint_site_key: str | None = None,
     ) -> ActionResult:
