@@ -1,7 +1,6 @@
 """Agent runner tests — model registry, provider routing, reasoning, LLM builder."""
 
 import types
-from datetime import datetime, timezone
 
 import pytest
 
@@ -188,9 +187,8 @@ def test_every_model_is_priced():
     import app.agent.runner as runner
     from app.agent import cost
 
-    now = datetime(2026, 8, 15, tzinfo=timezone.utc)
     for model_id in set(runner._ANTHROPIC_MODELS) | set(runner._OPENAI_MODELS):
-        assert cost._lookup(model_id, now) is not None, model_id
+        assert cost._lookup(model_id) is not None, model_id
 
 
 def test_validate_effort_semantics():

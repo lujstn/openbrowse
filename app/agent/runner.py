@@ -1914,7 +1914,7 @@ async def run_agent_session(session_id: str) -> None:
             set_activity(session_id, "Running actions")
 
             usage_history = agent_instance.token_cost_service.usage_history
-            llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+            llm_cost = cost.history_cost(usage_history)
             capsolver_cost = sum(capsolver_costs)
             total_cost = llm_cost + capsolver_cost
             await crud.update_session(
@@ -2068,7 +2068,7 @@ async def run_agent_session(session_id: str) -> None:
                 logger.debug("store-complete success check failed", exc_info=True)
 
         usage_history = agent.token_cost_service.usage_history
-        llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+        llm_cost = cost.history_cost(usage_history)
         capsolver_cost = sum(capsolver_costs)
         total_cost = llm_cost + capsolver_cost
         total_input = sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)

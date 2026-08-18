@@ -12,13 +12,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _MTOK = 1_000_000
-_SONNET_5_CUTOVER = date(2026, 9, 1)
 _OPENAI_LONG_THRESHOLD = 272_000
 
 
@@ -57,6 +55,7 @@ _PRICING: dict[str, ModelPricing] = {
     "claude-opus-4-8": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
     "claude-opus-4-7": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
     "claude-opus-4-6": ModelPricing(_p(5, 0.5, 6.25, 10, 25)),
+    "claude-sonnet-5": ModelPricing(_p(2, 0.2, 2.5, 4, 10)),
     "claude-sonnet-4-6": ModelPricing(_p(3, 0.3, 3.75, 6, 15)),
     "gpt-5.6-sol": ModelPricing(
         standard=_p(5, 0.5, 6.25, 0, 30),
@@ -76,15 +75,7 @@ _PRICING: dict[str, ModelPricing] = {
 }
 
 
-def _sonnet_5_pricing(now: datetime) -> ModelPricing:
-    if now.date() < _SONNET_5_CUTOVER:
-        return ModelPricing(_p(2, 0.2, 2.5, 4, 10))
-    return ModelPricing(_p(3, 0.3, 3.75, 6, 15))
-
-
-def _lookup(model_id: str, now: datetime) -> ModelPricing | None:
-    if model_id == "claude-sonnet-5":
-        return _sonnet_5_pricing(now)
+def _lookup(model_id: str) -> ModelPricing | None:
     return _PRICING.get(model_id)
 
 
@@ -92,10 +83,9 @@ def _is_openai(model_id: str) -> bool:
     return model_id.startswith(("gpt", "o1", "o3", "o4", "chatgpt"))
 
 
-def usage_cost(model_id: str, usage: Any, *, now: datetime | None = None) -> float:
+def usage_cost(model_id: str, usage: Any) -> float:
     """USD cost of a single model invocation from its real token usage."""
-    now = now or datetime.now(timezone.utc)
-    pricing = _lookup(model_id, now)
+    pricing = _lookup(model_id)
     if pricing is None:
         logger.warning("No price table for model %r; counting its cost as 0", model_id)
         return 0.0
@@ -142,12 +132,11 @@ def usage_cost(model_id: str, usage: Any, *, now: datetime | None = None) -> flo
     return cost * multiplier
 
 
-def history_cost(usage_history: Any, *, now: datetime | None = None) -> float:
+def history_cost(usage_history: Any) -> float:
     """Total USD cost across a token_cost_service.usage_history list."""
-    now = now or datetime.now(timezone.utc)
     total = 0.0
     for entry in usage_history or []:
         if getattr(entry, "usage", None) is None:
             continue
-        total += usage_cost(entry.model, entry.usage, now=now)
+        total += usage_cost(entry.model, entry.usage)
     return total
