@@ -53,10 +53,6 @@ class Settings:
     captcha_proxy: str = field(
         default_factory=lambda: os.environ.get("CAPTCHA_PROXY", "")
     )
-    captcha_auto_solve: bool = field(
-        default_factory=lambda: os.environ.get("CAPTCHA_AUTO_SOLVE", "").lower()
-        in ("1", "true", "yes")
-    )
     # @nonobvious(must-hold): the address a solve is billed against comes from the
     # page, which can name any site it likes, so spending is capped by default and
     # only an explicit setting may widen or remove the ceiling.

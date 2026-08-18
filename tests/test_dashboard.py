@@ -455,3 +455,13 @@ async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monke
     assert stored["max_cost_usd"] == 3.0
     if routes._dispatched_tasks:
         await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
+
+
+async def test_settings_page_offers_every_captcha_setting(client):
+    """A setting only reachable by hand-editing .env is one most users never find."""
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+
+    assert resp.status_code == 200
+    assert "CAPTCHA solving" in resp.text
+    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD", "CAPTCHA_PROXY"):
+        assert name in resp.text, f"{name} is not offered on the settings page"
