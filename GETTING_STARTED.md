@@ -84,8 +84,8 @@ agent never has to name the challenge type.
 | reCAPTCHA v3 Enterprise | ✅ | ✅ | |
 | reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you; the click-the-grid path is unproven and not offered |
 | Cloudflare Turnstile | ✅ | ✅ | |
-| Geetest v3 and v4 | ✅ | ❌ | Implemented with runtime parameter and callback capture; awaiting live revalidation |
-| MTCaptcha | ✅ | ❌ | Implemented with runtime configuration and verified-callback support; awaiting live revalidation |
+| Geetest v3 and v4 | ✅ | ✅ | Proven end to end against live challenges, including fresh v3 challenge registration and provider callbacks |
+| MTCaptcha | ✅ | ✅ | Proven end to end against a live challenge using runtime configuration and verified-callback support |
 | AWS WAF, token | ✅ | ✅ | Cleared by writing the token as a cookie and re-requesting the page |
 | Image to text | ❌ | ✅ | Asked for by name, with the answer field's selector, since a bare image has no reliable marker |
 | AWS WAF, image | ❌ | ❌ | Written but unproven, so it is named and refused rather than charged for |
@@ -97,10 +97,12 @@ type that list does not offer, so this table cannot quietly drift from what the
 service will actually accept. A challenge it cannot solve is still recognised and
 named, costing nothing, rather than being missed or charged for.
 
-Only reCAPTCHA v2 has been proven against live challenges so far. The rest are
-implemented and covered by tests, and each will tell you plainly if it cannot
-clear a challenge rather than reporting a success it did not achieve. A challenge
-type marked as not solved creates no task, so it costs nothing to meet one.
+The live acceptance suite proves reCAPTCHA v2 (checkbox, explicit and invisible),
+reCAPTCHA v3 with multiple page actions, Cloudflare Turnstile, MTCaptcha and
+Geetest v3 and v4. Other solved types are implemented and covered by local tests,
+and each will tell you plainly if it cannot clear a challenge rather than reporting
+a success it did not achieve. A challenge type marked as not solved creates no
+task, so it costs nothing to meet one.
 
 A solved challenge is written straight into the page, so its checkbox does not
 visibly tick. Success is judged only by the page moving on, never by the widget's
