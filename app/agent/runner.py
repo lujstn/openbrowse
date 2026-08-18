@@ -127,8 +127,11 @@ _CAPTCHA_EXTENSION = (
     "solve_captcha is yours to call: calling it IS the fix. Switching to another "
     "search engine or another site is a retreat rather than a solution, so solve the "
     "challenge first and only reroute once the solver has told you the page is still "
-    "refusing. Judge it the way you judge any other blocker, by the page actually "
-    "moving on, and pass the site key if you can read it off the widget."
+    "refusing. A solved challenge is written straight into the page, so its checkbox "
+    "will not visibly tick: never judge the solve by how the widget looks, and never "
+    "solve again just because it still appears unticked. When the solver says the "
+    "solution is placed, submit the form and read what the page says in reply; judge "
+    "it the way you judge any other blocker, by the page actually moving on."
 )
 
 _CLIPBOARD_EXTENSION = (

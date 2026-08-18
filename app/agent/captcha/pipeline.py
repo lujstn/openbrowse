@@ -163,11 +163,16 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                     return ActionResult(
                         extracted_content=(
                             f"A {det.kind} solution is now in the page on {host}. The "
-                            "widget is satisfied but the page has not moved on its own: "
-                            "carry on with whatever the form needed, then check the page "
-                            "actually accepted it."
+                            "checkbox will NOT visibly tick, because the solution is "
+                            "written straight into the page rather than by clicking it, "
+                            "so do not judge this by the widget's appearance and do not "
+                            "solve again. Submit the form now, the way the page expects, "
+                            "then check what the page says in reply."
                         ),
-                        long_term_memory=f"solve_captcha: {det.kind} solution placed on {host}",
+                        long_term_memory=(
+                            f"solve_captcha: {det.kind} solved on {host}; the widget will "
+                            "not look ticked, so submit the form and read the reply"
+                        ),
                     )
 
                 if attempt == 1:
