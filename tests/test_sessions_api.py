@@ -1,5 +1,6 @@
 """Tests for the v3-compatible Sessions API."""
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -50,6 +51,13 @@ async def test_create_session_with_task(mock_submit, client):
     assert data["status"] == "created"
     assert data["model"] == "claude-sonnet-4.6"
     mock_submit.assert_called_once()
+
+    from app.db import crud
+
+    messages, _ = await crud.list_messages(data["id"], limit=10)
+    assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
+        "Go to google.com"
+    ]
 
 
 async def test_create_session_without_task(client):
@@ -332,3 +340,200 @@ async def test_rerun_scales_a_budget_the_caller_resends(
     )
     assert again.status_code == 200
     assert again.json()["maxCostUsd"] == "2.0"
+
+
+@pytest.fixture(autouse=True)
+def _clear_live_sessions():
+    from app.agent import live
+
+    live._live.clear()
+    yield
+    live._live.clear()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_continues_a_parked_session(mock_submit, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "Is he really PM?"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+    assert entry.inbox.get_nowait() == "Is he really PM?"
+    mock_submit.assert_not_called()
+    messages, _ = await crud.list_messages(session["id"], limit=10)
+    assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
+        "Is he really PM?"
+    ]
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_changing_the_model_starts_over(mock_submit, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(
+        task="first task", model="claude-sonnet-5", keep_alive=True
+    )
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    async def worker():
+        await entry.release.wait()
+        live.unregister(entry)
+
+    released = asyncio.create_task(worker())
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={
+            "sessionId": session["id"],
+            "task": "Is he really PM?",
+            "model": "claude-opus-4.8",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "created"
+    await released
+    assert entry.release.is_set()
+    assert entry.inbox.empty()
+    mock_submit.assert_called_once()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_differently(
+    mock_submit, client
+):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(
+        task="first task", model="claude-sonnet-4-6", keep_alive=True
+    )
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={
+            "sessionId": session["id"],
+            "task": "Is he really PM?",
+            "model": "claude-sonnet-4.6",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert entry.inbox.get_nowait() == "Is he really PM?"
+    assert not entry.release.is_set()
+    mock_submit.assert_not_called()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_accepted_after_a_keepalive_session_was_released(
+    mock_submit, client
+):
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "Is he really PM?"}
+    )
+
+    assert resp.status_code == 200
+    mock_submit.assert_called_once()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client):
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=False)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "again please"}
+    )
+
+    assert resp.status_code == 422
+    mock_submit.assert_not_called()
+
+
+@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+async def test_stop_task_strategy_leaves_a_keepalive_browser_standing(
+    mock_cancel, client
+):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="running")
+    stopped: list[bool] = []
+    entry = live.register(session["id"], SimpleNamespace(stop=lambda: stopped.append(True)))
+
+    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "task"})
+
+    assert resp.status_code == 200
+    assert stopped == [True]
+    assert not entry.release.is_set()
+    mock_cancel.assert_not_called()
+    assert (await crud.get_session(session["id"]))["status"] == "running"
+
+
+@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+async def test_stop_task_strategy_keeps_a_plain_session_addressable(mock_cancel, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=False)
+    await crud.update_session(session["id"], status="running")
+    live.register(session["id"], SimpleNamespace(stop=lambda: None))
+
+    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "task"})
+
+    assert resp.status_code == 200
+    # the task ends, the session does not: it parks and waits for the next one
+    assert (await crud.get_session(session["id"]))["keep_alive"] == 1
+    mock_cancel.assert_not_called()
+
+
+@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace(stop=lambda: None))
+    live.park(entry)
+
+    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "session"})
+
+    assert resp.status_code == 200
+    assert entry.release.is_set()
+    mock_cancel.assert_called_once()
+    assert (await crud.get_session(session["id"]))["status"] == "stopped"

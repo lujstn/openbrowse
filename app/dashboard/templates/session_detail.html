@@ -386,6 +386,7 @@ OpenBrowse{% endblock %} {% block head %}
   .cat-schema { color: #fbbf24; background: rgba(251, 191, 36, 0.12); }
   .cat-goal { color: #fca5a5; background: rgba(248, 113, 113, 0.14); }
   .cat-judge { color: #a5b4fc; background: rgba(165, 180, 252, 0.12); }
+  .cat-system { color: #cbd5e1; background: rgba(203, 213, 225, 0.1); }
   .msg-summary {
     flex: 1;
     display: -webkit-box;
@@ -570,6 +571,7 @@ OpenBrowse{% endblock %} {% block head %}
     id="browser-panel"
     data-status="{{ session.status }}"
     data-live-url="{{ session.live_url or '' }}"
+    data-browser-live="{{ 1 if browser_live else 0 }}"
     data-max-concurrent="{{ max_concurrent }}"
     data-success="{{ session.is_task_successful if session.is_task_successful is not none else '' }}"
   >
@@ -613,10 +615,10 @@ OpenBrowse{% endblock %} {% block head %}
       <div id="feed-rows"></div>
     </div>
     {% if session.keep_alive %}
-    <form id="followup-form" class="followup" {% if session.status != 'idle' %}style="display: none"{% endif %}>
+    <form id="followup-form" class="followup" {% if session.status in ('running', 'created') %}style="display: none"{% endif %}>
       <input
         id="followup-input"
-        placeholder="Send a follow-up task to this session…"
+        placeholder="{% if browser_live %}Browser parked and waiting — send a follow-up…{% else %}Send a follow-up (starts a fresh browser)…{% endif %}"
         autocomplete="off"
       />
       <button class="followup-send" type="submit">Send</button>
@@ -627,6 +629,7 @@ OpenBrowse{% endblock %} {% block head %}
 
 <script>
   const TERMINAL = ["stopped", "error", "idle", "expired"];
+  const BUSY = ["running", "created"];
   const SESSION_ID = "{{ session.id }}";
   const feedRows = document.getElementById("feed-rows");
   const outputPanel = document.getElementById("output-panel");
@@ -639,6 +642,7 @@ OpenBrowse{% endblock %} {% block head %}
   let lastStatus = browserPanel.dataset.status;
   let lastIsSuccessful =
     browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
+  let browserLive = browserPanel.dataset.browserLive === "1";
   let activityIndicatorType = null;
   const activityBar = document.getElementById("activity-bar");
 
@@ -744,7 +748,14 @@ OpenBrowse{% endblock %} {% block head %}
 
   const followupForm = document.getElementById("followup-form");
   function syncFollowup(status) {
-    if (followupForm) followupForm.style.display = status === "idle" ? "flex" : "none";
+    if (!followupForm) return;
+    followupForm.style.display = BUSY.includes(status) ? "none" : "flex";
+    const input = document.getElementById("followup-input");
+    if (input) {
+      input.placeholder = browserLive
+        ? "Browser parked and waiting — send a follow-up…"
+        : "Send a follow-up (starts a fresh browser)…";
+    }
   }
   if (followupForm) {
     followupForm.addEventListener("submit", async function (e) {
@@ -775,7 +786,9 @@ OpenBrowse{% endblock %} {% block head %}
     '<line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/></svg>';
 
   function setBrowser(status, liveUrl) {
-    if (TERMINAL.includes(status)) {
+    // a keep-alive session parks with its tabs open: the stream only ends once
+    // the browser itself is gone
+    if (!browserLive && TERMINAL.includes(status)) {
       browserPanel.innerHTML = '<div class="no-live">' + ENDED_SVG + "<div>Stream ended</div></div>";
       return;
     }
@@ -888,6 +901,7 @@ OpenBrowse{% endblock %} {% block head %}
   });
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
+  syncFollowup(browserPanel.dataset.status);
   formatTimes();
   detectOverflow(feedRows);
 
@@ -911,7 +925,8 @@ OpenBrowse{% endblock %} {% block head %}
   const stopBtn = document.getElementById("stop-btn");
 
   function syncControls() {
-    stopBtn.style.display = TERMINAL.includes(lastStatus) ? "none" : "inline-block";
+    const stoppable = BUSY.includes(lastStatus) || browserLive;
+    stopBtn.style.display = stoppable ? "inline-block" : "none";
   }
 
   stopBtn.onclick = async function () {
@@ -946,6 +961,7 @@ OpenBrowse{% endblock %} {% block head %}
         "$" + usdUp(data.capsolverCostUsd);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       const dstat = displayStatus(data.status, data.isTaskSuccessful);
+      browserLive = !!data.browserLive;
       syncFollowup(data.status);
       document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
