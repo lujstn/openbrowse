@@ -1043,13 +1043,78 @@ def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
     )
 
     llm = types.SimpleNamespace(model="claude-sonnet-5")
-    corrected, hits = _captcha_corrected_system_prompt(llm, 8)
+    corrected, hits = _captcha_corrected_system_prompt(llm, 8, solving_available=True)
 
     assert corrected is not None
     assert hits >= 4
     assert "Do not attempt to solve CAPTCHAs manually" not in corrected
     assert "solve_captcha" in corrected
     assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
+
+
+def test_the_prompt_is_corrected_when_nothing_can_solve_a_captcha() -> None:
+    """Without a solver the stock prompt is more dangerous, not less: it tells the
+    model a solve is coming that never will."""
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    corrected, hits = _captcha_corrected_system_prompt(llm, 8, solving_available=False)
+
+    assert corrected is not None and hits >= 4
+    assert "cannot be solved in this session" in corrected
+    assert "solve_captcha" not in corrected
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
+
+
+def test_a_half_corrected_prompt_is_not_read_as_a_clean_one() -> None:
+    """A claim reworded upstream leaves the literals half matched; what survived has
+    to be read off the result, not inferred from the number that matched."""
+    from unittest.mock import patch
+
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    reworded = (
+        "CAPTCHAs are handled automatically.\n"
+        "Any CAPTCHA you meet gets resolved for you automatically."
+    )
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch("browser_use.agent.prompts.SystemPrompt") as system_prompt:
+        system_prompt.return_value.get_system_message.return_value = (
+            types.SimpleNamespace(content=reworded)
+        )
+        corrected, hits = _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True
+        )
+
+    assert hits == 1
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is not None
+
+
+def test_the_rebuilt_prompt_mirrors_the_agents_own_template_choice() -> None:
+    """The Agent parses replies against the schema its template describes, so a
+    rebuild that guesses these two can install a prompt for the wrong schema."""
+    from unittest.mock import patch
+
+    from app.agent.runner import _captcha_corrected_system_prompt
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch("browser_use.agent.prompts.SystemPrompt") as system_prompt:
+        system_prompt.return_value.get_system_message.return_value = (
+            types.SimpleNamespace(content="no claims here")
+        )
+        _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True, use_thinking=False, flash_mode=True
+        )
+
+    kwargs = system_prompt.call_args.kwargs
+    assert kwargs["use_thinking"] is False
+    assert kwargs["flash_mode"] is True
 
 
 def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
@@ -1061,10 +1126,31 @@ def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
     with patch(
         "browser_use.agent.prompts.SystemPrompt", side_effect=RuntimeError("gone")
     ):
-        corrected, hits = _captcha_corrected_system_prompt(llm, 8)
+        corrected, hits = _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True
+        )
 
     assert corrected is None
     assert hits == 0
+
+
+def test_a_failed_run_does_not_paste_its_result_into_the_session_row() -> None:
+    """The completion summary is copied to sessions.last_step_summary, which the
+    sessions list renders as a one-line headline for every row."""
+    from app.agent.runner import _completion_summary
+
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="x" * 40_000,
+        recovered_errors=0,
+    )
+
+    assert summary.startswith("Task failed: ")
+    assert len(summary) < 200
 
 
 def _fake_history(*, is_done: bool, final_result: str = ""):
@@ -1171,3 +1257,24 @@ def test_on_step_end_reports_stop_not_timeout_when_agent_was_stopped():
     assert "Cancelled by stop request" in src
     assert "Step timed out and was cancelled before completing" in src
     assert 'getattr(agent_instance.state, "stopped", False)' in src
+
+
+def test_the_no_solver_extension_offers_no_action_that_is_not_there() -> None:
+    from app.agent.runner import _CAPTCHA_EXTENSION, _CAPTCHA_UNAVAILABLE_EXTENSION
+
+    assert "solve_captcha" in _CAPTCHA_EXTENSION
+    assert "solve_captcha" not in _CAPTCHA_UNAVAILABLE_EXTENSION
+    assert "none can be solved in this session" in _CAPTCHA_UNAVAILABLE_EXTENSION
+
+
+def test_every_stale_captcha_claim_has_a_replacement_for_both_modes() -> None:
+    """The three tables are zipped, and zip would silently drop the tail of any
+    claim left without a replacement."""
+    from app.agent.runner import (
+        _SOLVING_REPLACEMENTS,
+        _STALE_CAPTCHA_CLAIMS,
+        _UNSOLVABLE_REPLACEMENTS,
+    )
+
+    assert len(_SOLVING_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)
+    assert len(_UNSOLVABLE_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)

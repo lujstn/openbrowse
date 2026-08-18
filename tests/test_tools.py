@@ -1,7 +1,5 @@
 """Tool registration tests (no live API calls)."""
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from browser_use import Tools
 

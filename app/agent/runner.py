@@ -35,7 +35,7 @@ from app.agent.leak_repair import (
 )
 from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
-from app.agent.captcha import detect_captcha, register_captcha_tools
+from app.agent.captcha import register_captcha_tools
 from app.agent.tools import (
     TabManager,
     _eval_js,
@@ -134,6 +134,14 @@ _CAPTCHA_EXTENSION = (
     "it the way you judge any other blocker, by the page actually moving on."
 )
 
+_CAPTCHA_UNAVAILABLE_EXTENSION = (
+    "No CAPTCHA is solved for you here, and none can be solved in this session: "
+    "there is no solver configured, so there is no action that will get you past a "
+    "challenge. If one blocks the page you need, say so plainly and say what it "
+    "blocked. Reaching a different page instead is a partial result, not a success, "
+    "so never report the task as done because you found a way around the block."
+)
+
 _CLIPBOARD_EXTENSION = (
     "You carry a clipboard: remember(key, value) keeps anything you need to remember "
     "between pages, recall(key) brings it back, and startUrl is already stored there."
@@ -172,35 +180,55 @@ _GOAL_PROMPT = (
 )
 
 
-_CAPTCHA_CLAIM_FIXES: tuple[tuple[str, str], ...] = (
-    (
-        "CAPTCHAs are automatically solved by the browser. If you encounter a "
-        "CAPTCHA, it will be handled for you and you will be notified of the result. "
-        "Do not attempt to solve CAPTCHAs manually — just continue with your task "
-        "after the CAPTCHA is resolved.",
-        "No CAPTCHA is solved on your behalf here. When you hit one, solve it "
-        "yourself with the solve_captcha action and then carry on with your task.",
-    ),
-    (
-        "CAPTCHAs are handled automatically.",
-        "You must solve CAPTCHAs yourself with the solve_captcha action.",
-    ),
-    (
-        "CAPTCHAs are solved automatically.",
-        "You must solve CAPTCHAs yourself with the solve_captcha action.",
-    ),
-    ("auto-solved CAPTCHAs", "CAPTCHAs you solved"),
-    (
-        "Captcha appeared twice on this site. Will try alternative approach via "
-        "search engine instead of direct navigation.",
-        "Captcha appeared twice on this site. Solved it with solve_captcha both "
-        "times and carried on.",
-    ),
+_STALE_CAPTCHA_CLAIMS: tuple[str, ...] = (
+    "CAPTCHAs are automatically solved by the browser. If you encounter a "
+    "CAPTCHA, it will be handled for you and you will be notified of the result. "
+    "Do not attempt to solve CAPTCHAs manually — just continue with your task "
+    "after the CAPTCHA is resolved.",
+    "CAPTCHAs are handled automatically.",
+    "CAPTCHAs are solved automatically.",
+    "auto-solved CAPTCHAs",
+    "Captcha appeared twice on this site. Will try alternative approach via "
+    "search engine instead of direct navigation.",
+)
+
+_SOLVING_REPLACEMENTS: tuple[str, ...] = (
+    "No CAPTCHA is solved on your behalf here. When you hit one, solve it "
+    "yourself with the solve_captcha action and then carry on with your task.",
+    "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    "CAPTCHAs you solved",
+    "Captcha appeared twice on this site. Solved it with solve_captcha both "
+    "times and carried on.",
+)
+
+_UNSOLVABLE_REPLACEMENTS: tuple[str, ...] = (
+    "No CAPTCHA is solved on your behalf here, and none can be solved in this "
+    "session. When you hit one, report plainly what it blocked rather than "
+    "treating a way around it as success.",
+    "CAPTCHAs cannot be solved in this session.",
+    "CAPTCHAs cannot be solved in this session.",
+    "CAPTCHAs that blocked you",
+    "Captcha appeared twice on this site. Reported it as a block rather than "
+    "calling a way around it a success.",
 )
 
 
+def _captcha_claim_fixes(solving_available: bool) -> tuple[tuple[str, str], ...]:
+    """Upstream's captcha claims paired with what is actually true of this session."""
+    replacements = (
+        _SOLVING_REPLACEMENTS if solving_available else _UNSOLVABLE_REPLACEMENTS
+    )
+    return tuple(zip(_STALE_CAPTCHA_CLAIMS, replacements))
+
+
 def _captcha_corrected_system_prompt(
-    llm: Any, max_actions: int
+    llm: Any,
+    max_actions: int,
+    *,
+    solving_available: bool,
+    use_thinking: bool = True,
+    flash_mode: bool = False,
 ) -> tuple[str | None, int]:
     """Upstream's own system prompt with its "CAPTCHAs are solved for you" claims put
     right, and how many of them were found.
@@ -217,6 +245,11 @@ def _captcha_corrected_system_prompt(
         model_name = str(getattr(llm, "model", "") or "")
         message = SystemPrompt(
             max_actions_per_step=max_actions,
+            # @nonobvious(must-hold): these two pick the template, and the Agent parses
+            # the model's replies against the schema its own template describes, so a
+            # rebuild that guesses them can install a prompt for the wrong schema.
+            use_thinking=use_thinking,
+            flash_mode=flash_mode,
             is_anthropic=isinstance(llm, ChatAnthropic),
             is_browser_use_model="browser-use/" in model_name.lower(),
             model_name=model_name,
@@ -228,7 +261,7 @@ def _captcha_corrected_system_prompt(
     if not isinstance(base, str):
         return None, 0
     hits = 0
-    for stale, corrected in _CAPTCHA_CLAIM_FIXES:
+    for stale, corrected in _captcha_claim_fixes(solving_available):
         found = base.count(stale)
         if found:
             hits += found
@@ -1279,7 +1312,7 @@ def _completion_summary(
     if is_done and raw_success and not schema_valid:
         return "Task finished but the result did not match the requested schema"
     if is_done and not raw_success:
-        reason = f": {done_text}" if done_text else ""
+        reason = f": {_friendly_error(done_text)}" if done_text else ""
         return f"Task failed{reason}"
     if stopped:
         return "Task failed: stopped before the goal was reached"
@@ -1892,19 +1925,37 @@ async def run_agent_session(session_id: str) -> None:
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,
         ]
-        if settings.capsolver_api_key:
-            extension_parts.append(_CAPTCHA_EXTENSION)
-            corrected, claim_hits = _captcha_corrected_system_prompt(
-                llm, agent_kwargs["max_actions_per_step"]
+        # @nonobvious(must-hold): the stock prompt tells the model four times over
+        # that captchas are handled for it. That is false here whether or not a solver
+        # is configured, and it is worse without one: the model waits for a solve that
+        # can never arrive, or quietly reroutes and calls that success.
+        solving_available = bool(settings.capsolver_api_key)
+        extension_parts.append(
+            _CAPTCHA_EXTENSION if solving_available else _CAPTCHA_UNAVAILABLE_EXTENSION
+        )
+        # @nonobvious(mirrors): the Agent forces flash mode for its own provider's
+        # models, and parses replies against the schema its template describes.
+        flash_mode = bool(agent_kwargs.get("flash_mode", False)) or (
+            getattr(llm, "provider", "") == "browser-use"
+        )
+        corrected, claim_hits = _captcha_corrected_system_prompt(
+            llm,
+            agent_kwargs["max_actions_per_step"],
+            solving_available=solving_available,
+            use_thinking=bool(agent_kwargs.get("use_thinking", True)),
+            flash_mode=flash_mode,
+        )
+        if corrected and claim_hits:
+            agent_kwargs["override_system_message"] = corrected
+            logger.info("corrected %d CAPTCHA claims in the system prompt", claim_hits)
+        # @nonobvious(must-hold): a claim reworded upstream leaves the literals only
+        # half matched, so what survived has to be read off the result rather than
+        # inferred from the number that matched.
+        if corrected is None or _STALE_CAPTCHA_CLAIM_RE.search(corrected):
+            await _captcha_progress(
+                "Could not fully correct the model's built-in CAPTCHA instructions, "
+                "so it may still believe challenges are handled for it."
             )
-            if corrected and claim_hits:
-                agent_kwargs["override_system_message"] = corrected
-                logger.info("corrected %d CAPTCHA claims in the system prompt", claim_hits)
-            elif corrected is None or _STALE_CAPTCHA_CLAIM_RE.search(corrected):
-                await _captcha_progress(
-                    "Could not correct the model's built-in CAPTCHA instructions, so "
-                    "it may ignore solve_captcha on a challenge."
-                )
         if store is not None:
             extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
         extension_parts.append(_BEGIN_EXTENSION)
