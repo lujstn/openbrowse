@@ -224,6 +224,24 @@ async def test_pipeline_cost_cap_refuses():
     assert "cap" in (res.error or "").lower()
 
 
+async def test_solve_context_names_the_documents_base_address():
+    from app.agent.captcha import tools as ctools
+    seen = []
+
+    async def fake_eval(session, expr):
+        seen.append(expr)
+        return "https://origin.example/verify"
+
+    with patch.object(ctools, "_eval_js", fake_eval), \
+         patch.object(ctools.cdp, "page_cookie_header", AsyncMock(return_value="")):
+        ctx = await ctools._build_ctx(
+            SimpleNamespace(), Detection(kind="recaptcha_v2"), None, []
+        )
+    assert any("baseURI" in e for e in seen)
+    assert ctx.page_url == "https://origin.example/verify"
+    assert ctx.host == "origin.example"
+
+
 def test_token_is_placed_inside_the_widgets_form():
     from app.agent.captcha.strategies.recaptcha import _PLACE_JS
     assert 'closest("form")' in _PLACE_JS
