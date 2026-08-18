@@ -9,10 +9,15 @@ from browser_use import BrowserSession
 
 from app.agent.browser_cdp import _eval_js
 from app.agent.captcha.base import Detection, TokenStrategy
-from app.agent.captcha.probe import probe_page
 from app.agent.captcha.registry import register
 
 logger = logging.getLogger(__name__)
+
+_REFRESH_V3_JS = r"""(async function () {
+  var bridge = window.__openbrowseCaptchaBridge;
+  if (!bridge || typeof bridge.refreshGeetestV3 !== "function") return null;
+  try { return await bridge.refreshGeetestV3(); } catch (e) { return null; }
+})()"""
 
 _PLACE_JS = r"""(function (solution, version, widgetSelector) {
   var mapped = version === 3 ? {
@@ -90,9 +95,10 @@ class GeetestV3(TokenStrategy):
         return task
 
     async def capture(self, det, ctx):
-        fresh = await probe_page(ctx.session)
-        if not fresh or fresh.get("kind") != self.kind:
-            return {}
+        fresh = await _eval_js(ctx.session, _REFRESH_V3_JS)
+        if not isinstance(fresh, dict) or not fresh.get("challenge"):
+            logger.info("solve_captcha: no replayable geetest_v3 challenge source")
+            return {"challenge": ""}
         return {
             key: fresh[key]
             for key in ("gt", "challenge", "geetestApiServer")

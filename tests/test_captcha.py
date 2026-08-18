@@ -238,12 +238,11 @@ async def test_geetest_v3_refreshes_runtime_parameters_before_the_task():
 
     strat = strategy_for("geetest_v3")
     fresh = {
-        "kind": "geetest_v3",
         "gt": "fresh-gt",
         "challenge": "fresh-challenge",
         "geetestApiServer": "api.example",
     }
-    with patch.object(geetest_mod, "probe_page", AsyncMock(return_value=fresh)):
+    with patch.object(geetest_mod, "_eval_js", AsyncMock(return_value=fresh)):
         captured = await strat.capture(
             Detection(kind="geetest_v3", params={"gt": "old", "challenge": "old"}),
             _ctx(),
@@ -343,6 +342,60 @@ def test_bridge_preserves_initialisers_and_chainable_success_registration():
     assert 'return original.apply(this, arguments)' in _BRIDGE_JS
     assert 'slot.success.push(callback)' in _BRIDGE_JS
     assert 'configurable: true' in _BRIDGE_JS
+
+
+def test_bridge_captures_and_replays_the_page_geetest_registration_get():
+    from app.agent.captcha.bridge import _BRIDGE_JS
+
+    assert 'request.method !== "GET"' in _BRIDGE_JS
+    assert "response.clone().text()" in _BRIDGE_JS
+    assert "current.challenge === config.challenge" in _BRIDGE_JS
+    assert "state.refreshGeetestV3 = async function" in _BRIDGE_JS
+    assert 'cache: "no-store"' in _BRIDGE_JS
+
+
+async def test_geetest_v3_without_a_replayable_challenge_spends_nothing():
+    from app.agent.captcha.strategies import geetest as geetest_mod
+
+    strat = strategy_for("geetest_v3")
+    create = AsyncMock()
+    with patch.object(geetest_mod, "_eval_js", AsyncMock(return_value=None)), \
+         patch.object(pipeline.client, "create_task", create):
+        result = await pipeline.run_solve(
+            strat,
+            Detection(kind="geetest_v3", params={"gt": "g", "challenge": "used"}),
+            _ctx(),
+            {},
+        )
+    assert "could not be refreshed" in (result.error or "")
+    assert "nothing was spent" in (result.error or "").lower()
+    create.assert_not_awaited()
+
+
+async def test_geetest_v3_refreshes_again_after_a_stale_challenge_error():
+    from app.agent.captcha.strategies import geetest as geetest_mod
+
+    strat = strategy_for("geetest_v3")
+    refreshed = AsyncMock(side_effect=[
+        {"gt": "g", "challenge": "fresh-1"},
+        {"gt": "g", "challenge": "fresh-2"},
+    ])
+    create = AsyncMock(side_effect=[
+        {"errorId": 1, "errorDescription": "old challenge, error_code: error_02"},
+        {"solution": {"challenge": "c", "validate": "v", "seccode": "s"}},
+    ])
+    with patch.object(geetest_mod, "_eval_js", refreshed), \
+         patch.object(strat, "_place", AsyncMock()), \
+         patch.object(pipeline.client, "create_task", create):
+        result = await pipeline.run_solve(
+            strat,
+            Detection(kind="geetest_v3", params={"gt": "g", "challenge": "used"}),
+            _ctx(),
+            {},
+        )
+    assert result.error is None
+    assert create.await_args_list[0].args[1]["challenge"] == "fresh-1"
+    assert create.await_args_list[1].args[1]["challenge"] == "fresh-2"
 
 
 class _FakeStrategy(TokenStrategy):

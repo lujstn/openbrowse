@@ -48,6 +48,13 @@ def _fresh_single_use(fresh: Detection, old: Detection) -> bool:
     return False
 
 
+def _stale_geetest_v3_error(result: ActionResult) -> bool:
+    detail = (result.error or "").lower()
+    return "challenge" in detail and (
+        "old" in detail or "expired" in detail or "more than once" in detail
+    )
+
+
 async def _create_and_poll(
     client_http: httpx.AsyncClient, payload: dict[str, Any], strategy, det, ctx
 ) -> tuple[dict[str, Any] | None, float, ActionResult | None]:
@@ -153,11 +160,32 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                 extra = await strategy.capture(det, ctx)
                 if extra:
                     det = replace(det, params={**det.params, **extra})
+                missing = [k for k in strategy.required_params if not det.params.get(k)]
+                if missing:
+                    return ActionResult(
+                        error=(
+                            f"The current {det.kind} {' and '.join(missing)} parameter"
+                            f"{'s' if len(missing) != 1 else ''} could not be "
+                            "refreshed from the page's own challenge request. Nothing "
+                            "was created and nothing was spent. Reload the page and call "
+                            "solve_captcha again without clicking the widget."
+                        )
+                    )
                 payload = strategy.build_task(det, ctx)
 
                 await ctx.emit(f"captcha: solving {det.kind} on {host}")
                 solution, elapsed, err = await _create_and_poll(http, payload, strategy, det, ctx)
                 if err is not None:
+                    if (
+                        attempt == 1
+                        and det.kind == "geetest_v3"
+                        and _stale_geetest_v3_error(err)
+                    ):
+                        await ctx.emit(
+                            "captcha: stale GeeTest challenge, refreshing from the "
+                            "page request (attempt 2 of 2)"
+                        )
+                        continue
                     return err
 
                 fast = det.interstitial and elapsed < 5
