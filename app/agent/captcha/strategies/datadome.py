@@ -1,23 +1,20 @@
-"""DataDome strategy.
+"""DataDome detection.
 
-DataDome has no proxyless CapSolver variant, so without a configured proxy this
-registers only to return an honest capability-gap message from the pipeline.
+The solving service publishes no DataDome task, so a DataDome challenge is
+recognised and reported plainly rather than being missed or charged for.
 """
 
 from __future__ import annotations
 
-from browser_use import BrowserSession
-
 from app.agent.captcha.base import Detection, TokenStrategy
-from app.agent.captcha import cdp
 from app.agent.captcha.registry import register
 
 
 @register
 class DataDome(TokenStrategy):
     kind = "datadome"
-    requires_proxy = True
-    solution_keys = ("cookie", "token")
+    unsupported_reason = "the solving service offers no DataDome task"
+    response_fields = ("datadome",)
 
     def detect(self, probe):
         if probe.get("kind") != "datadome":
@@ -30,15 +27,4 @@ class DataDome(TokenStrategy):
         )
 
     def build_task(self, det, ctx):
-        return {
-            "type": "DataDomeSliderTask",
-            "websiteURL": ctx.page_url,
-            "captchaUrl": det.params.get("captchaUrl", ""),
-            "userAgent": ctx.user_agent,
-            "proxy": ctx.proxy,
-        }
-
-    async def _place(self, session: BrowserSession, solution, det):
-        cookie = solution.get("cookie")
-        if cookie:
-            await cdp.set_cookies(session, [{"name": "datadome", "value": str(cookie), "url": det.params.get("captchaUrl") or ""}])
+        raise NotImplementedError(self.unsupported_reason)

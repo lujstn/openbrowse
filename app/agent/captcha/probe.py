@@ -111,9 +111,10 @@ _PROBE_JS = r"""(function () {
       } catch (e) {}
     }
   } else {
-    var v3 = document.querySelector('script[src*="/recaptcha/api.js?render="]');
+    var ent = document.querySelector('script[src*="/recaptcha/enterprise.js?render="]');
+    var v3 = ent || document.querySelector('script[src*="/recaptcha/api.js?render="]');
     if (v3) {
-      out.kind = "recaptcha_v3";
+      out.kind = ent ? "recaptcha_v3_enterprise" : "recaptcha_v3";
       try {
         out.siteKey = new URL(v3.getAttribute("src"), location.href).searchParams.get("render") || "";
       } catch (e) {}

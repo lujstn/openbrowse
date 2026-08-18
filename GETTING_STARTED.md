@@ -82,16 +82,22 @@ agent never has to name the challenge type.
 | reCAPTCHA v2, including invisible and full-page verification walls | ✅ | ✅ | Proven end to end against live challenges |
 | reCAPTCHA v2 Enterprise | ✅ | ✅ | |
 | reCAPTCHA v3 | ✅ | ✅ | Score based, and the page action is assumed rather than read |
-| hCaptcha | ✅ | ✅ | |
+| reCAPTCHA v3 Enterprise | ✅ | ✅ | |
+| reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you |
 | Cloudflare Turnstile | ✅ | ✅ | |
 | Geetest v3 and v4 | ✅ | ✅ | Single-use parameters are refreshed before a retry |
 | MTCaptcha | ✅ | ✅ | |
 | AWS WAF, token | ✅ | ✅ | |
-| DataDome | ✅ | ⚠️ | Needs `CAPTCHA_PROXY`; without it the session is told so plainly |
-| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, and is not yet spotted automatically |
-| Image to text, and its vision engine | ❌ | ✅ | Solved when asked for by name, since a bare image has no reliable marker |
-| reCAPTCHA image grids, "select every bus" | ❌ | ✅ | Cleared by the ordinary reCAPTCHA solve, which answers the grid for you |
+| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, and is not spotted automatically |
+| Image to text | ❌ | ✅ | Solved when asked for by name, since a bare image has no reliable marker |
 | AWS WAF, image | ❌ | ❌ | Written but unproven, so it is not offered |
+| hCaptcha | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no hCaptcha task |
+| DataDome | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no DataDome task |
+
+Coverage follows Capsolver's published service list, and a test refuses any task
+type that list does not offer, so this table cannot quietly drift from what the
+service will actually accept. A challenge it cannot solve is still recognised and
+named, costing nothing, rather than being missed or charged for.
 
 Only reCAPTCHA v2 has been proven against live challenges so far. The rest are
 implemented and covered by tests, and each will tell you plainly if it cannot

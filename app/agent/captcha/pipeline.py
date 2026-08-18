@@ -105,6 +105,12 @@ async def _create_and_poll(
 async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[str, int]) -> ActionResult:
     host = ctx.host
 
+    if strategy.unsupported_reason:
+        await ctx.emit(f"captcha: {det.kind} cannot be solved here")
+        return ActionResult(
+            error=f"This page shows a {det.kind} challenge, and {strategy.unsupported_reason}. "
+            "Nothing was spent. Reach what you need by another path."
+        )
     if strategy.requires_proxy and not ctx.proxy:
         return ActionResult(
             error=f"The {det.kind} challenge type needs an upstream proxy, which is "

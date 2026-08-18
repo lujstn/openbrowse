@@ -49,11 +49,3 @@ class ImageToText(_ImageAnswerStrategy):
     def detect(self, probe):
         return None
 
-
-@register
-class VisionEngine(_ImageAnswerStrategy):
-    kind = "visionengine"
-    module = "common"
-
-    def detect(self, probe):
-        return None

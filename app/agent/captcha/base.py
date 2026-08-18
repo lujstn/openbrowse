@@ -78,6 +78,10 @@ class CaptchaStrategy(ABC):
     kind: ClassVar[str] = ""
     priority: ClassVar[int] = 0
     requires_proxy: ClassVar[bool] = False
+    # @nonobvious(means): set when the solving service offers no task for this
+    # challenge, so it is still recognised and reported rather than silently
+    # missed, but no task is created and nothing is charged.
+    unsupported_reason: ClassVar[str] = ""
     # @nonobvious(means): solution keys this strategy reads from the CapSolver
     # result, most-specific first; the poll loop uses these instead of guessing.
     solution_keys: ClassVar[tuple[str, ...]] = ("token",)

@@ -14,6 +14,19 @@ from app.agent.captcha.registry import detect_from_probe
 from app.agent.captcha import pipeline, probe as probe_mod
 
 
+# @nonobvious(mirrors): the solving service's published task list. A task type
+# absent here is one the service will refuse, so it must never be sent.
+SERVICE_TASK_TYPES = {
+    "AwsWafClassification", "ImageToTextTask", "ReCaptchaV2Classification",
+    "VisionEngine", "AntiTurnstileTaskProxyLess", "ReCaptchaV3TaskProxyLess",
+    "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask",
+    "ReCaptchaV3Task", "ReCaptchaV2TaskProxyLess",
+    "ReCaptchaV2EnterpriseTaskProxyLess", "AntiAwsWafTask",
+    "AntiAwsWafTaskProxyLess", "ReCaptchaV2EnterpriseTask",
+    "MtCaptchaTaskProxyLess", "MtCaptchaTask", "GeeTestTaskProxyLess",
+    "AntiCloudflareTask",
+}
+
 SAMPLE_PROBES = {
     "recaptcha_v2": {"kind": "recaptcha_v2", "siteKey": "sk", "dataS": "ds",
                      "apiOrigin": "https://widget.example", "confidence": 20},
@@ -22,12 +35,12 @@ SAMPLE_PROBES = {
                                 "confidence": 20},
     "recaptcha_v3": {"kind": "recaptcha_v3", "siteKey": "sk",
                      "apiOrigin": "https://widget.example", "confidence": 12},
-    "hcaptcha": {"kind": "hcaptcha", "siteKey": "sk", "confidence": 20},
+    "recaptcha_v3_enterprise": {"kind": "recaptcha_v3_enterprise", "siteKey": "sk",
+                                "apiOrigin": "https://widget.example", "confidence": 12},
     "turnstile": {"kind": "turnstile", "siteKey": "sk", "confidence": 20},
     "geetest_v3": {"kind": "geetest_v3", "gt": "g", "challenge": "c", "confidence": 15},
     "geetest_v4": {"kind": "geetest_v4", "captchaId": "cid", "confidence": 15},
     "mtcaptcha": {"kind": "mtcaptcha", "siteKey": "sk", "confidence": 15},
-    "datadome": {"kind": "datadome", "captchaUrl": "https://x/captcha", "confidence": 15},
     "awswaf_token": {"kind": "awswaf_token", "confidence": 12},
     "awswaf_image": {"kind": "awswaf_image", "question": "q", "confidence": 12},
 }
@@ -75,6 +88,33 @@ def test_all_strategies_registered_and_unique():
     kinds = [s.kind for s in strats]
     assert len(kinds) == len(set(kinds))
     assert len(kinds) >= 15
+
+
+def test_no_task_type_is_sent_that_the_service_does_not_offer():
+    from app.agent.captcha.base import RecognitionStrategy
+    for kind, probe in SAMPLE_PROBES.items():
+        strat = strategy_for(kind)
+        det = strat.detect(probe)
+        task = strat.build_task(det, _ctx())
+        assert task["type"] in SERVICE_TASK_TYPES, (
+            f"{kind} sends {task['type']!r}, which the service does not offer"
+        )
+
+
+def test_challenges_the_service_cannot_solve_are_named_not_charged():
+    for kind in ("hcaptcha", "datadome"):
+        strat = strategy_for(kind)
+        assert strat is not None, f"{kind} must still be recognised"
+        assert strat.unsupported_reason, f"{kind} must say why it cannot be solved"
+
+
+async def test_an_unsupported_challenge_spends_nothing():
+    strat = strategy_for("hcaptcha")
+    det = Detection(kind="hcaptcha")
+    ctx = _ctx()
+    res = await pipeline.run_solve(strat, det, ctx, {})
+    assert res.error and "hcaptcha" in res.error
+    assert ctx.cost_sink == []
 
 
 def test_every_strategy_detects_nothing_on_empty_probe():

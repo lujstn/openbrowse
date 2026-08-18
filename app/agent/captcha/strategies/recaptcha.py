@@ -172,6 +172,37 @@ class RecaptchaV3(_RecaptchaTokenBase):
 
 
 @register
+class RecaptchaV3Enterprise(_RecaptchaTokenBase):
+    kind = "recaptcha_v3_enterprise"
+
+    def detect(self, probe):
+        if probe.get("kind") != "recaptcha_v3_enterprise":
+            return None
+        return Detection(
+            kind=self.kind,
+            params={
+                "siteKey": probe.get("siteKey", ""),
+                "apiOrigin": probe.get("apiOrigin", ""),
+            },
+            interstitial=bool(probe.get("interstitial")),
+            served_host=probe.get("apiOrigin", ""),
+            confidence=int(probe.get("confidence", 10)),
+        )
+
+    def build_task(self, det, ctx):
+        task: dict[str, Any] = {
+            "type": "ReCaptchaV3EnterpriseTaskProxyLess",
+            "websiteURL": ctx.page_url,
+            "websiteKey": det.params.get("siteKey", ""),
+            "pageAction": "verify",
+        }
+        api = _api_domain(det)
+        if api:
+            task["apiDomain"] = api
+        return task
+
+
+@register
 class RecaptchaV2Image(RecognitionStrategy):
     kind = "recaptcha_v2_image"
     priority = 5
