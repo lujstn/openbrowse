@@ -251,11 +251,12 @@ async def test_pipeline_records_cost_on_failure():
 async def test_pipeline_cost_cap_refuses():
     from dataclasses import replace as _replace
     strat = _FakeStrategy()
-    ctx = _ctx(cost_sink=[9.0])
-    capped = _replace(pipeline.settings, captcha_cost_cap_usd=1.0)
+    ctx = _ctx(cost_sink=[0.04])
+    capped = _replace(pipeline.settings, captcha_cost_cap_usd=0.03)
     with patch.object(pipeline, "settings", capped):
         res = await pipeline.run_solve(strat, _det(), ctx, {})
-    assert "cap" in (res.error or "").lower()
+    assert "ceiling" in (res.error or "")
+    assert "$0.03" in (res.error or "")
 
 
 def _address_eval(base, here):
@@ -300,8 +301,14 @@ async def test_an_ordinary_page_uses_its_own_address():
 
 
 def test_captcha_spend_is_capped_by_default():
+    """The default has to be a real ceiling, not a nominal one: a page names the
+    address a solve is billed against, so a loop on a hostile page spends until
+    something stops it."""
     from app.config import Settings
-    assert Settings().captcha_cost_cap_usd > 0
+    cap = Settings().captcha_cost_cap_usd
+    assert 0 < cap <= 0.05
+    dearest_solve = 3.0 / 1000
+    assert cap / dearest_solve >= 10
 
 
 def test_every_token_strategy_can_actually_place_its_solution():

@@ -62,7 +62,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
-| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `1.0`; set `0` to remove the ceiling |
+| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `0.03`, which buys about ten solves at Capsolver's dearest tier; set `0` to remove the ceiling |
 
 Generate a secure `API_KEY`:
 
@@ -107,8 +107,9 @@ visibly tick. Success is judged only by the page moving on, never by the widget'
 appearance, and a challenge that will not clear is reported as a failure rather
 than dressed up as one. Each solve is billed by Capsolver, typically well under a
 cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD`
-ceiling. After two solves that do not clear the same host, further spending on
-that host is refused for the rest of the session.
+ceiling, which defaults to about ten solves a session. After two solves that do
+not clear the same host, further spending on that host is refused for the rest of
+the session.
 
 ---
 

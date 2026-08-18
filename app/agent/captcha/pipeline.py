@@ -134,7 +134,7 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
     cap = getattr(settings, "captcha_cost_cap_usd", 0.0) or 0.0
     if cap and ctx.cost_sink is not None and sum(ctx.cost_sink) >= cap:
         return ActionResult(
-            error="The CAPTCHA spend cap for this run has been reached, so no further "
+            error=f"This run has spent its ${cap:.2f} CAPTCHA ceiling, so no further "
             "solve is attempted. Reach what you need by another path."
         )
 
