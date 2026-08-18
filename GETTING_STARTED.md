@@ -62,7 +62,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
-| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; set `0` to remove the ceiling |
+| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend for a single task. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; a keep-alive session gets that allowance again for each follow-up, with total spend still bounded by the session's `maxCostUsd`. Set `0` to remove the ceiling |
 
 Generate a secure `API_KEY`:
 
@@ -94,7 +94,7 @@ Coverage follows Capsolver's published service list, and a test refuses any task
 
 The live acceptance suite proves reCAPTCHA v2 (checkbox, explicit and invisible), reCAPTCHA v3 with multiple page actions, Cloudflare Turnstile, MTCaptcha and Geetest v3 and v4. Other solved types are implemented and covered by local tests, and each will tell you plainly if it cannot clear a challenge rather than reporting a success it did not achieve. A challenge type marked as not solved creates no task, so it costs nothing to meet one.
 
-A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves a session. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
+A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves for a single task — a keep-alive session gets that allowance again for each follow-up, and its total spend is still bounded by the session's cost budget. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
 
 ---
 
