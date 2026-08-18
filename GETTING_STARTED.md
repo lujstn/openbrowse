@@ -93,6 +93,10 @@ agent never has to name the challenge type.
 | reCAPTCHA image grids, "select every bus" | ❌ | ✅ | Cleared by the ordinary reCAPTCHA solve, which answers the grid for you |
 | AWS WAF, image | ❌ | ❌ | Written but unproven, so it is not offered |
 
+Only reCAPTCHA v2 has been proven against live challenges so far. The rest are
+implemented and covered by tests, and each will tell you plainly if it cannot
+clear a challenge rather than reporting a success it did not achieve.
+
 A solved challenge is written straight into the page, so its checkbox does not
 visibly tick. Success is judged only by the page moving on, never by the widget's
 appearance, and a challenge that will not clear is reported as a failure rather
