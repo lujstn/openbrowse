@@ -8,7 +8,7 @@ from typing import Any
 from browser_use import BrowserSession
 
 from app.agent.browser_cdp import _eval_js
-from app.agent.captcha.base import Detection, TokenStrategy, _first_present
+from app.agent.captcha.base import Detection, TokenStrategy
 from app.agent.captcha.registry import register
 
 
