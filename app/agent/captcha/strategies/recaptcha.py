@@ -190,17 +190,11 @@ class RecaptchaV2Image(RecognitionStrategy):
     _WIDGET_SELECTOR = 'iframe[src*="/recaptcha/api2/bframe"]'
 
     def detect(self, probe):
-        if probe.get("kind") != "recaptcha_v2":
-            return None
-        if not probe.get("question"):
-            return None
-        return Detection(
-            kind=self.kind,
-            params={"question": probe.get("question", "")},
-            interstitial=bool(probe.get("interstitial")),
-            served_host=probe.get("apiOrigin", ""),
-            confidence=int(probe.get("confidence", 10)) + 5,
-        )
+        # @nonobvious(deliberately-missing): reCAPTCHA image grids are solved
+        # server-side by the token task, which returns a token that clears the
+        # whole challenge, so the click-the-grid path is never needed here and is
+        # kept dormant until a captcha with no token task requires it.
+        return None
 
     async def capture(self, det, ctx):
         box = await cdp.element_box(ctx.session, self._WIDGET_SELECTOR)

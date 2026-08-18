@@ -22,8 +22,6 @@ SAMPLE_PROBES = {
                                 "confidence": 20},
     "recaptcha_v3": {"kind": "recaptcha_v3", "siteKey": "sk",
                      "apiOrigin": "https://widget.example", "confidence": 12},
-    "recaptcha_v2_image": {"kind": "recaptcha_v2", "siteKey": "sk",
-                           "question": "select buses", "confidence": 20},
     "hcaptcha": {"kind": "hcaptcha", "siteKey": "sk", "confidence": 20},
     "turnstile": {"kind": "turnstile", "siteKey": "sk", "confidence": 20},
     "geetest_v3": {"kind": "geetest_v3", "gt": "g", "challenge": "c", "confidence": 15},
@@ -117,11 +115,11 @@ def test_recaptcha_v2_apidomain_derived_not_hardcoded():
     assert task["apiDomain"] == "https://other-provider.test/"
 
 
-def test_image_challenge_outranks_plain_v2():
+def test_image_grid_uses_the_token_path_not_a_click_path():
     probe = {"kind": "recaptcha_v2", "siteKey": "sk", "question": "select buses",
              "confidence": 20}
     det = detect_from_probe(probe)
-    assert det.kind == "recaptcha_v2_image"
+    assert det.kind == "recaptcha_v2"
 
 
 def test_geetest_v4_declares_all_fields():

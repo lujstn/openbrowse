@@ -38,6 +38,7 @@ class SolveContext:
     emit: Callable[[str], Awaitable[None]]
     cost_sink: list[float] | None = None
     proxy: str = ""
+    user_agent: str = ""
 
 
 @dataclass

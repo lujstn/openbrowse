@@ -59,6 +59,10 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         await _emit_progress(progress, msg)
 
     cookies = await cdp.page_cookie_header(browser_session, host)
+    try:
+        ua = await _eval_js(browser_session, "navigator.userAgent") or ""
+    except Exception:
+        ua = ""
     return SolveContext(
         session=browser_session,
         page_url=page_url,
@@ -67,6 +71,7 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         emit=emit,
         cost_sink=cost_sink,
         proxy=getattr(settings, "captcha_proxy", "") or "",
+        user_agent=ua,
     )
 
 

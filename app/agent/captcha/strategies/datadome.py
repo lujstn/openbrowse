@@ -31,9 +31,10 @@ class DataDome(TokenStrategy):
 
     def build_task(self, det, ctx):
         return {
-            "type": "DatadomeSliderTask",
+            "type": "DataDomeSliderTask",
             "websiteURL": ctx.page_url,
             "captchaUrl": det.params.get("captchaUrl", ""),
+            "userAgent": ctx.user_agent,
             "proxy": ctx.proxy,
         }
 

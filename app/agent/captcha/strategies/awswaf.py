@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
 from browser_use import BrowserSession
@@ -41,8 +42,8 @@ class AwsWafToken(TokenStrategy):
         token = _first_present(solution, self.solution_keys) or ""
         await _eval_js(
             session,
-            "(function(t){try{window.awsWafCookieDomainList;"
-            "document.cookie='aws-waf-token='+t+';path=/';}catch(e){}})(%r)" % str(token),
+            "(function(t){try{document.cookie='aws-waf-token='+t+';path=/';}"
+            "catch(e){}})(%s)" % json.dumps(str(token)),
         )
 
 
