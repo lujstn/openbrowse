@@ -116,11 +116,6 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
             f"{strategy.unsupported_reason}. "
             "Nothing was spent. Reach what you need by another path."
         )
-    if strategy.requires_proxy and not ctx.proxy:
-        return ActionResult(
-            error=f"The {det.kind} challenge type needs an upstream proxy, which is "
-            "not configured for this session."
-        )
     missing = [k for k in strategy.required_params if not det.params.get(k)]
     if missing:
         return ActionResult(
@@ -150,8 +145,6 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                 if extra:
                     det = replace(det, params={**det.params, **extra})
                 payload = strategy.build_task(det, ctx)
-                if strategy.requires_proxy and ctx.proxy:
-                    payload["proxy"] = ctx.proxy
 
                 await ctx.emit(f"captcha: solving {det.kind} on {host}")
                 solution, elapsed, err = await _create_and_poll(http, payload, strategy, det, ctx)

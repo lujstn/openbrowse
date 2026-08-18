@@ -63,7 +63,6 @@ To configure by hand instead, create `.env` in the repo root with:
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
 | `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `1.0`; set `0` to remove the ceiling |
-| `CAPTCHA_PROXY`           | _(Optional)_ Upstream proxy for the challenge types that cannot be solved without one (see the table below) |
 
 Generate a secure `API_KEY`:
 
@@ -88,7 +87,6 @@ agent never has to name the challenge type.
 | Geetest v3 and v4 | ✅ | ✅ | Single-use parameters are refreshed before a retry |
 | MTCaptcha | ✅ | ✅ | |
 | AWS WAF, token | ✅ | ✅ | Cleared by writing the token as a cookie and re-requesting the page |
-| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, is not spotted automatically, and clears by clearance cookie |
 | Image to text | ❌ | ✅ | Asked for by name, with the answer field's selector, since a bare image has no reliable marker |
 | AWS WAF, image | ❌ | ❌ | Written but unproven, so it is named and refused rather than charged for |
 | hCaptcha | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no hCaptcha task |

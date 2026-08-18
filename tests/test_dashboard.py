@@ -463,5 +463,5 @@ async def test_settings_page_offers_every_captcha_setting(client):
 
     assert resp.status_code == 200
     assert "CAPTCHA solving" in resp.text
-    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD", "CAPTCHA_PROXY"):
+    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"):
         assert name in resp.text, f"{name} is not offered on the settings page"

@@ -41,7 +41,6 @@ class SolveContext:
     cookies: str
     emit: Callable[[str], Awaitable[None]]
     cost_sink: list[float] | None = None
-    proxy: str = ""
 
 
 @dataclass
@@ -75,7 +74,6 @@ class CaptchaStrategy(ABC):
 
     kind: ClassVar[str] = ""
     priority: ClassVar[int] = 0
-    requires_proxy: ClassVar[bool] = False
     # @nonobvious(means): detection params this strategy cannot work without. A
     # solve missing any of them is refused before a task is created, so a hint-only
     # strategy called without its hint costs nothing rather than being billed and

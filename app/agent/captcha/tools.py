@@ -110,7 +110,6 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         cookies=cookies,
         emit=emit,
         cost_sink=cost_sink,
-        proxy=getattr(settings, "captcha_proxy", "") or "",
     )
 
 

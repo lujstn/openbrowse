@@ -50,9 +50,6 @@ class Settings:
     capsolver_api_key: str = field(
         default_factory=lambda: os.environ.get("CAPSOLVER_API_KEY", "")
     )
-    captcha_proxy: str = field(
-        default_factory=lambda: os.environ.get("CAPTCHA_PROXY", "")
-    )
     # @nonobvious(must-hold): the address a solve is billed against comes from the
     # page, which can name any site it likes, so spending is capped by default and
     # only an explicit setting may widen or remove the ceiling.

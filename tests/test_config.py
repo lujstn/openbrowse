@@ -39,7 +39,7 @@ def test_every_captcha_setting_is_reachable_from_both_places_a_user_looks():
     root = pathlib.Path(__file__).resolve().parent.parent
     example = (root / ".env.example").read_text()
     group = dict(_ENV_GROUPS)["CAPTCHA solving"]
-    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD", "CAPTCHA_PROXY"):
+    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"):
         assert name in example, f"{name} is missing from .env.example"
         assert name in group, f"{name} is missing from the dashboard's CAPTCHA group"
 

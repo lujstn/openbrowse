@@ -47,7 +47,6 @@ SAMPLE_PROBES = {
 # @nonobvious(mirrors): strategies the page probe cannot name, reached only by an
 # explicit hint on solve_captcha, with the params that hint can actually supply.
 HINT_ONLY = {
-    "cloudflare_challenge": {"siteKey": "sk"},
     "imagetotext": {"answer_selector": "#answer", "image_b64": "aW1n"},
 }
 
@@ -62,7 +61,6 @@ def _ctx(**kw):
         cookies="a=1;b=2",
         emit=emit,
         cost_sink=[],
-        proxy="",
     )
     base.update(kw)
     return SolveContext(**base)
@@ -73,7 +71,6 @@ def test_solve_captcha_action_registers():
     from app.agent.captcha.tools import register_captcha_tools
     with patch("app.agent.captcha.tools.settings") as s:
         s.capsolver_api_key = "k"
-        s.captcha_proxy = ""
         tools = Tools()
         register_captcha_tools(tools, [], None)
         assert "solve_captcha" in tools.registry.registry.actions
@@ -93,7 +90,7 @@ def test_all_strategies_registered_and_unique():
     strats = all_strategies()
     kinds = [s.kind for s in strats]
     assert len(kinds) == len(set(kinds))
-    assert len(kinds) >= 15
+    assert len(kinds) >= 14
 
 
 def test_no_task_type_is_sent_that_the_service_does_not_offer():
@@ -178,9 +175,8 @@ class _FakeStrategy(TokenStrategy):
     kind = "fake"
     solution_keys = ("token",)
 
-    def __init__(self, interstitial=False, requires_proxy=False):
+    def __init__(self, interstitial=False):
         self._interstitial = interstitial
-        self.requires_proxy = requires_proxy
         self.placed = []
 
     def detect(self, probe):
@@ -237,13 +233,6 @@ async def test_pipeline_gives_up_after_two_interstitial_failures():
         third = await pipeline.run_solve(strat, _det(True), _ctx(), giveups)
     assert giveups["site.example"] == 2
     assert "refused" in (third.error or "").lower()
-
-
-async def test_pipeline_proxy_gap_is_honest():
-    strat = _FakeStrategy(requires_proxy=True)
-    res = await pipeline.run_solve(strat, _det(), _ctx(proxy=""), {})
-    assert "proxy" in (res.error or "").lower()
-    assert "unwinnable" not in (res.error or "").lower()
 
 
 async def test_pipeline_records_cost_on_failure():
@@ -345,7 +334,7 @@ def test_every_strategy_is_reachable_or_refused():
 def test_hint_only_strategies_build_a_task_the_service_offers(kind):
     strat = strategy_for(kind)
     det = Detection(kind=kind, params=HINT_ONLY[kind])
-    task = strat.build_task(det, _ctx(proxy="http://u:p@proxy.example:8080"))
+    task = strat.build_task(det, _ctx())
     assert task["type"] in SERVICE_TASK_TYPES
 
 
@@ -364,41 +353,6 @@ def test_image_to_text_types_the_answer_into_the_named_field():
     assert [(a.kind, a.selector, a.text) for a in actions] == [
         ("type", "#answer", "AB12")
     ]
-
-
-def test_cloudflare_task_carries_the_metadata_the_service_requires():
-    strat = strategy_for("cloudflare_challenge")
-    det = Detection(kind="cloudflare_challenge", params={"siteKey": "sk"})
-    task = strat.build_task(det, _ctx(proxy="http://u:p@proxy.example:8080"))
-    assert task["metadata"] == {"type": "challenge"}
-    assert task["websiteKey"] == "sk"
-    assert task["proxy"] == "http://u:p@proxy.example:8080"
-
-
-async def test_cloudflare_challenge_applies_its_clearance_cookies():
-    strat = strategy_for("cloudflare_challenge")
-    jar, reloaded = [], []
-    with patch.object(cdp_mod, "set_cookies",
-                      AsyncMock(side_effect=lambda s, c: jar.extend(c))), \
-         patch.object(cdp_mod, "reload_page",
-                      AsyncMock(side_effect=lambda s: reloaded.append(True))):
-        await strat.redeem(
-            {"token": "t", "cookies": {"cf_clearance": "abc"}},
-            Detection(kind="cloudflare_challenge"),
-            _ctx(),
-        )
-    assert [(c["name"], c["value"], c["domain"]) for c in jar] == [
-        ("cf_clearance", "abc", "site.example")
-    ]
-    assert reloaded == [True]
-
-
-async def test_cloudflare_challenge_refuses_a_solution_with_no_cookies():
-    strat = strategy_for("cloudflare_challenge")
-    with pytest.raises(ValueError):
-        await strat.redeem(
-            {"token": "t"}, Detection(kind="cloudflare_challenge"), _ctx()
-        )
 
 
 async def test_aws_waf_token_becomes_a_cookie_and_a_reload():
