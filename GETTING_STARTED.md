@@ -81,16 +81,16 @@ agent never has to name the challenge type.
 | --- | :---: | :---: | --- |
 | reCAPTCHA v2, including invisible and full-page verification walls | ✅ | ✅ | Proven end to end against live challenges |
 | reCAPTCHA v2 Enterprise | ✅ | ✅ | |
-| reCAPTCHA v3 | ✅ | ✅ | Score based, and the page action is assumed rather than read |
+| reCAPTCHA v3 | ✅ | ✅ | Score based; the page action is read off the page where it can be, and assumed otherwise |
 | reCAPTCHA v3 Enterprise | ✅ | ✅ | |
-| reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you |
+| reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you; the click-the-grid path is unproven and not offered |
 | Cloudflare Turnstile | ✅ | ✅ | |
 | Geetest v3 and v4 | ✅ | ✅ | Single-use parameters are refreshed before a retry |
 | MTCaptcha | ✅ | ✅ | |
-| AWS WAF, token | ✅ | ✅ | |
-| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, and is not spotted automatically |
-| Image to text | ❌ | ✅ | Solved when asked for by name, since a bare image has no reliable marker |
-| AWS WAF, image | ❌ | ❌ | Written but unproven, so it is not offered |
+| AWS WAF, token | ✅ | ✅ | Cleared by writing the token as a cookie and re-requesting the page |
+| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, is not spotted automatically, and clears by clearance cookie |
+| Image to text | ❌ | ✅ | Asked for by name, with the answer field's selector, since a bare image has no reliable marker |
+| AWS WAF, image | ❌ | ❌ | Written but unproven, so it is named and refused rather than charged for |
 | hCaptcha | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no hCaptcha task |
 | DataDome | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no DataDome task |
 
@@ -101,7 +101,8 @@ named, costing nothing, rather than being missed or charged for.
 
 Only reCAPTCHA v2 has been proven against live challenges so far. The rest are
 implemented and covered by tests, and each will tell you plainly if it cannot
-clear a challenge rather than reporting a success it did not achieve.
+clear a challenge rather than reporting a success it did not achieve. A challenge
+type marked as not solved creates no task, so it costs nothing to meet one.
 
 A solved challenge is written straight into the page, so its checkbox does not
 visibly tick. Success is judged only by the page moving on, never by the widget's
