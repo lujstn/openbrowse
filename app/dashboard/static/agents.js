@@ -166,71 +166,118 @@
     this._rafId = requestAnimationFrame(step);
   };
 
+  Typewriter.prototype.reset = function () {
+    this._stopLoop();
+    this._target = "";
+    this._shown = 0;
+    this._lastSet = null;
+  };
+
   Typewriter.prototype._stopLoop = function () {
     if (this._rafId != null) cancelAnimationFrame(this._rafId);
     this._rafId = null;
   };
 
-  function buildSpinner() {
-    var span = document.createElement("span");
-    span.className = "ob-spin";
-    for (var i = 0; i < 8; i++) {
-      var bar = document.createElement("i");
-      bar.style.transform = "rotate(" + i * 45 + "deg)";
-      bar.style.animationDelay = -(7 - i) * 100 + "ms";
-      span.appendChild(bar);
+  var ACTIVITY_MAX_HEIGHT = 208;
+
+  function formatDuration(seconds) {
+    if (seconds >= 60) {
+      var mins = Math.floor(seconds / 60);
+      var rest = Math.round(seconds % 60);
+      return mins + "m " + rest + "s";
     }
-    return span;
+    return (seconds >= 10 ? Math.round(seconds) : seconds.toFixed(1)) + "s";
   }
 
-  function StreamingResponse(container) {
+  function AgentActivity(container) {
     this.container = container;
     this._open = false;
-    this._lastRawText = "";
+    this._expanded = false;
     this._settled = false;
+    this._complete = false;
+    this._lastRawText = "";
+    this._label = "";
+    this._startedAt = null;
+    this._seconds = null;
     this._build();
     this.typewriter = new Typewriter(this._onFrame.bind(this));
+    var self = this;
+    this._timerId = setInterval(function () {
+      self._renderTimer();
+    }, 100);
   }
 
-  StreamingResponse.prototype._build = function () {
-    this.container.classList.add("ob-reveal", "ob-stream");
+  AgentActivity.prototype._build = function () {
+    this.container.classList.add("ob-reveal", "ob-activity");
+    this.container.style.setProperty("--ob-activity-max", ACTIVITY_MAX_HEIGHT + "px");
     this.container.innerHTML =
-      '<div class="ob-reveal-inner ob-stream-inner"><div class="ob-stream-card">' +
-      '<span class="ob-stream-indicator"></span>' +
-      '<div class="ob-stream-body"><div class="ob-stream-text"></div></div>' +
-      '<div class="ob-stream-actions">' +
-      '<button type="button" class="ob-stream-copy">Copy</button>' +
+      '<div class="ob-reveal-inner"><div class="ob-activity-card">' +
+      '<div class="ob-activity-body">' +
+      '<button type="button" class="ob-activity-head">' +
+      '<span class="ob-activity-label"></span>' +
+      '<span class="ob-activity-timer"></span>' +
+      '<span class="ob-activity-chev"></span>' +
+      "</button>" +
+      '<div class="ob-activity-viewport"><div class="ob-activity-track">' +
+      '<div class="ob-activity-text"></div>' +
+      "</div></div></div>" +
+      '<div class="ob-activity-actions">' +
+      '<button type="button" class="ob-activity-copy">Copy</button>' +
       "</div></div></div>";
-    this.indicator = this.container.querySelector(".ob-stream-indicator");
-    this.textEl = this.container.querySelector(".ob-stream-text");
-    this.copyBtn = this.container.querySelector(".ob-stream-copy");
+    this.labelEl = this.container.querySelector(".ob-activity-label");
+    this.timerEl = this.container.querySelector(".ob-activity-timer");
+    this.headEl = this.container.querySelector(".ob-activity-head");
+    this.viewportEl = this.container.querySelector(".ob-activity-viewport");
+    this.trackEl = this.container.querySelector(".ob-activity-track");
+    this.textEl = this.container.querySelector(".ob-activity-text");
+    this.copyBtn = this.container.querySelector(".ob-activity-copy");
     this.copyBtn.addEventListener("click", this._onCopy.bind(this));
+    this.headEl.addEventListener("click", this._onToggle.bind(this));
     this.container.setAttribute("role", "log");
     this.container.setAttribute("aria-live", "polite");
     this.container.setAttribute("aria-busy", "false");
   };
 
-  StreamingResponse.prototype._setIndicator = function (spinning) {
-    var wantSpin = !!spinning;
-    if (this._indicatorSpin === wantSpin) return;
-    this._indicatorSpin = wantSpin;
-    this.indicator.innerHTML = "";
-    if (wantSpin) {
-      this.indicator.appendChild(buildSpinner());
-    } else {
-      var dot = document.createElement("span");
-      dot.className = "ob-dot";
-      this.indicator.appendChild(dot);
-    }
+  AgentActivity.prototype._onToggle = function () {
+    if (!this._complete) return;
+    this._expanded = !this._expanded;
+    this.container.classList.toggle("is-expanded", this._expanded);
+    this.headEl.setAttribute("aria-expanded", this._expanded ? "true" : "false");
+    if (this._expanded) this.viewportEl.scrollTop = 0;
   };
 
-  StreamingResponse.prototype._onFrame = function (shownText, done) {
+  AgentActivity.prototype._renderTimer = function () {
+    if (!this._open) return;
+    if (this._complete) return;
+    if (this._startedAt == null) {
+      this.timerEl.textContent = "";
+      return;
+    }
+    var secs = Math.max(0, (Date.now() - this._startedAt) / 1000);
+    this.timerEl.textContent = secs.toFixed(1) + "s";
+  };
+
+  // @nonobvious(forced-by): the viewport clips to a fixed height, so keeping the
+  // newest line visible means sliding the track up by the overflow rather than
+  // scrolling, which would fight the fade mask pinned to the viewport edges.
+  AgentActivity.prototype._syncScroll = function () {
+    var overflow = this.trackEl.scrollHeight - ACTIVITY_MAX_HEIGHT;
+    var masked = overflow > 0;
+    this.viewportEl.classList.toggle("is-masked", masked);
+    if (this._complete) {
+      this.trackEl.style.transform = "";
+      return;
+    }
+    this.trackEl.style.transform = masked ? "translateY(" + -overflow + "px)" : "";
+  };
+
+  AgentActivity.prototype._onFrame = function (shownText, done) {
     this.textEl.innerHTML =
       renderMdLite(shownText) + (done && this._settled ? "" : '<span class="ob-caret"></span>');
-    if (this._pinToBottom) this.textEl.scrollTop = this.textEl.scrollHeight;
+    this._syncScroll();
   };
 
-  StreamingResponse.prototype._onCopy = function () {
+  AgentActivity.prototype._onCopy = function () {
     var text = this._lastRawText || "";
     var btn = this.copyBtn;
     var restore = btn.textContent;
@@ -266,46 +313,82 @@
     document.body.removeChild(ta);
   };
 
-  StreamingResponse.prototype.update = function (activity) {
-    var text = activity && activity.stream;
-    if (!text) {
+  AgentActivity.prototype.update = function (activity) {
+    if (!activity || !activity.label) {
       this.hide();
       return;
     }
-    this._lastRawText = text;
+    var text = activity.stream || "";
+    var working = !!activity.spin;
+    var done = !working && !!text;
+
     if (!this._open) {
       this._open = true;
-      this._settled = false;
       this.container.classList.remove("hidden");
       revealOpen(this.container);
     }
-    this.container.setAttribute("aria-busy", activity.spin ? "true" : "false");
-    this._setIndicator(!!activity.spin);
-    this._pinToBottom = !!activity.spin;
+    if (activity.label !== this._label) {
+      this._label = activity.label;
+      this._startedAt = Date.parse(activity.startedAt) || Date.now();
+    }
+
+    this.container.classList.toggle("is-working", working);
+    this.container.setAttribute("aria-busy", working ? "true" : "false");
+
     // @nonobvious(forced-by): finishInstantly renders synchronously and reads
     // _settled to decide on the caret, and it stops the loop, so nothing paints
     // again afterwards — the flag has to be true before the call, not after.
-    this._settled = !activity.spin;
-    if (this._settled) {
-      this.typewriter.setTarget(text);
-      this.typewriter.finishInstantly();
-      this.container.classList.add("is-settled");
+    this._settled = !working;
+    this._complete = done;
+    this.container.classList.toggle("is-settled", this._settled);
+    this.container.classList.toggle("has-prose", !!text);
+    this.container.classList.toggle("is-complete", done);
+
+    if (text) {
+      this._lastRawText = text;
+      if (done) {
+        this.typewriter.setTarget(text);
+        this.typewriter.finishInstantly();
+      } else {
+        this.typewriter.setTarget(text);
+      }
     } else {
-      this.container.classList.remove("is-settled");
-      this.typewriter.setTarget(text);
+      this.typewriter.reset();
+      this.textEl.innerHTML = "";
     }
+
+    if (done) {
+      var secs =
+        activity.seconds != null
+          ? Number(activity.seconds)
+          : Math.max(0, (Date.now() - this._startedAt) / 1000);
+      this._seconds = secs;
+      this.labelEl.textContent = "Thought for " + formatDuration(secs);
+      this.timerEl.textContent = "";
+      this._expanded = false;
+      this.container.classList.remove("is-expanded");
+      this.headEl.setAttribute("aria-expanded", "false");
+    } else {
+      this.labelEl.textContent = activity.label + (activity.step ? " · step " + activity.step : "");
+      this.headEl.removeAttribute("aria-expanded");
+      this._renderTimer();
+    }
+    this._syncScroll();
   };
 
-  StreamingResponse.prototype.hasLiveContent = function () {
+  AgentActivity.prototype.hasLiveContent = function () {
     return this._open && !!this._lastRawText;
   };
 
-  StreamingResponse.prototype.hide = function () {
+  AgentActivity.prototype.hide = function () {
     if (!this._open) return;
     this._open = false;
     this._settled = false;
-    this.container.classList.remove("is-settled");
-    this.typewriter._stopLoop();
+    this._complete = false;
+    this._label = "";
+    this._startedAt = null;
+    this.container.classList.remove("is-settled", "is-complete", "is-working", "is-expanded");
+    this.typewriter.reset();
     revealClose(this.container);
   };
 
@@ -349,7 +432,7 @@
     renderMdLite: renderMdLite,
     reveal: { open: revealOpen, close: revealClose },
     Typewriter: Typewriter,
-    StreamingResponse: StreamingResponse,
+    AgentActivity: AgentActivity,
     handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
   };
 })(window);

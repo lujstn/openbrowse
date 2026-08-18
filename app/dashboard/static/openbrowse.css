@@ -39,10 +39,10 @@
   min-height: 0;
 }
 
-.ob-stream {
+.ob-activity {
   margin-bottom: 8px;
 }
-.ob-stream-card {
+.ob-activity-card {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -58,67 +58,28 @@
     clip-path 0.28s var(--ob-ease-out),
     transform 0.28s var(--ob-ease-out);
 }
-.ob-stream.is-open .ob-stream-card {
+.ob-activity.is-open .ob-activity-card {
   opacity: 1;
   clip-path: inset(0 0 0% 0);
   transform: translateY(0);
 }
 
-.ob-spin {
-  position: relative;
-  width: 14px;
-  height: 14px;
-  flex: none;
-  opacity: 0.75;
-  margin-top: 2px;
-}
-.ob-spin i {
-  position: absolute;
-  top: 0;
-  left: 43.75%;
-  width: 12.5%;
-  height: 30%;
-  border-radius: 999px;
-  background: var(--ob-accent);
-  transform-origin: 50% 166.7%;
-  animation: ob-spin-fade 0.8s linear infinite;
-}
-@keyframes ob-spin-fade {
-  0% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.15;
-  }
-}
-.ob-dot {
-  display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ob-accent);
-  margin-top: 5px;
-  flex: none;
-}
-
-.ob-stream-body {
+.ob-activity-body {
   flex: 1;
   min-width: 0;
 }
-.ob-stream-text {
-  max-height: 240px;
-  overflow-y: auto;
+.ob-activity-text {
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--ob-text-muted);
   white-space: pre-wrap;
   word-break: break-word;
 }
-.ob-stream-text strong {
+.ob-activity-text strong {
   color: var(--ob-text);
   font-weight: 600;
 }
-.ob-stream-text code {
+.ob-activity-text code {
   background: var(--ob-surface-raised);
   border: 1px solid var(--ob-border-strong);
   border-radius: 4px;
@@ -127,7 +88,7 @@
   font-size: 11.5px;
   color: var(--ob-text);
 }
-.ob-stream-text pre {
+.ob-activity-text pre {
   background: var(--ob-surface-raised);
   border: 1px solid var(--ob-border-strong);
   border-radius: var(--ob-radius-sm);
@@ -135,12 +96,12 @@
   overflow-x: auto;
   margin: 4px 0;
 }
-.ob-stream-text pre code {
+.ob-activity-text pre code {
   border: none;
   padding: 0;
   background: none;
 }
-.ob-stream-text ul {
+.ob-activity-text ul {
   margin: 2px 0 2px 18px;
   padding: 0;
 }
@@ -159,7 +120,105 @@
   }
 }
 
-.ob-stream-actions {
+/* @nonobvious(forced-by): background-clip:text needs a transparent fill to let
+   the gradient through, and Safari still wants the -webkit- pair. */
+.ob-activity-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ob-text-dim);
+}
+.ob-activity.is-working .ob-activity-label {
+  background-image: linear-gradient(
+    90deg,
+    var(--ob-text-dim) 35%,
+    var(--ob-text) 50%,
+    var(--ob-text-dim) 65%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: ob-shimmer 2.4s linear infinite;
+}
+@keyframes ob-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+.ob-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.ob-activity.is-complete .ob-activity-head {
+  cursor: pointer;
+}
+.ob-activity-timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  flex: none;
+}
+.ob-activity-chev {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.5px solid var(--ob-text-faint);
+  border-bottom: 1.5px solid var(--ob-text-faint);
+  transform: rotate(45deg);
+  transition: transform 0.24s var(--ob-ease-out);
+  display: none;
+}
+.ob-activity.is-complete .ob-activity-chev {
+  display: block;
+}
+.ob-activity.is-complete.is-expanded .ob-activity-chev {
+  transform: rotate(-135deg);
+}
+
+/* @nonobvious(forced-by): the fade has to live on a wrapper, because a mask on
+   the scrolling element itself travels with the scroll instead of pinning to
+   the visible edges. */
+.ob-activity-viewport {
+  overflow: hidden;
+  max-height: var(--ob-activity-max);
+  transition: max-height 0.3s var(--ob-ease-in-out);
+}
+/* @nonobvious(deliberately-missing): only the top edge fades. The bottom is the
+   live edge carrying the newest words and the caret, and fading it hides the one
+   line the reader is actually waiting for. */
+.ob-activity-viewport.is-masked {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
+}
+.ob-activity.is-complete .ob-activity-viewport.is-masked {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.ob-activity.is-complete .ob-activity-viewport {
+  overflow-y: auto;
+}
+.ob-activity.is-complete:not(.is-expanded) .ob-activity-viewport {
+  max-height: 0;
+}
+.ob-activity-track {
+  transition: transform 0.3s var(--ob-ease-out);
+}
+
+.ob-activity-actions {
   display: flex;
   align-items: flex-start;
   opacity: 0;
@@ -169,12 +228,12 @@
     transform 0.22s var(--ob-ease-out);
   pointer-events: none;
 }
-.ob-stream.is-settled .ob-stream-actions {
+.ob-activity.is-settled.has-prose .ob-activity-actions {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
 }
-.ob-stream-copy {
+.ob-activity-copy {
   background: none;
   border: 1px solid var(--ob-border-strong);
   color: var(--ob-text-dim);
@@ -184,7 +243,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.ob-stream-copy:hover {
+.ob-activity-copy:hover {
   border-color: var(--ob-text-muted);
   color: var(--ob-text);
 }
@@ -228,11 +287,22 @@
 @media (prefers-reduced-motion: reduce) {
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,
-  .ob-stream-card,
-  .ob-stream-actions,
+  .ob-activity-card,
+  .ob-activity-actions,
+  .ob-activity-viewport,
+  .ob-activity-track,
+  .ob-activity-chev,
   .msg-row.expanded .msg-cards.ob-handoff-grow,
   .msg-row.expanded .msg-cards.ob-handoff-grow .card,
   .ob-row-enter {
     transition: none !important;
+  }
+  .ob-activity.is-working .ob-activity-label {
+    animation: none;
+    -webkit-text-fill-color: var(--ob-text-dim);
+    color: var(--ob-text-dim);
+  }
+  .ob-caret {
+    animation: none;
   }
 }

@@ -64,7 +64,7 @@ ONE_M_BETA = "context-1m-2025-08-07"
 get_live_agent = live.get_live_agent
 
 _REASONING_PUSH_INTERVAL_S = 0.15
-_REASONING_LABEL = "💭 Thinking"
+_REASONING_LABEL = "Thinking"
 # @nonobvious(mirrors): the live stream and the persisted reasoning row are the
 # same text rendered twice, so they clip at the same point — a longer live cap
 # would make the card visibly shrink when the settled row takes over.
@@ -602,6 +602,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         loop = asyncio.get_running_loop()
         parts: list[str] = []
         last_push = 0.0
+        began_at: float | None = None
         async with self.get_client().responses.stream(**params) as stream:
             async for event in stream:
                 if not sid:
@@ -611,6 +612,8 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ):
                     parts.append(getattr(event, "delta", "") or "")
                     now = loop.time()
+                    if began_at is None:
+                        began_at = now
                     if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
                         text = " ".join("".join(parts).split())
@@ -620,6 +623,9 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                             spin=True,
                             stream=text[:_REASONING_MAX_CHARS],
                         )
+            self._reasoning_seconds = (
+                round(loop.time() - began_at, 1) if began_at is not None else None
+            )
             return await stream.get_final_response()
 
     async def _create(self, params: dict[str, Any]) -> Any:
@@ -734,8 +740,14 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         summary = summary_box["text"]
         if summary:
             self._last_model_reasoning = summary
+            self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
             if sid:
-                set_activity(sid, _REASONING_LABEL, stream=summary[:_REASONING_MAX_CHARS])
+                set_activity(
+                    sid,
+                    _REASONING_LABEL,
+                    stream=summary[:_REASONING_MAX_CHARS],
+                    seconds=self._last_reasoning_seconds,
+                )
         await _settle_code_stream(self, result, output_format)
         return result
 
@@ -864,6 +876,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
             )
             if thinking.strip():
                 self._last_model_reasoning = thinking
+                self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
         except Exception:
             logger.debug("thinking capture failed", exc_info=True)
         return response
@@ -884,6 +897,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         parts: list[str] = []
         think_parts: list[str] = []
         last_push = 0.0
+        began_at: float | None = None
         async for event in stream:
             etype = getattr(event, "type", "")
             if sid and etype == "content_block_start":
@@ -892,6 +906,8 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 # can open a block then stay silent for tens of seconds, so the
                 # label goes up on the block itself rather than the first delta.
                 if getattr(block, "type", None) == "thinking":
+                    if began_at is None:
+                        began_at = loop.time()
                     set_activity(sid, _REASONING_LABEL, spin=True)
             if sid and etype == "content_block_delta":
                 delta = getattr(event, "delta", None)
@@ -899,6 +915,8 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 if chunk:
                     think_parts.append(chunk)
                     now = loop.time()
+                    if began_at is None:
+                        began_at = now
                     if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
                         text = " ".join("".join(think_parts).split())
@@ -913,6 +931,9 @@ class _RepairingChatAnthropic(ChatAnthropic):
             if etype == "input_json" and getattr(event, "partial_json", ""):
                 parts.append(event.partial_json)
                 await observer.on_partial("".join(parts))
+        self._reasoning_seconds = (
+            round(loop.time() - began_at, 1) if began_at is not None else None
+        )
         return await stream.get_final_message()
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
@@ -921,10 +942,14 @@ class _RepairingChatAnthropic(ChatAnthropic):
         thinking_text = " ".join((getattr(result, "thinking", None) or "").split())
         if thinking_text:
             self._last_model_reasoning = thinking_text
+            self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
             sid = getattr(self, "_activity_session", None)
             if sid:
                 set_activity(
-                    sid, _REASONING_LABEL, stream=thinking_text[:_REASONING_MAX_CHARS]
+                    sid,
+                    _REASONING_LABEL,
+                    stream=thinking_text[:_REASONING_MAX_CHARS],
+                    seconds=self._last_reasoning_seconds,
                 )
         return result
 
@@ -2240,18 +2265,21 @@ async def run_agent_session(session_id: str) -> None:
             native_reasoning = getattr(llm, "_last_model_reasoning", None)
             if native_reasoning:
                 llm._last_model_reasoning = None
+                reasoning_seconds = getattr(llm, "_last_reasoning_seconds", None)
+                llm._last_reasoning_seconds = None
                 reasoning_text = str(native_reasoning)
+                reasoning_data = {
+                    "category": "reasoning",
+                    "action": "model_reasoning",
+                    "reasoning": reasoning_text[:_REASONING_MAX_CHARS],
+                }
+                if reasoning_seconds:
+                    reasoning_data["duration_s"] = reasoning_seconds
                 await crud.create_message(
                     session_id=session_id,
                     role="ai",
                     msg_type="event",
-                    data=json.dumps(
-                        {
-                            "category": "reasoning",
-                            "action": "model_reasoning",
-                            "reasoning": reasoning_text[:_REASONING_MAX_CHARS],
-                        }
-                    ),
+                    data=json.dumps(reasoning_data),
                     summary=_reasoning_title(reasoning_text),
                     count_step=False,
                 )

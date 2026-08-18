@@ -19,6 +19,7 @@ def set_activity(
     step: int | None = None,
     spin: bool = False,
     stream: str | None = None,
+    seconds: float | None = None,
 ) -> None:
     """Record what a session is doing. ``stream`` carries the full accumulated
     text of a token-by-token phase (model reasoning as it generates); it is
@@ -27,12 +28,21 @@ def set_activity(
     to "Running actions") can't leak stale reasoning text into the next read.
     """
     prev = _activity.get(session_id) or {}
+    now = datetime.now(timezone.utc).isoformat()
+    # @nonobvious(must-hold): a streaming phase re-pushes several times a second,
+    # so the clock has to survive an unchanged label or it reads near zero forever
+    # and no phase can report how long it took.
+    started = prev.get("startedAt") if prev.get("label") == label else None
     _activity[session_id] = {
         "label": label,
-        "startedAt": datetime.now(timezone.utc).isoformat(),
+        "startedAt": started or now,
         "step": step if step is not None else prev.get("step"),
         "spin": spin,
         "stream": stream,
+        # @nonobvious(forced-by): a phase whose label was interrupted and restored
+        # loses its clock, so a caller that measured the real elapsed time says so
+        # here rather than leaving the dashboard to infer it from startedAt.
+        "seconds": seconds,
     }
 
 

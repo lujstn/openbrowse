@@ -292,58 +292,6 @@ OpenBrowse{% endblock %} {% block head %}
     border-color: #444;
     color: #fff;
   }
-  .activity-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 2px;
-    margin-bottom: 8px;
-    font-size: 12px;
-    color: #888;
-  }
-  .activity-bar.hidden {
-    display: none;
-  }
-  .act-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #6b7280;
-    flex: none;
-  }
-  .act-spin {
-    position: relative;
-    width: 14px;
-    height: 14px;
-    flex: none;
-    opacity: 0.65;
-  }
-  .act-spin i {
-    position: absolute;
-    top: 0;
-    left: 43.75%;
-    width: 12.5%;
-    height: 30%;
-    border-radius: 999px;
-    background: #9ca3af;
-    transform-origin: 50% 166.7%;
-    animation: spinner-leaf-fade 0.8s linear infinite;
-  }
-  @keyframes spinner-leaf-fade {
-    0% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0.15;
-    }
-  }
-  .act-label {
-    flex: 1;
-  }
-  .act-timer {
-    font-variant-numeric: tabular-nums;
-    color: #6b7280;
-  }
   .msg-left {
     display: flex;
     flex-direction: column;
@@ -628,7 +576,6 @@ OpenBrowse{% endblock %} {% block head %}
       <div id="completion-cards">
         <div id="completion-card" class="completion-card hidden"></div>
       </div>
-      <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="stream-bar" class="hidden"></div>
       <div id="feed-rows"></div>
     </div>
@@ -664,44 +611,11 @@ document.addEventListener("DOMContentLoaded", function () {
   let lastIsSuccessful =
     browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
   let browserLive = browserPanel.dataset.browserLive === "1";
-  let activityIndicatorType = null;
   let firstMessagesBatchDone = false;
-  const activityBar = document.getElementById("activity-bar");
-  const streamingResponse = new OpenBrowseAgents.StreamingResponse(
+  const agentActivity = new OpenBrowseAgents.AgentActivity(
     document.getElementById("stream-bar")
   );
 
-  function buildSpinBars() {
-    let bars = "";
-    for (let i = 0; i < 8; i++) {
-      const delay = -(7 - i) * 100;
-      bars += '<i style="transform:rotate(' + i * 45 + 'deg);animation-delay:' + delay + 'ms"></i>';
-    }
-    return '<span class="act-spin">' + bars + "</span>";
-  }
-
-  function renderActivity() {
-    if (!activityState || TERMINAL.includes(lastStatus) || activityState.stream) {
-      activityBar.classList.add("hidden");
-      activityIndicatorType = null;
-      return;
-    }
-    const started = Date.parse(activityState.startedAt);
-    const secs = isNaN(started) ? 0 : Math.max(0, (Date.now() - started) / 1000);
-    const stepLabel = activityState.step ? " · step " + activityState.step : "";
-    const type = activityState.spin ? "spin" : "dot";
-
-    activityBar.classList.remove("hidden");
-    if (type !== activityIndicatorType) {
-      activityIndicatorType = type;
-      const indicator = type === "spin" ? buildSpinBars() : '<span class="act-dot"></span>';
-      activityBar.innerHTML =
-        indicator + '<span class="act-label"></span><span class="act-timer"></span>';
-    }
-    activityBar.querySelector(".act-label").textContent = (activityState.label || "") + stepLabel;
-    activityBar.querySelector(".act-timer").textContent = secs.toFixed(1) + "s";
-  }
-  setInterval(renderActivity, 100);
 
   function esc(s) {
     const d = document.createElement("div");
@@ -935,12 +849,12 @@ document.addEventListener("DOMContentLoaded", function () {
         return;
       }
       const isReasoning = isLiveBatch && !!row.querySelector(".cat-reasoning");
-      const wasStreaming = isReasoning && streamingResponse.hasLiveContent();
+      const wasStreaming = isReasoning && agentActivity.hasLiveContent();
       const node = row.cloneNode(true);
       feedRows.insertBefore(node, feedRows.firstChild);
       if (isReasoning) {
         if (wasStreaming) {
-          streamingResponse.hide();
+          agentActivity.hide();
           OpenBrowseAgents.handoff.revealCards(node);
         } else {
           OpenBrowseAgents.handoff.fadeRowIn(node);
@@ -1059,12 +973,11 @@ document.addEventListener("DOMContentLoaded", function () {
       const successChanged = nextIsSuccessful !== lastIsSuccessful;
       lastIsSuccessful = nextIsSuccessful;
       activityState = data.activity || null;
-      if (activityState && activityState.stream && !TERMINAL.includes(lastStatus)) {
-        streamingResponse.update(activityState);
+      if (activityState && !TERMINAL.includes(lastStatus)) {
+        agentActivity.update(activityState);
       } else {
-        streamingResponse.hide();
+        agentActivity.hide();
       }
-      renderActivity();
       syncControls();
       if (data.output && data.output !== currentOutput) {
         currentOutput = data.output;

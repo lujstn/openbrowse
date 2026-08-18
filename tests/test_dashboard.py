@@ -670,7 +670,7 @@ async def test_session_detail_stacks_completions_rather_than_replacing_one(clien
     assert "cc-caret" in body
 
 
-async def test_session_detail_wires_the_streaming_component(client):
+async def test_session_detail_wires_one_live_activity_surface(client):
     from app.db import crud
 
     session = await crud.create_session(task="check the pricing page")
@@ -679,9 +679,12 @@ async def test_session_detail_wires_the_streaming_component(client):
     )
     assert resp.status_code == 200
     assert 'id="stream-bar"' in resp.text
-    assert "OpenBrowseAgents.StreamingResponse" in resp.text
+    assert "OpenBrowseAgents.AgentActivity" in resp.text
     assert '<link rel="stylesheet" href="/static/openbrowse.css" />' in resp.text
     assert '<script defer src="/static/agents.js"></script>' in resp.text
+    # the hand-rolled strip it replaced, so a second live surface cannot creep back
+    for gone in ('id="activity-bar"', "act-spin", "act-label", "act-timer", "buildSpinBars"):
+        assert gone not in resp.text, f"{gone} survived the swap"
 
 
 def test_mdlite_bold_and_code():
@@ -744,13 +747,13 @@ def test_activity_payload_carries_a_growing_stream_never_a_slice():
 
     sid = "activity-shape-test"
     clear_activity(sid)
-    set_activity(sid, "💭 Thinking", spin=True, stream="checking the")
+    set_activity(sid, "Thinking", spin=True, stream="checking the")
     first = get_activity(sid)
     assert first["stream"] == "checking the"
     assert first["spin"] is True
-    assert first["label"] == "💭 Thinking"
+    assert first["label"] == "Thinking"
 
-    set_activity(sid, "💭 Thinking", spin=True, stream="checking the accessibility tree")
+    set_activity(sid, "Thinking", spin=True, stream="checking the accessibility tree")
     second = get_activity(sid)
     assert second["stream"] == "checking the accessibility tree"
     assert second["stream"].startswith(first["stream"])
@@ -857,14 +860,37 @@ def test_message_rows_carry_an_id_the_client_can_dedupe_on():
     assert 'data-mid="msg-abc-123"' in html
 
 
-def test_streaming_response_caret_and_handoff_behaviour():
+def test_agent_activity_states_and_handoff_behaviour():
     import shutil
     import subprocess
     from pathlib import Path
 
     node = shutil.which("node")
     if not node:
-        pytest.skip("node is not installed; the streaming-response harness needs it")
-    harness = Path(__file__).parent / "fixtures" / "streaming_response_harness.mjs"
+        pytest.skip("node is not installed; the agent-activity harness needs it")
+    harness = Path(__file__).parent / "fixtures" / "agent_activity_harness.mjs"
     proc = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_activity_clock_survives_a_streaming_phase_and_resets_on_a_new_one():
+    """A streaming phase re-pushes several times a second; if the clock restarted
+    on each push no phase could ever report how long it took.
+    """
+    from app.agent.activity import clear_activity, get_activity, set_activity
+
+    sid = "activity-clock-test"
+    clear_activity(sid)
+
+    set_activity(sid, "Thinking", spin=True, stream="a")
+    started = get_activity(sid)["startedAt"]
+    for text in ("a b", "a b c", "a b c d"):
+        set_activity(sid, "Thinking", spin=True, stream=text)
+        assert get_activity(sid)["startedAt"] == started, "the clock restarted mid-phase"
+
+    set_activity(sid, "Thinking", stream="a b c d")
+    assert get_activity(sid)["startedAt"] == started, "settling is the same phase"
+
+    set_activity(sid, "Running actions")
+    assert get_activity(sid)["startedAt"] != started, "a new phase starts a new clock"
+    clear_activity(sid)

@@ -775,7 +775,7 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -823,7 +823,7 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
     assert result.completion == "ok"
     assert llm._last_model_reasoning == "thinking about the page layout"
     assert any((p["stream"] or "").startswith("thinking about") for p in pushes)
-    assert all(p["label"] == "💭 Thinking" for p in pushes if p["stream"])
+    assert all(p["label"] == "Thinking" for p in pushes if p["stream"])
 
 
 async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
@@ -836,7 +836,7 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -868,7 +868,7 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
 
     assert await llm._drain_stream(FakeStream()) == "final"
     assert any((p["stream"] or "").startswith("checking the") for p in pushes)
-    assert all(p["label"] == "💭 Thinking" for p in pushes if p["stream"])
+    assert all(p["label"] == "Thinking" for p in pushes if p["stream"])
 
 
 async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced(
@@ -882,7 +882,7 @@ async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None: (
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: (
             pushes.append(stream) if stream is not None else None
         ),
     )
@@ -1514,7 +1514,7 @@ async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeyp
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None: (
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: (
             pushes.append(stream) if stream is not None else None
         ),
     )
@@ -1582,7 +1582,7 @@ async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypa
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -1610,3 +1610,74 @@ async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypa
 
     assert await llm._drain_stream(FakeStream()) == "final"
     assert pushes == [{"label": _REASONING_LABEL, "spin": True, "stream": None}]
+
+
+def test_the_live_reasoning_label_carries_no_emoji():
+    """The live surface shows a shimmering label and a timer; an emoji standing
+    in for a spinner is what that surface replaced.
+    """
+    from app.agent.runner import _REASONING_LABEL
+
+    assert _REASONING_LABEL == "Thinking"
+    assert not any(ord(c) > 0x2000 for c in _REASONING_LABEL)
+
+
+async def test_reasoning_row_records_how_long_the_thought_took(monkeypatch):
+    """The live surface says "Thought for 4.2s"; reopening the session later
+    should say the same thing, so the elapsed time rides on the stored row.
+    """
+    import app.agent.runner as runner_mod
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-duration"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
+            {"label": label, "stream": stream, "seconds": seconds}
+        ),
+    )
+
+    chunks = ["weighing the ", "options on this page "] * 3
+    final = _fake_response(reasoning_summary="".join(chunks))
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.05)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeResponses:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(
+        type(llm), "get_client", lambda self: types.SimpleNamespace(responses=FakeResponses())
+    )
+
+    await llm.ainvoke(_messages())
+
+    assert llm._last_reasoning_seconds is not None, "the thought was never timed"
+    assert llm._last_reasoning_seconds > 0
+    settle = [p for p in pushes if p["seconds"] is not None]
+    assert settle, "the settle push must carry the measured elapsed time"
+    assert settle[-1]["seconds"] == llm._last_reasoning_seconds
