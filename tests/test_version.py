@@ -145,8 +145,39 @@ def test_cli_invalid_semver_rejected(cli_root: Path):
     assert "not a valid semver" in result.stderr
 
 
-def test_cli_release_flag_parses(cli_root: Path):
-    result = _run_cli(["1.1.0", "--release", "--notes", "test notes"], cwd=cli_root)
+def test_cli_downgrade_allowed_with_force(cli_root: Path):
+    result = _run_cli(["0.9.0", "--force", "--date", "2026-03-03"], cwd=cli_root)
 
-    assert result.returncode != 0
-    assert "git" in (result.stdout + result.stderr)
+    assert result.returncode == 0
+    assert 'version = "0.9.0"' in (cli_root / "pyproject.toml").read_text()
+
+
+# @nonobvious(must-hold): run_release signs a commit, signs a tag, pushes to origin
+# and opens a GitHub release, and git searches upward for a repository, so calling
+# the real one from a test is only ever one TMPDIR away from publishing a release.
+# Every release test stubs it out; none may reach git.
+def test_release_dispatches_the_version_and_notes(monkeypatch):
+    import scripts.set_version as sv
+
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(sv, "read_current_version", lambda root: "1.0.0")
+    monkeypatch.setattr(sv, "apply_version", lambda root, version, date_str: [])
+    monkeypatch.setattr(
+        sv, "run_release", lambda root, version, notes: calls.append((version, notes))
+    )
+
+    assert sv.main(["1.1.0", "--release", "--notes", "test notes"]) == 0
+    assert calls == [("1.1.0", "test notes")]
+
+
+def test_dry_run_never_releases(monkeypatch):
+    import scripts.set_version as sv
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("--dry-run must neither write nor release")
+
+    monkeypatch.setattr(sv, "read_current_version", lambda root: "1.0.0")
+    monkeypatch.setattr(sv, "apply_version", _forbidden)
+    monkeypatch.setattr(sv, "run_release", _forbidden)
+
+    assert sv.main(["1.1.0", "--dry-run", "--release"]) == 0

@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("version", help="new version, semver X.Y.Z")
     parser.add_argument("--date", default=None, help="release date, YYYY-MM-DD (default: today)")
     parser.add_argument("--dry-run", action="store_true", help="print the changes without writing")
-    parser.add_argument("--force", action="store_true", help="allow setting an equal (non-increasing) version")
+    parser.add_argument("--force", action="store_true", help="allow setting a version that does not increase")
     parser.add_argument("--release", action="store_true", help="commit, tag, push and publish a GitHub release")
     parser.add_argument("--notes", default=None, help="release notes for --release (or pipe via stdin)")
     args = parser.parse_args(argv)
@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     current_version = read_current_version(root)
     current_parts = parse_semver(current_version)
 
-    if new_parts < current_parts:
+    if new_parts < current_parts and not args.force:
         print(
             f"Error: {args.version} is lower than the current version {current_version}. "
             "Use --force to override.",
