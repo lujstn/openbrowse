@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
-from app import system_metrics
+from app import hostinfo, system_metrics
 from app.agent.activity import get_activity
 from app.agent import live
 from app.agent.pool import pool
@@ -703,6 +703,39 @@ async def dashboard_stop_session(session_id: str):
     return JSONResponse({"ok": True, "action": "stop"})
 
 
+_HOST_TUNE_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "host_tune.sh"
+
+
+def _host_tune_available() -> bool:
+    """True when the sudoers grant from a previous host_tune.sh run lets the
+    dashboard re-run it without a password, turning suggestions into buttons.
+    """
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--dry-run"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _capacity_context() -> dict[str, Any]:
+    info = hostinfo.probe()
+    rows = hostinfo.checklist(info)
+    has_actions = any(r["state"] == "action" for r in rows)
+    return {
+        "hw_summary": hostinfo.summary(info),
+        "hw_complete": info.complete,
+        "hw_hard_max": hostinfo.hard_max(info) if info.complete else None,
+        "hw_recs": hostinfo.recommendations(info),
+        "hw_checklist": rows,
+        "hw_tune_button": has_actions and info.systemd and _host_tune_available(),
+        "hw_current": settings.max_concurrent_sessions,
+    }
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     entries = _read_env_file()
@@ -733,7 +766,56 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(
         request,
         "settings.html",
-        context={"groups": groups, "restart_failed": restart_failed},
+        context={
+            "groups": groups,
+            "restart_failed": restart_failed,
+            **_capacity_context(),
+        },
+    )
+
+
+@router.post("/settings/host-tune")
+async def settings_host_tune(request: Request, share: str = Form("most")):
+    if share not in hostinfo.SHARE_PRESETS:
+        share = "most"
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--share", share],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = (result.stdout + result.stderr).strip()
+        ok = result.returncode == 0
+    except Exception as e:
+        output = str(e)
+        ok = False
+    entries = _read_env_file()
+    groups = [
+        {
+            "title": title,
+            "rows": [
+                {
+                    "key": k,
+                    "value": entries.get(k, ""),
+                    "present": k in entries,
+                    "secret": _is_secret_var(k),
+                }
+                for k in keys
+            ],
+        }
+        for title, keys in _ENV_GROUPS
+    ]
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        context={
+            "groups": groups,
+            "restart_failed": False,
+            "host_tune_output": output,
+            "host_tune_ok": ok,
+            **_capacity_context(),
+        },
     )
 
 

@@ -60,7 +60,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
 | `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving. Without it a challenge simply blocks the session, and the feed says so. Billed per solve by Capsolver, typically well under a cent, and shown against the session |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
-| `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
+| `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1). The `/setup` screen detects your hardware and recommends a value; budget ~2GB RAM and one CPU core per session when setting it by hand |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
 | `KEEP_ALIVE_IDLE_TIMEOUT` | _(Optional)_ Seconds a keep-alive session waits, browser and history still open, for its next follow-up before closing itself. Default `600`; `0` waits indefinitely. A parked session is also closed early if a newly started session needs its display slot |
 | `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend for a single task. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's `maxCostUsd` for that task. Neither is a fixed total for a whole conversation, since both refresh on every follow-up. Set `0` to remove the ceiling |
@@ -210,7 +210,13 @@ The `ExecStartPost` line automatically enables Tailscale Funnel when the service
 
 `CPUWeight=300` only matters when the CPU is oversubscribed: it tells the kernel to favour browser sessions over background services (a media server's transcodes, for example) during contention, and does nothing on an idle box. `MemoryHigh=12G` throttles the service before it can push the host into out-of-memory territory. Both lines are safe to remove on a dedicated host.
 
-**Optional, recommended for concurrent sessions — enable CPU pressure metrics (PSI).** The server prefers the kernel's pressure stall information over load average when judging whether the host is struggling; PSI measures time tasks actually spent waiting for CPU, so a busy-but-healthy box is not misread as overloaded. Raspberry Pi OS compiles PSI in but ships it disabled. To enable it, append `psi=1` to the single line in `/boot/firmware/cmdline.txt` and reboot:
+You do not need to add these by hand: run the bundled tuning script once and it writes a systemd override sized from how much of the machine you want OpenBrowse to use, enables PSI on a Raspberry Pi, and lets the dashboard's Settings page apply future tuning changes with a button:
+
+```bash
+sudo bash scripts/host_tune.sh --share most   # all | most | shared
+```
+
+**Optional, recommended for concurrent sessions — enable CPU pressure metrics (PSI).** `host_tune.sh` above does this for you on a Raspberry Pi; the manual steps follow for other setups. The server prefers the kernel's pressure stall information over load average when judging whether the host is struggling; PSI measures time tasks actually spent waiting for CPU, so a busy-but-healthy box is not misread as overloaded. Raspberry Pi OS compiles PSI in but ships it disabled. To enable it, append `psi=1` to the single line in `/boot/firmware/cmdline.txt` and reboot:
 
 ```bash
 sudo sed -i '1 s/$/ psi=1/' /boot/firmware/cmdline.txt
@@ -438,7 +444,7 @@ free -h
 dmesg | grep -i oom
 ```
 
-To change concurrency, set `MAX_CONCURRENT_SESSIONS` in `.env`:
+To change concurrency, use the Capacity card on the dashboard's Settings page (it knows this machine's limits), or set `MAX_CONCURRENT_SESSIONS` in `.env`:
 
 ```bash
 MAX_CONCURRENT_SESSIONS=1
