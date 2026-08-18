@@ -1,8 +1,8 @@
 """CDP page-interaction primitives for the captcha subsystem.
 
-Token strategies need only page_advanced and submit_widget_form; recognition
-strategies also need screenshots, coordinate clicks, text entry and box geometry.
-All are host-agnostic.
+Token strategies need page_advanced, submit_widget_form and, where the answer is
+a cookie, reload_page; recognition strategies also need screenshots, coordinate
+clicks, text entry and box geometry. All are host-agnostic.
 """
 
 from __future__ import annotations
@@ -19,38 +19,43 @@ from app.agent.captcha.probe import probe_strict
 
 logger = logging.getLogger(__name__)
 
-_SUBMIT_WIDGET_JS = r"""(function () {
-  var w = document.querySelector('.g-recaptcha,[data-sitekey],.h-captcha,.cf-turnstile,[data-mtcaptcha-sitekey]');
+_SUBMIT_WIDGET_JS = r"""(function (names, widgetSel) {
+  var parts = [];
+  for (var i = 0; i < names.length; i++) { parts.push('[name="' + names[i] + '"]'); }
+  var sel = parts.join(",");
+  var w = widgetSel ? document.querySelector(widgetSel) : null;
   var f = w && w.closest ? w.closest("form") : null;
-  if (!f) f = document.querySelector("form");
+  if (!f && sel) {
+    var any = document.querySelector(sel);
+    f = any && any.closest ? any.closest("form") : null;
+  }
   if (!f) return "no-form";
+  // @nonobvious(must-hold): a challenge with no response field of its own is carried
+  // by its widget's callback, not by a form post, so there is no form here this code
+  // may claim; submitting whichever form happens to come first would post an
+  // unrelated one.
+  if (!sel) return "no-response-field";
   // @nonobvious(must-hold): a challenge refused after a submit is re-served with an
   // empty response box, so submitting whenever a form exists would post nothing and
   // loop; only a form actually carrying a solution may be sent.
-  var fields = f.querySelectorAll(
-    'textarea[name="g-recaptcha-response"],[name="h-captcha-response"],' +
-    '[name="cf-turnstile-response"],[name="mtcaptcha-verifiedtoken"]'
-  );
-  if (fields.length) {
-    var filled = false;
-    for (var i = 0; i < fields.length; i++) {
-      if ((fields[i].value || "").length > 20) { filled = true; break; }
-    }
-    if (!filled) return "empty";
+  var fields = f.querySelectorAll(sel);
+  var filled = false;
+  for (var i = 0; i < fields.length; i++) {
+    if ((fields[i].value || "").length > 20) { filled = true; break; }
   }
+  if (!filled) return "empty";
   if (f.requestSubmit) f.requestSubmit(); else f.submit();
   return "submitted";
-})()"""
+})(%s, %s)"""
 
 
 async def page_advanced(
-    browser_session: BrowserSession, before_url: str, strategy: Any = None,
-    timeout_s: float = 25.0
+    browser_session: BrowserSession, timeout_s: float = 25.0
 ) -> bool:
     """Whether the challenge actually let us through.
 
-    Judged by the page moving on or the challenge no longer being present, never
-    by a token landing in a field.
+    Judged by the challenge no longer being present, never by a token landing in a
+    field and never by the address changing.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
@@ -80,8 +85,12 @@ async def page_advanced(
     return False
 
 
-async def submit_widget_form(browser_session: BrowserSession) -> None:
-    """Submit the form that contains the captcha widget, if any.
+async def submit_widget_form(
+    browser_session: BrowserSession,
+    response_fields: tuple[str, ...] = (),
+    widget_selector: str = "",
+) -> None:
+    """Submit the form carrying this challenge's own solution, if there is one.
 
     @nonobvious(must-hold): the widget callback sometimes navigates on its own, so
     a short wait lets that settle; a form already gone leaves nothing to match and
@@ -89,10 +98,26 @@ async def submit_widget_form(browser_session: BrowserSession) -> None:
     """
     await asyncio.sleep(0.8)
     try:
-        outcome = await _eval_js(browser_session, _SUBMIT_WIDGET_JS)
+        outcome = await _eval_js(
+            browser_session,
+            _SUBMIT_WIDGET_JS
+            % (json.dumps(list(response_fields)), json.dumps(widget_selector)),
+        )
         logger.info("solve_captcha: form submit %s", outcome)
     except Exception:
         logger.debug("submit_widget_form failed", exc_info=True)
+
+
+async def reload_page(browser_session: BrowserSession) -> None:
+    """Re-request the page so a freshly set clearance cookie is actually sent."""
+    session = await browser_session.get_or_create_cdp_session()
+    try:
+        await session.cdp_client.send.Page.reload(
+            params={"ignoreCache": True}, session_id=session.session_id
+        )
+    except Exception:
+        logger.debug("reload_page failed", exc_info=True)
+    await asyncio.sleep(1.0)
 
 
 async def click_coordinate(
@@ -185,6 +210,47 @@ async def page_cookie_header(browser_session: BrowserSession, host: str) -> str:
         logger.debug("reading cookies for the captcha task failed", exc_info=True)
         return ""
     return cookie_header_for([dict(c) for c in (jar or [])], host)
+
+
+def normalise_cookies(raw: Any, host: str) -> list[dict[str, Any]]:
+    """Clearance cookies in whatever shape they arrived, as CDP setCookie params.
+
+    Solvers return these as a name-to-value mapping, as a list of cookie objects,
+    or as one ``name=value; name=value`` header line, so all three are accepted
+    rather than one being guessed at.
+    """
+    domain = (host or "").lower().rsplit(":", 1)[0]
+    pairs: list[tuple[str, str, dict[str, Any]]] = []
+    if isinstance(raw, dict):
+        pairs = [(str(k), str(v), {}) for k, v in raw.items()]
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("name"):
+                pairs.append(
+                    (str(item["name"]), str(item.get("value") or ""), dict(item))
+                )
+            elif isinstance(item, str) and "=" in item:
+                name, _, value = item.partition("=")
+                pairs.append((name.strip(), value.strip(), {}))
+    elif isinstance(raw, str):
+        for part in raw.split(";"):
+            if "=" in part:
+                name, _, value = part.partition("=")
+                pairs.append((name.strip(), value.strip(), {}))
+    out: list[dict[str, Any]] = []
+    for name, value, extra in pairs:
+        if not name:
+            continue
+        cookie: dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "domain": str(extra.get("domain") or domain),
+            "path": str(extra.get("path") or "/"),
+        }
+        if not cookie["domain"]:
+            continue
+        out.append(cookie)
+    return out
 
 
 async def set_cookies(

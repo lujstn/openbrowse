@@ -27,19 +27,33 @@ _SOLVE_DESCRIPTION = (
     "here, so call this the moment any CAPTCHA or verification challenge stands "
     "between you and the page you need. You do not need to name the type: the page "
     "is inspected and the right solver chosen. If you can read a site key off the "
-    "widget you may pass it as hint_site_key."
+    "widget you may pass it as hint_site_key. For a plain distorted-text image, "
+    "which has no marker to find it by, pass hint_type='imagetotext' together with "
+    "hint_answer_selector, the CSS selector of the box the answer is typed into, and "
+    "hint_image_selector when the challenge is not the first image on the page."
 )
 
 
 def _apply_overrides(
-    det: Detection | None, hint_type: str | None, hint_site_key: str | None
+    det: Detection | None,
+    hint_type: str | None,
+    hint_site_key: str | None,
+    hint_answer_selector: str | None = None,
+    hint_image_selector: str | None = None,
 ) -> Detection | None:
     if det is None and hint_type and strategy_for(hint_type):
         det = Detection(kind=hint_type, params={}, confidence=1)
     if det is None:
         return None
+    extra: dict[str, Any] = {}
     if hint_site_key and not det.params.get("siteKey"):
-        det = replace(det, params={**det.params, "siteKey": hint_site_key})
+        extra["siteKey"] = hint_site_key
+    if hint_answer_selector:
+        extra["answer_selector"] = hint_answer_selector
+    if hint_image_selector:
+        extra["image_selector"] = hint_image_selector
+    if extra:
+        det = replace(det, params={**det.params, **extra})
     return det
 
 
@@ -89,10 +103,6 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         await _emit_progress(progress, msg)
 
     cookies = await cdp.page_cookie_header(browser_session, host)
-    try:
-        ua = await _eval_js(browser_session, "navigator.userAgent") or ""
-    except Exception:
-        ua = ""
     return SolveContext(
         session=browser_session,
         page_url=page_url,
@@ -101,7 +111,6 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         emit=emit,
         cost_sink=cost_sink,
         proxy=getattr(settings, "captcha_proxy", "") or "",
-        user_agent=ua,
     )
 
 
@@ -124,9 +133,13 @@ def register_captcha_tools(
         browser_session,
         hint_type: str | None = None,
         hint_site_key: str | None = None,
+        hint_answer_selector: str | None = None,
+        hint_image_selector: str | None = None,
     ) -> ActionResult:
         det = await detect_captcha(browser_session)
-        det = _apply_overrides(det, hint_type, hint_site_key)
+        det = _apply_overrides(
+            det, hint_type, hint_site_key, hint_answer_selector, hint_image_selector
+        )
         if det is None:
             return ActionResult(
                 extracted_content=(

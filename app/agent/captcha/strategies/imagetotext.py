@@ -1,8 +1,9 @@
-"""Generic image recognition: ImageToText and VisionEngine.
+"""Generic image recognition: read the answer out of a picture and type it.
 
 A bare image challenge has no universal DOM marker, so these do not auto-detect
-from a page probe; they are driven by an explicit hint (kind + the answer field
-selector) and unit-tested through build_task and plan_actions.
+from a page probe. They are driven by explicit hints on solve_captcha: the answer
+field's selector, without which nothing can be typed, and optionally the image's
+selector when the first image on the page is not the challenge.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from app.agent.captcha.registry import register
 
 class _ImageAnswerStrategy(RecognitionStrategy):
     solution_keys = ("text",)
+    required_params = ("answer_selector",)
     module = ""
 
     async def capture(self, det, ctx):
@@ -47,5 +49,7 @@ class ImageToText(_ImageAnswerStrategy):
     kind = "imagetotext"
 
     def detect(self, probe):
+        # @nonobvious(deliberately-missing): a bare image carries no marker that tells
+        # a challenge from an ordinary picture, so this is reached by hint only.
         return None
 

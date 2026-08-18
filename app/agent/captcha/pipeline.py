@@ -36,6 +36,10 @@ def _record_cost(result: dict[str, Any], ctx: SolveContext) -> None:
         ctx.cost_sink.append(cost)
 
 
+def _article(kind: str) -> str:
+    return "an" if kind[:1].lower() in "aeiou" else "a"
+
+
 def _fresh_single_use(fresh: Detection, old: Detection) -> bool:
     for k in _SINGLE_USE_KEYS:
         nv = fresh.params.get(k)
@@ -108,13 +112,23 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
     if strategy.unsupported_reason:
         await ctx.emit(f"captcha: {det.kind} cannot be solved here")
         return ActionResult(
-            error=f"This page shows a {det.kind} challenge, and {strategy.unsupported_reason}. "
+            error=f"This page shows {_article(det.kind)} {det.kind} challenge, and "
+            f"{strategy.unsupported_reason}. "
             "Nothing was spent. Reach what you need by another path."
         )
     if strategy.requires_proxy and not ctx.proxy:
         return ActionResult(
             error=f"The {det.kind} challenge type needs an upstream proxy, which is "
             "not configured for this session."
+        )
+    missing = [k for k in strategy.required_params if not det.params.get(k)]
+    if missing:
+        return ActionResult(
+            error=f"Solving {_article(det.kind)} {det.kind} challenge needs "
+            f"{' and '.join(missing)}, "
+            "which was not given, so nothing was created and nothing was spent. "
+            "Name the field on the page and call solve_captcha again, or reach what "
+            "you need by another path."
         )
     if det.interstitial and giveups.get(host, 0) >= 2:
         return ActionResult(
@@ -129,7 +143,6 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
             "solve is attempted. Reach what you need by another path."
         )
 
-    before_url = ctx.page_url
     try:
         async with httpx.AsyncClient() as http:
             for attempt in (1, 2):
@@ -157,7 +170,7 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                     logger.debug("redeem failed", exc_info=True)
                     return ActionResult(error=f"applying the {det.kind} solution failed: {e}")
 
-                if await strategy.verify(det, ctx, before_url):
+                if await strategy.verify(det, ctx):
                     await ctx.emit(f"captcha: cleared on {host}")
                     return ActionResult(
                         extracted_content=f"CAPTCHA cleared: {host} let the page through.",
@@ -168,7 +181,8 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                     await ctx.emit(f"captcha: {det.kind} solution placed on {host}")
                     return ActionResult(
                         extracted_content=(
-                            f"A {det.kind} solution is now in the page on {host}. The "
+                            f"{_article(det.kind).capitalize()} {det.kind} solution is "
+                            f"now in the page on {host}. The "
                             "checkbox will NOT visibly tick, because the solution is "
                             "written straight into the page rather than by clicking it, "
                             "so do not judge this by the widget's appearance and do not "
@@ -182,8 +196,11 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                     )
 
                 if attempt == 1:
+                    # @nonobvious(must-hold): the strategy is chosen once, so a page
+                    # that re-serves a different challenge type must not have its new
+                    # parameters fed to the old builder.
                     fresh = await detect_captcha(ctx.session)
-                    if fresh and _fresh_single_use(fresh, det):
+                    if fresh and fresh.kind == det.kind and _fresh_single_use(fresh, det):
                         await ctx.emit("captcha: rejected, retrying with the fresh challenge (attempt 2 of 2)")
                         det = fresh
                         continue
@@ -192,7 +209,8 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                 await ctx.emit(f"captcha: {host} still challenging after a solve")
                 return ActionResult(
                     error=(
-                        f"A {det.kind} solution was submitted, but {host} is still "
+                        f"{_article(det.kind).capitalize()} {det.kind} solution was "
+                        f"submitted, but {host} is still "
                         "showing the challenge. Check the parameters the probe collected "
                         "before trying again here, or reach what you need by another path."
                     )

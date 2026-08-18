@@ -23,6 +23,11 @@ from app.agent.captcha.registry import register
 
 logger = logging.getLogger(__name__)
 
+# @nonobvious(forced-by): a v3 token is minted against the action the page asked
+# for and rejected under any other, so this stands in only where the page keeps its
+# action somewhere the probe cannot read.
+_DEFAULT_ACTION = "verify"
+
 _CALLBACK_WALK_JS = r"""(function (token) {
   try {
     var cfg = window.___grecaptcha_cfg;
@@ -76,7 +81,6 @@ class RecaptchaV2(_RecaptchaTokenBase):
                 "apiOrigin": probe.get("apiOrigin", ""),
             },
             interstitial=bool(probe.get("interstitial")),
-            served_host=probe.get("apiOrigin", ""),
             confidence=int(probe.get("confidence", 10)),
         )
 
@@ -115,7 +119,6 @@ class RecaptchaV2Enterprise(_RecaptchaTokenBase):
                 "apiOrigin": probe.get("apiOrigin", ""),
             },
             interstitial=bool(probe.get("interstitial")),
-            served_host=probe.get("apiOrigin", ""),
             confidence=int(probe.get("confidence", 10)),
         )
 
@@ -150,9 +153,9 @@ class RecaptchaV3(_RecaptchaTokenBase):
             params={
                 "siteKey": probe.get("siteKey", ""),
                 "apiOrigin": probe.get("apiOrigin", ""),
+                "action": probe.get("action", ""),
             },
             interstitial=bool(probe.get("interstitial")),
-            served_host=probe.get("apiOrigin", ""),
             confidence=int(probe.get("confidence", 10)),
         )
 
@@ -162,8 +165,8 @@ class RecaptchaV3(_RecaptchaTokenBase):
             "type": "ReCaptchaV3TaskProxyLess",
             "websiteURL": ctx.page_url,
             "websiteKey": p.get("siteKey", ""),
-            "pageAction": "verify",
-            "minScore": 0.9,
+            "pageAction": p.get("action") or _DEFAULT_ACTION,
+            "minScore": 0.7,
         }
         api = _api_domain(det)
         if api:
@@ -183,9 +186,9 @@ class RecaptchaV3Enterprise(_RecaptchaTokenBase):
             params={
                 "siteKey": probe.get("siteKey", ""),
                 "apiOrigin": probe.get("apiOrigin", ""),
+                "action": probe.get("action", ""),
             },
             interstitial=bool(probe.get("interstitial")),
-            served_host=probe.get("apiOrigin", ""),
             confidence=int(probe.get("confidence", 10)),
         )
 
@@ -194,7 +197,7 @@ class RecaptchaV3Enterprise(_RecaptchaTokenBase):
             "type": "ReCaptchaV3EnterpriseTaskProxyLess",
             "websiteURL": ctx.page_url,
             "websiteKey": det.params.get("siteKey", ""),
-            "pageAction": "verify",
+            "pageAction": det.params.get("action") or _DEFAULT_ACTION,
         }
         api = _api_domain(det)
         if api:
@@ -206,6 +209,10 @@ class RecaptchaV3Enterprise(_RecaptchaTokenBase):
 class RecaptchaV2Image(RecognitionStrategy):
     kind = "recaptcha_v2_image"
     priority = 5
+    unsupported_reason = (
+        "solving it is the ordinary reCAPTCHA solve, which clears the grid for you, "
+        "so the click-the-grid path is unproven and not offered"
+    )
     solution_keys = ("objects", "box", "points")
     _WIDGET_SELECTOR = 'iframe[src*="/recaptcha/api2/bframe"]'
 

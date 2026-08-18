@@ -28,7 +28,6 @@ class Detection:
     kind: str
     params: dict[str, Any] = field(default_factory=dict)
     interstitial: bool = False
-    served_host: str = ""
     confidence: int = 10
 
 
@@ -43,7 +42,6 @@ class SolveContext:
     emit: Callable[[str], Awaitable[None]]
     cost_sink: list[float] | None = None
     proxy: str = ""
-    user_agent: str = ""
 
 
 @dataclass
@@ -78,6 +76,11 @@ class CaptchaStrategy(ABC):
     kind: ClassVar[str] = ""
     priority: ClassVar[int] = 0
     requires_proxy: ClassVar[bool] = False
+    # @nonobvious(means): detection params this strategy cannot work without. A
+    # solve missing any of them is refused before a task is created, so a hint-only
+    # strategy called without its hint costs nothing rather than being billed and
+    # then doing nothing.
+    required_params: ClassVar[tuple[str, ...]] = ()
     # @nonobvious(means): set when the solving service offers no task for this
     # challenge, so it is still recognised and reported rather than silently
     # missed, but no task is created and nothing is charged.
@@ -104,11 +107,16 @@ class CaptchaStrategy(ABC):
     ) -> None:
         """Apply the CapSolver solution to the page."""
 
-    async def verify(
-        self, det: Detection, ctx: SolveContext, before_url: str
-    ) -> bool:
-        """Honest success check: the page moved on, or my challenge is gone."""
-        return await cdp.page_advanced(ctx.session, before_url, self)
+    async def verify(self, det: Detection, ctx: SolveContext) -> bool:
+        """Honest success check: my challenge is gone from the page.
+
+        @nonobvious(forced-by): an in-page widget stays in the DOM after a solve by
+        design, because the token is written into it rather than clicked into it, so
+        waiting the full interstitial budget for it to vanish can only ever time out.
+        Only a full-page interstitial can prove itself by clearing.
+        """
+        timeout = 25.0 if det.interstitial else 4.0
+        return await cdp.page_advanced(ctx.session, timeout_s=timeout)
 
 
 _PLACE_JS = r"""(function (token, names, tag, widgetSel) {
@@ -169,7 +177,9 @@ class TokenStrategy(CaptchaStrategy):
     async def redeem(self, solution, det, ctx):
         await self._place(ctx.session, solution, det)
         if det.interstitial:
-            await cdp.submit_widget_form(ctx.session)
+            await cdp.submit_widget_form(
+                ctx.session, self.response_fields, self.widget_selector
+            )
 
     async def _place(
         self, session: BrowserSession, solution: dict[str, Any], det: Detection

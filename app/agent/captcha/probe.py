@@ -38,6 +38,21 @@ _PROBE_JS = r"""(function () {
     var src = el.getAttribute("src") || "";
     try { return new URL(src, location.href).origin; } catch (e) { return ""; }
   }
+  // @nonobvious(forced-by): a score-based token is minted against the action name
+  // the page passes to its own execute() call and is rejected under any other, so
+  // the name has to be read off the page rather than assumed.
+  function scoreAction() {
+    var el = document.querySelector(".g-recaptcha[data-action],[data-sitekey][data-action]");
+    var a = el && el.getAttribute("data-action");
+    if (a) return a;
+    var re = /grecaptcha[\s\S]{0,200}?execute\s*\(\s*[^)]{0,160}?action\s*:\s*['"]([\w .\/-]{1,64})['"]/;
+    var inline = document.querySelectorAll("script:not([src])");
+    for (var i = 0; i < inline.length; i++) {
+      var m = re.exec(inline[i].textContent || "");
+      if (m) return m[1];
+    }
+    return "";
+  }
   function isInterstitial(widget) {
     if (!widget) return false;
     var form = widget.closest ? widget.closest("form") : null;
@@ -56,7 +71,7 @@ _PROBE_JS = r"""(function () {
   var out = {
     kind: "", siteKey: "", dataS: "", invisible: false, interstitial: false,
     apiOrigin: "", question: "", captchaId: "", gt: "", challenge: "",
-    captchaUrl: "", confidence: 0
+    captchaUrl: "", action: "", confidence: 0
   };
 
   var rc = document.querySelector(".g-recaptcha,[data-sitekey]");
@@ -118,6 +133,7 @@ _PROBE_JS = r"""(function () {
       try {
         out.siteKey = new URL(v3.getAttribute("src"), location.href).searchParams.get("render") || "";
       } catch (e) {}
+      out.action = scoreAction();
       out.apiOrigin = originOf('script[src*="/recaptcha/"]');
       out.confidence = 12;
     }

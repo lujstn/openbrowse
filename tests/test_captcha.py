@@ -42,7 +42,13 @@ SAMPLE_PROBES = {
     "geetest_v4": {"kind": "geetest_v4", "captchaId": "cid", "confidence": 15},
     "mtcaptcha": {"kind": "mtcaptcha", "siteKey": "sk", "confidence": 15},
     "awswaf_token": {"kind": "awswaf_token", "confidence": 12},
-    "awswaf_image": {"kind": "awswaf_image", "question": "q", "confidence": 12},
+}
+
+# @nonobvious(mirrors): strategies the page probe cannot name, reached only by an
+# explicit hint on solve_captcha, with the params that hint can actually supply.
+HINT_ONLY = {
+    "cloudflare_challenge": {"siteKey": "sk"},
+    "imagetotext": {"answer_selector": "#answer", "image_b64": "aW1n"},
 }
 
 
@@ -316,11 +322,162 @@ def test_every_token_strategy_can_actually_place_its_solution():
         if not isinstance(s, TokenStrategy):
             continue
         declares = bool(getattr(s, "response_fields", ()))
-        overrides = type(s)._place is not TokenStrategy._place
+        overrides = (
+            type(s)._place is not TokenStrategy._place
+            or type(s).redeem is not TokenStrategy.redeem
+        )
         assert declares or overrides, (
             f"{s.kind} would silently drop its solution: it names no response "
             "field and defines no placement of its own"
         )
+
+
+def test_every_strategy_is_reachable_or_refused():
+    """Nothing may create a paid task by a route that cannot apply the answer."""
+    for s in all_strategies():
+        reachable = s.kind in SAMPLE_PROBES or s.kind in HINT_ONLY
+        assert reachable or s.unsupported_reason, (
+            f"{s.kind} is reachable by neither a probe nor a declared hint and is "
+            "not refused, so it can be billed for a solve it cannot apply"
+        )
+
+
+@pytest.mark.parametrize("kind", list(HINT_ONLY))
+def test_hint_only_strategies_build_a_task_the_service_offers(kind):
+    strat = strategy_for(kind)
+    det = Detection(kind=kind, params=HINT_ONLY[kind])
+    task = strat.build_task(det, _ctx(proxy="http://u:p@proxy.example:8080"))
+    assert task["type"] in SERVICE_TASK_TYPES
+
+
+async def test_a_hint_only_strategy_without_its_hint_spends_nothing():
+    strat = strategy_for("imagetotext")
+    ctx = _ctx()
+    res = await pipeline.run_solve(strat, Detection(kind="imagetotext"), ctx, {})
+    assert res.error and "answer_selector" in res.error
+    assert ctx.cost_sink == []
+
+
+def test_image_to_text_types_the_answer_into_the_named_field():
+    strat = strategy_for("imagetotext")
+    det = Detection(kind="imagetotext", params={"answer_selector": "#answer"})
+    actions = strat.plan_actions({"text": "AB12"}, det)
+    assert [(a.kind, a.selector, a.text) for a in actions] == [
+        ("type", "#answer", "AB12")
+    ]
+
+
+def test_cloudflare_task_carries_the_metadata_the_service_requires():
+    strat = strategy_for("cloudflare_challenge")
+    det = Detection(kind="cloudflare_challenge", params={"siteKey": "sk"})
+    task = strat.build_task(det, _ctx(proxy="http://u:p@proxy.example:8080"))
+    assert task["metadata"] == {"type": "challenge"}
+    assert task["websiteKey"] == "sk"
+    assert task["proxy"] == "http://u:p@proxy.example:8080"
+
+
+async def test_cloudflare_challenge_applies_its_clearance_cookies():
+    from app.agent.captcha import cdp as cdp_mod
+    strat = strategy_for("cloudflare_challenge")
+    jar, reloaded = [], []
+    with patch.object(cdp_mod, "set_cookies",
+                      AsyncMock(side_effect=lambda s, c: jar.extend(c))), \
+         patch.object(cdp_mod, "reload_page",
+                      AsyncMock(side_effect=lambda s: reloaded.append(True))):
+        await strat.redeem(
+            {"token": "t", "cookies": {"cf_clearance": "abc"}},
+            Detection(kind="cloudflare_challenge"),
+            _ctx(),
+        )
+    assert [(c["name"], c["value"], c["domain"]) for c in jar] == [
+        ("cf_clearance", "abc", "site.example")
+    ]
+    assert reloaded == [True]
+
+
+async def test_cloudflare_challenge_refuses_a_solution_with_no_cookies():
+    strat = strategy_for("cloudflare_challenge")
+    with pytest.raises(ValueError):
+        await strat.redeem(
+            {"token": "t"}, Detection(kind="cloudflare_challenge"), _ctx()
+        )
+
+
+async def test_aws_waf_token_becomes_a_cookie_and_a_reload():
+    from app.agent.captcha import cdp as cdp_mod
+    strat = strategy_for("awswaf_token")
+    jar, reloaded, submitted = [], [], []
+    with patch.object(cdp_mod, "set_cookies",
+                      AsyncMock(side_effect=lambda s, c: jar.extend(c))), \
+         patch.object(cdp_mod, "reload_page",
+                      AsyncMock(side_effect=lambda s: reloaded.append(True))), \
+         patch.object(cdp_mod, "submit_widget_form",
+                      AsyncMock(side_effect=lambda *a: submitted.append(True))):
+        await strat.redeem(
+            {"token": "aws-waf-token=XYZ"},
+            Detection(kind="awswaf_token", interstitial=True),
+            _ctx(),
+        )
+    assert [(c["name"], c["value"]) for c in jar] == [("aws-waf-token", "XYZ")]
+    assert reloaded == [True]
+    assert submitted == []
+
+
+def test_cookies_are_accepted_in_every_shape_a_solver_returns():
+    from app.agent.captcha.cdp import normalise_cookies
+    expected = [("a", "1", "site.example", "/"), ("b", "2", "site.example", "/")]
+    for raw in ({"a": "1", "b": "2"},
+                "a=1; b=2",
+                [{"name": "a", "value": "1"}, {"name": "b", "value": "2"}]):
+        got = normalise_cookies(raw, "site.example:443")
+        assert [(c["name"], c["value"], c["domain"], c["path"]) for c in got] == expected
+    assert normalise_cookies(None, "site.example") == []
+
+
+def test_v3_uses_the_page_action_the_site_asked_for():
+    strat = strategy_for("recaptcha_v3")
+    named = strat.detect({"kind": "recaptcha_v3", "siteKey": "sk", "action": "login",
+                          "confidence": 12})
+    assert strat.build_task(named, _ctx())["pageAction"] == "login"
+    bare = strat.detect({"kind": "recaptcha_v3", "siteKey": "sk", "confidence": 12})
+    assert strat.build_task(bare, _ctx())["pageAction"] == "verify"
+
+
+def test_probe_reads_the_score_action_off_the_page():
+    js = probe_mod._PROBE_JS
+    assert "scoreAction" in js
+    assert "data-action" in js
+
+
+async def test_a_retry_refuses_a_challenge_of_another_kind():
+    strat = _FakeStrategy(interstitial=True)
+    create, getres = _mock_capsolver(
+        results=[{"status": "ready", "solution": {"token": "t"}, "cost": "0.001"}] * 4
+    )
+    other = Detection(kind="something-else", params={"dataS": "fresh"},
+                      interstitial=True)
+    with patch.object(pipeline.client, "create_task", create), \
+         patch.object(pipeline.client, "get_task_result", getres), \
+         patch.object(pipeline.cdp, "submit_widget_form", AsyncMock()), \
+         patch.object(pipeline.cdp, "page_advanced", AsyncMock(return_value=False)), \
+         patch.object(pipeline, "detect_captcha", AsyncMock(return_value=other)):
+        res = await pipeline.run_solve(strat, _det(True), _ctx(), {})
+    assert res.error and "still" in res.error
+    assert create.await_count == 1
+
+
+async def test_verify_does_not_wait_out_an_in_page_widget():
+    from app.agent.captcha import base as base_mod
+    budgets = []
+
+    async def fake_advanced(session, timeout_s=25.0):
+        budgets.append(timeout_s)
+        return False
+
+    with patch.object(base_mod.cdp, "page_advanced", fake_advanced):
+        await _FakeStrategy().verify(_det(False), _ctx())
+        await _FakeStrategy().verify(_det(True), _ctx())
+    assert budgets[0] < budgets[1]
 
 
 async def test_shared_placement_writes_into_the_widgets_form():
@@ -359,10 +516,25 @@ def test_token_is_placed_inside_the_widgets_form():
     assert "out.inForm" in _PLACE_JS
 
 
-def test_submit_refuses_an_empty_response_field():
+def test_submit_refuses_anything_but_this_challenges_own_filled_form():
     from app.agent.captcha.cdp import _SUBMIT_WIDGET_JS
     assert '"empty"' in _SUBMIT_WIDGET_JS
-    assert "g-recaptcha-response" in _SUBMIT_WIDGET_JS
+    assert '"no-response-field"' in _SUBMIT_WIDGET_JS
+    assert 'document.querySelector("form")' not in _SUBMIT_WIDGET_JS
+
+
+async def test_submit_is_told_this_challenges_own_response_field():
+    from app.agent.captcha import cdp as cdp_mod
+    seen = {}
+
+    async def fake_eval(session, expr):
+        seen["js"] = expr
+        return "submitted"
+
+    with patch.object(cdp_mod, "_eval_js", fake_eval):
+        await cdp_mod.submit_widget_form(SimpleNamespace(), ("x-response",), ".x-widget")
+    assert '"x-response"' in seen["js"]
+    assert ".x-widget" in seen["js"]
 
 
 async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
@@ -371,11 +543,11 @@ async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
     still_there = AsyncMock(return_value={"kind": "recaptcha_v2"})
     with patch.object(cdp_mod, "_eval_js", settled), \
          patch.object(cdp_mod, "probe_strict", still_there):
-        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=2.5) is False
+        assert await cdp_mod.page_advanced(SimpleNamespace(), timeout_s=2.5) is False
     gone = AsyncMock(return_value=None)
     with patch.object(cdp_mod, "_eval_js", settled), \
          patch.object(cdp_mod, "probe_strict", gone):
-        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=6.0) is True
+        assert await cdp_mod.page_advanced(SimpleNamespace(), timeout_s=6.0) is True
 
 
 async def test_page_advanced_ignores_a_single_clear_read_mid_load():
@@ -385,7 +557,7 @@ async def test_page_advanced_ignores_a_single_clear_read_mid_load():
                                      {"kind": "recaptcha_v2"}])
     with patch.object(cdp_mod, "_eval_js", settled), \
          patch.object(cdp_mod, "probe_strict", flicker):
-        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=3.5) is False
+        assert await cdp_mod.page_advanced(SimpleNamespace(), timeout_s=3.5) is False
 
 
 def test_interstitial_detection_allows_a_widget_with_a_callback():

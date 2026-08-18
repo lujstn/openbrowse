@@ -2,7 +2,9 @@
 
 Adding a captcha type is one strategy class plus @register; nothing else in the
 tree changes. Detection runs every strategy's pure detect over one probe snapshot
-and ranks the hits, so ambiguity is resolved by specificity, not file order.
+and ranks whatever claims it. The probe names a single challenge today, so the
+ranking has nothing to choose between; it is what keeps file order from deciding
+if a probe ever reports more than one candidate.
 """
 
 from __future__ import annotations
