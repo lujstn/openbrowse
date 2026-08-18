@@ -484,7 +484,7 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
     assert resp.status_code == 409
 
 
-@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+@patch("app.dashboard.routes.pool.submit_nowait")
 async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monkeypatch):
     import asyncio
 

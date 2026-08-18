@@ -324,7 +324,7 @@ async def test_rejects_non_finite_budget(client):
         assert resp.status_code == 422, raw
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_rerun_keeps_settings_the_caller_omitted(
     mock_submit, client, setup, monkeypatch
 ):
@@ -358,7 +358,7 @@ async def test_rerun_keeps_settings_the_caller_omitted(
     assert stored["system_prompt_extension"] == "be brief"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_rerun_scales_a_budget_the_caller_resends(
     mock_submit, client, setup, monkeypatch
 ):
