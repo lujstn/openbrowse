@@ -38,7 +38,6 @@ from app.agent.output_store import (
 )
 from app.agent.textguard import guard_key
 from app import system_metrics
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 

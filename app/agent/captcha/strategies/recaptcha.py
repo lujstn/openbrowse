@@ -15,7 +15,6 @@ from app.agent.captcha.base import (
     Action,
     Detection,
     RecognitionStrategy,
-    SolveContext,
     TokenStrategy,
     _first_present,
 )

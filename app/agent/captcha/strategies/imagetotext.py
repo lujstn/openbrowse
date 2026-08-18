@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 
 from app.agent.captcha import cdp
-from app.agent.captcha.base import Action, Detection, RecognitionStrategy, _first_present
+from app.agent.captcha.base import Action, RecognitionStrategy, _first_present
 from app.agent.captcha.registry import register
 
 

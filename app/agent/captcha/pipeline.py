@@ -16,7 +16,7 @@ import httpx
 
 from browser_use import ActionResult
 
-from app.agent.captcha import cdp, client
+from app.agent.captcha import client
 from app.agent.captcha.base import Detection, SolveContext, _first_present
 from app.agent.captcha.registry import detect_captcha
 from app.config import settings

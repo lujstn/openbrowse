@@ -11,7 +11,7 @@ import pytest
 from app.agent.captcha import all_strategies, strategy_for
 from app.agent.captcha.base import Detection, SolveContext, TokenStrategy
 from app.agent.captcha.registry import detect_from_probe
-from app.agent.captcha import pipeline, probe as probe_mod
+from app.agent.captcha import cdp as cdp_mod, pipeline, probe as probe_mod
 
 
 # @nonobvious(mirrors): the solving service's published task list. A task type
@@ -97,7 +97,6 @@ def test_all_strategies_registered_and_unique():
 
 
 def test_no_task_type_is_sent_that_the_service_does_not_offer():
-    from app.agent.captcha.base import RecognitionStrategy
     for kind, probe in SAMPLE_PROBES.items():
         strat = strategy_for(kind)
         det = strat.detect(probe)
@@ -213,8 +212,8 @@ async def test_pipeline_reports_cleared_when_page_advances():
     create, getres = _mock_capsolver()
     with patch.object(pipeline.client, "create_task", create), \
          patch.object(pipeline.client, "get_task_result", getres), \
-         patch.object(pipeline.cdp, "submit_widget_form", AsyncMock()), \
-         patch.object(pipeline.cdp, "page_advanced", AsyncMock(return_value=True)):
+         patch.object(cdp_mod, "submit_widget_form", AsyncMock()), \
+         patch.object(cdp_mod, "page_advanced", AsyncMock(return_value=True)):
         ctx = _ctx()
         res = await pipeline.run_solve(strat, _det(True), ctx, {})
     assert res.error is None
@@ -230,8 +229,8 @@ async def test_pipeline_gives_up_after_two_interstitial_failures():
     giveups = {}
     with patch.object(pipeline.client, "create_task", create), \
          patch.object(pipeline.client, "get_task_result", getres), \
-         patch.object(pipeline.cdp, "submit_widget_form", AsyncMock()), \
-         patch.object(pipeline.cdp, "page_advanced", AsyncMock(return_value=False)), \
+         patch.object(cdp_mod, "submit_widget_form", AsyncMock()), \
+         patch.object(cdp_mod, "page_advanced", AsyncMock(return_value=False)), \
          patch.object(pipeline, "detect_captcha", AsyncMock(return_value=None)):
         await pipeline.run_solve(strat, _det(True), _ctx(), giveups)
         await pipeline.run_solve(strat, _det(True), _ctx(), giveups)
@@ -377,7 +376,6 @@ def test_cloudflare_task_carries_the_metadata_the_service_requires():
 
 
 async def test_cloudflare_challenge_applies_its_clearance_cookies():
-    from app.agent.captcha import cdp as cdp_mod
     strat = strategy_for("cloudflare_challenge")
     jar, reloaded = [], []
     with patch.object(cdp_mod, "set_cookies",
@@ -404,7 +402,6 @@ async def test_cloudflare_challenge_refuses_a_solution_with_no_cookies():
 
 
 async def test_aws_waf_token_becomes_a_cookie_and_a_reload():
-    from app.agent.captcha import cdp as cdp_mod
     strat = strategy_for("awswaf_token")
     jar, reloaded, submitted = [], [], []
     with patch.object(cdp_mod, "set_cookies",
@@ -458,8 +455,8 @@ async def test_a_retry_refuses_a_challenge_of_another_kind():
                       interstitial=True)
     with patch.object(pipeline.client, "create_task", create), \
          patch.object(pipeline.client, "get_task_result", getres), \
-         patch.object(pipeline.cdp, "submit_widget_form", AsyncMock()), \
-         patch.object(pipeline.cdp, "page_advanced", AsyncMock(return_value=False)), \
+         patch.object(cdp_mod, "submit_widget_form", AsyncMock()), \
+         patch.object(cdp_mod, "page_advanced", AsyncMock(return_value=False)), \
          patch.object(pipeline, "detect_captcha", AsyncMock(return_value=other)):
         res = await pipeline.run_solve(strat, _det(True), _ctx(), {})
     assert res.error and "still" in res.error
@@ -524,7 +521,6 @@ def test_submit_refuses_anything_but_this_challenges_own_filled_form():
 
 
 async def test_submit_is_told_this_challenges_own_response_field():
-    from app.agent.captcha import cdp as cdp_mod
     seen = {}
 
     async def fake_eval(session, expr):
@@ -538,7 +534,6 @@ async def test_submit_is_told_this_challenges_own_response_field():
 
 
 async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
-    from app.agent.captcha import cdp as cdp_mod
     settled = AsyncMock(return_value=True)
     still_there = AsyncMock(return_value={"kind": "recaptcha_v2"})
     with patch.object(cdp_mod, "_eval_js", settled), \
@@ -551,7 +546,6 @@ async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
 
 
 async def test_page_advanced_ignores_a_single_clear_read_mid_load():
-    from app.agent.captcha import cdp as cdp_mod
     settled = AsyncMock(return_value=True)
     flicker = AsyncMock(side_effect=[None, {"kind": "recaptcha_v2"},
                                      {"kind": "recaptcha_v2"}])
