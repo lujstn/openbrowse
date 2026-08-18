@@ -50,6 +50,16 @@ class Settings:
     capsolver_api_key: str = field(
         default_factory=lambda: os.environ.get("CAPSOLVER_API_KEY", "")
     )
+    captcha_proxy: str = field(
+        default_factory=lambda: os.environ.get("CAPTCHA_PROXY", "")
+    )
+    captcha_auto_solve: bool = field(
+        default_factory=lambda: os.environ.get("CAPTCHA_AUTO_SOLVE", "").lower()
+        in ("1", "true", "yes")
+    )
+    captcha_cost_cap_usd: float = field(
+        default_factory=lambda: float(os.environ.get("CAPTCHA_MAX_COST_USD") or 0.0)
+    )
     data_dir: Path = field(default_factory=lambda: _BASE / "data")
     db_path: Path = field(default_factory=lambda: _BASE / "data" / "browser_use.db")
     profiles_dir: Path = field(default_factory=lambda: _BASE / "data" / "profiles")

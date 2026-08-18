@@ -35,11 +35,11 @@ from app.agent.leak_repair import (
 )
 from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
+from app.agent.captcha import detect_captcha, register_captcha_tools
 from app.agent.tools import (
     TabManager,
     _eval_js,
     action_param_kinds,
-    register_capsolver_tool,
     register_clipboard_tools,
     register_code_tools,
     register_completeness_gate,
@@ -1560,7 +1560,7 @@ async def run_agent_session(session_id: str) -> None:
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
-        register_capsolver_tool(tools, capsolver_costs, _captcha_progress)
+        register_captcha_tools(tools, capsolver_costs, _captcha_progress)
         if not settings.capsolver_api_key:
             await _captcha_progress(
                 "CAPTCHA solving is off: no CAPSOLVER_API_KEY is configured, so a "
