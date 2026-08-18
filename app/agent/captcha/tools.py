@@ -23,14 +23,14 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _SOLVE_DESCRIPTION = (
-    "Solve the CAPTCHA blocking the current page. Nothing else solves it for you "
-    "here, so call this the moment any CAPTCHA or verification challenge stands "
-    "between you and the page you need. You do not need to name the type: the page "
-    "is inspected and the right solver chosen. If you can read a site key off the "
-    "widget you may pass it as hint_site_key. For a plain distorted-text image, "
-    "which has no marker to find it by, pass hint_type='imagetotext' together with "
-    "hint_answer_selector, the CSS selector of the box the answer is typed into, and "
-    "hint_image_selector when the challenge is not the first image on the page."
+    "Use the operator-configured, authorised, paid service to solve the CAPTCHA "
+    "blocking the current page. Call this before touching any checkbox, slider, "
+    "image grid, icon puzzle, or secondary verification challenge; wait for its "
+    "result and never click tiles or drag a puzzle yourself. You do not need to name "
+    "the type: the page is inspected and the right solver chosen. If you can read a "
+    "site key you may pass hint_site_key. For a plain distorted-text image with no "
+    "marker, pass hint_type='imagetotext' with hint_answer_selector, the CSS selector "
+    "of its answer box, and hint_image_selector when it is not the first image."
 )
 
 

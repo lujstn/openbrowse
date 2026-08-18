@@ -171,6 +171,180 @@ def test_geetest_v4_declares_all_fields():
     }
 
 
+def test_runtime_sources_are_part_of_the_page_probe():
+    js = probe_mod._PROBE_JS
+    assert "window.mtcaptchaConfig" in js
+    assert "window.mtcaptcha.getConfiguration" in js
+    assert '__openbrowseCaptchaBridge' in js
+    assert 'runtimeParam(["gt"])' in js
+    assert 'runtimeParam(["challenge"])' in js
+    assert 'runtimeParam(["captcha_id", "captchaId"])' in js
+    assert js.index('out.challenge = runtimeParam(["challenge"])') < js.index(
+        "gt3.challenge"
+    )
+    assert js.index("gt4.captchaId") < js.index(
+        'attr(gtEl, ["data-captcha-id"])'
+    )
+    assert js.index("mtConfig.sitekey") < js.index(
+        'attr(mt, ["data-mtcaptcha-sitekey", "data-sitekey"])'
+    )
+
+
+def test_recognised_widgets_survive_missing_runtime_parameters():
+    v3 = strategy_for("geetest_v3").detect(
+        {"kind": "geetest_v3", "gt": "", "challenge": "", "confidence": 15}
+    )
+    v4 = strategy_for("geetest_v4").detect(
+        {"kind": "geetest_v4", "captchaId": "", "confidence": 15}
+    )
+    mt = strategy_for("mtcaptcha").detect(
+        {"kind": "mtcaptcha", "siteKey": "", "confidence": 15}
+    )
+    assert v3 is not None and v3.params["gt"] == ""
+    assert v4 is not None and v4.params["captchaId"] == ""
+    assert mt is not None and mt.params["siteKey"] == ""
+    assert detect_from_probe(
+        {"kind": "geetest_v3", "gt": "", "challenge": "", "confidence": 15}
+    ).kind == "geetest_v3"
+
+
+@pytest.mark.parametrize(
+    ("kind", "params", "missing"),
+    [
+        ("geetest_v3", {"gt": "", "challenge": ""}, "gt and challenge"),
+        ("geetest_v4", {"captchaId": ""}, "captchaId"),
+        ("mtcaptcha", {"siteKey": ""}, "siteKey"),
+    ],
+)
+async def test_missing_runtime_parameters_never_create_a_paid_task(
+    kind, params, missing
+):
+    strat = strategy_for(kind)
+    create = AsyncMock()
+    with patch.object(pipeline.client, "create_task", create):
+        result = await pipeline.run_solve(
+            strat,
+            Detection(kind=kind, params=params, confidence=15),
+            _ctx(),
+            {},
+        )
+    assert missing in (result.error or "")
+    assert "recognised" in (result.error or "")
+    create.assert_not_awaited()
+
+
+async def test_geetest_v3_refreshes_runtime_parameters_before_the_task():
+    from app.agent.captcha.strategies import geetest as geetest_mod
+
+    strat = strategy_for("geetest_v3")
+    fresh = {
+        "kind": "geetest_v3",
+        "gt": "fresh-gt",
+        "challenge": "fresh-challenge",
+        "geetestApiServer": "api.example",
+    }
+    with patch.object(geetest_mod, "probe_page", AsyncMock(return_value=fresh)):
+        captured = await strat.capture(
+            Detection(kind="geetest_v3", params={"gt": "old", "challenge": "old"}),
+            _ctx(),
+        )
+    assert captured == {
+        "gt": "fresh-gt",
+        "challenge": "fresh-challenge",
+        "geetestApiServer": "api.example",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kind", "solution", "expected"),
+    [
+        (
+            "geetest_v3",
+            {"challenge": "c", "validate": "v", "seccode": "s"},
+            ("geetest_challenge", "geetest_validate", "geetest_seccode"),
+        ),
+        (
+            "geetest_v4",
+            {
+                "captcha_id": "cid",
+                "lot_number": "lot",
+                "pass_token": "pass",
+                "gen_time": "time",
+                "captcha_output": "out",
+            },
+            ("captcha_id", "lot_number", "pass_token", "gen_time", "captcha_output"),
+        ),
+    ],
+)
+async def test_geetest_solution_uses_getvalidate_fields_and_success_callbacks(
+    kind, solution, expected
+):
+    from app.agent.captcha.strategies import geetest as geetest_mod
+
+    seen = {}
+
+    async def fake_eval(session, expression):
+        seen["js"] = expression
+        return {"fields": len(expected), "callbacks": 1, "instance": True}
+
+    with patch.object(geetest_mod, "_eval_js", fake_eval):
+        await strategy_for(kind)._place(SimpleNamespace(), solution, Detection(kind=kind))
+    for field in expected:
+        assert field in seen["js"]
+    assert "instance.getValidate" in seen["js"]
+    assert "callbacks[c].call(instance)" in seen["js"]
+
+
+async def test_mtcaptcha_supports_named_and_function_callbacks():
+    from app.agent.captcha.strategies import mtcaptcha as mtcaptcha_mod
+
+    seen = {}
+
+    async def fake_eval(session, expression):
+        seen["js"] = expression
+
+    with patch.object(mtcaptcha_mod, "_eval_js", fake_eval):
+        await strategy_for("mtcaptcha")._after_place(
+            SimpleNamespace(), "verified-token", Detection(kind="mtcaptcha")
+        )
+    assert "typeof cb==='string'" in seen["js"]
+    assert "verifiedToken:t" in seen["js"]
+    assert "isVerified:true" in seen["js"]
+    assert strategy_for("mtcaptcha").response_fields == ("mtcaptcha-verifiedtoken",)
+
+
+async def test_bridge_is_installed_for_the_current_and_next_document():
+    from app.agent.captcha import bridge as bridge_mod
+
+    add_script = AsyncMock(return_value={"identifier": "bridge"})
+    evaluate = AsyncMock(return_value={})
+    send = SimpleNamespace(
+        Page=SimpleNamespace(addScriptToEvaluateOnNewDocument=add_script),
+        Runtime=SimpleNamespace(evaluate=evaluate),
+    )
+    cdp_session = SimpleNamespace(
+        cdp_client=SimpleNamespace(send=send), session_id="session-1"
+    )
+    browser = SimpleNamespace(
+        get_or_create_cdp_session=AsyncMock(return_value=cdp_session)
+    )
+    await bridge_mod.install_captcha_bridge(browser, "target-1")
+    browser.get_or_create_cdp_session.assert_awaited_once_with(
+        "target-1", focus=False
+    )
+    add_script.assert_awaited_once()
+    evaluate.assert_awaited_once()
+
+
+def test_bridge_preserves_initialisers_and_chainable_success_registration():
+    from app.agent.captcha.bridge import _BRIDGE_JS
+
+    assert 'return original.apply(this, args)' in _BRIDGE_JS
+    assert 'return original.apply(this, arguments)' in _BRIDGE_JS
+    assert 'slot.success.push(callback)' in _BRIDGE_JS
+    assert 'configurable: true' in _BRIDGE_JS
+
+
 class _FakeStrategy(TokenStrategy):
     kind = "fake"
     solution_keys = ("token",)

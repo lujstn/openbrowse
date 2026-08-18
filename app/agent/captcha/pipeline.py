@@ -118,6 +118,15 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
         )
     missing = [k for k in strategy.required_params if not det.params.get(k)]
     if missing:
+        if det.confidence > 1:
+            return ActionResult(
+                error=f"The page was recognised as {_article(det.kind)} {det.kind} "
+                f"challenge, but its runtime {' and '.join(missing)} parameter"
+                f"{'s were' if len(missing) != 1 else ' was'} not available. Nothing "
+                "was created and nothing was spent. Wait for the widget to finish "
+                "loading, then call solve_captcha once more without clicking or "
+                "dragging the challenge."
+            )
         return ActionResult(
             error=f"Solving {_article(det.kind)} {det.kind} challenge needs "
             f"{' and '.join(missing)}, "
@@ -176,15 +185,15 @@ async def run_solve(strategy, det: Detection, ctx: SolveContext, giveups: dict[s
                         extracted_content=(
                             f"{_article(det.kind).capitalize()} {det.kind} solution is "
                             f"now in the page on {host}. The "
-                            "checkbox will NOT visibly tick, because the solution is "
-                            "written straight into the page rather than by clicking it, "
-                            "so do not judge this by the widget's appearance and do not "
-                            "solve again. Submit the form now, the way the page expects, "
-                            "then check what the page says in reply."
+                            "widget may NOT visibly change, because the solution is "
+                            "written into the page rather than entered through the "
+                            "checkbox, image grid, or slider. Do not judge this by the "
+                            "widget's appearance and do not solve again. Submit the form "
+                            "now, the way the page expects, then check what it says."
                         ),
                         long_term_memory=(
-                            f"solve_captcha: {det.kind} solved on {host}; the widget will "
-                            "not look ticked, so submit the form and read the reply"
+                            f"solve_captcha: {det.kind} solved on {host}; the widget may "
+                            "not visibly change, so submit the form and read the reply"
                         ),
                     )
 

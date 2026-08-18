@@ -29,6 +29,7 @@ from app.agent.browser_cdp import (
     _eval_on_target,
     _iframe_targets,
 )
+from app.agent.captcha.bridge import install_captcha_bridge
 from app.agent.output_store import (
     OutputStore,
     _coerce_scalar,
@@ -1872,7 +1873,17 @@ class TabManager:
         the watchdogs and session manager track it, mirroring browser-use's own sequence.
         """
         try:
-            target_id = await self._session._cdp_create_new_page(url, background=background)
+            target_id = await self._session._cdp_create_new_page(
+                "about:blank", background=background
+            )
+            await install_captcha_bridge(self._session, target_id)
+            if url != "about:blank":
+                cdp = await self._session.get_or_create_cdp_session(
+                    target_id, focus=False
+                )
+                await cdp.cdp_client.send.Page.navigate(
+                    params={"url": url}, session_id=cdp.session_id
+                )
         except Exception:
             logger.debug("_new_page: _cdp_create_new_page failed", exc_info=True)
             return None

@@ -2360,6 +2360,55 @@ async def test_open_in_new_tab_miss_names_unattached_embed(monkeypatch) -> None:
     assert "frame_url_contains" in note
 
 
+async def test_new_tabs_install_captcha_bridge_before_real_navigation(
+    monkeypatch,
+) -> None:
+    import types as _t
+    from unittest.mock import AsyncMock
+
+    import app.agent.tools as tools_mod
+    from app.agent.tools import TabManager
+
+    class _Event:
+        def __await__(self):
+            async def done():
+                return None
+
+            return done().__await__()
+
+        async def event_result(self, **kwargs):
+            return None
+
+    navigate = AsyncMock()
+    cdp = _t.SimpleNamespace(
+        cdp_client=_t.SimpleNamespace(
+            send=_t.SimpleNamespace(Page=_t.SimpleNamespace(navigate=navigate))
+        ),
+        session_id="session-1",
+    )
+    session = _t.SimpleNamespace(
+        _cdp_create_new_page=AsyncMock(return_value="target-1"),
+        get_or_create_cdp_session=AsyncMock(return_value=cdp),
+        event_bus=_t.SimpleNamespace(dispatch=lambda event: _Event()),
+    )
+    bridge = AsyncMock()
+    monkeypatch.setattr(tools_mod, "install_captcha_bridge", bridge)
+
+    target = await TabManager(session)._new_page(
+        "https://challenge.example/page", background=True
+    )
+
+    assert target == "target-1"
+    session._cdp_create_new_page.assert_awaited_once_with(
+        "about:blank", background=True
+    )
+    bridge.assert_awaited_once_with(session, "target-1")
+    navigate.assert_awaited_once_with(
+        params={"url": "https://challenge.example/page"},
+        session_id="session-1",
+    )
+
+
 async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
     import app.agent.tools as tools_mod
     from app.agent.tools import _SandboxBrowser

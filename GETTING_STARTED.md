@@ -84,8 +84,8 @@ agent never has to name the challenge type.
 | reCAPTCHA v3 Enterprise | ✅ | ✅ | |
 | reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you; the click-the-grid path is unproven and not offered |
 | Cloudflare Turnstile | ✅ | ✅ | |
-| Geetest v3 and v4 | ✅ | ✅ | Single-use parameters are refreshed before a retry |
-| MTCaptcha | ✅ | ✅ | |
+| Geetest v3 and v4 | ✅ | ❌ | Implemented with runtime parameter and callback capture; awaiting live revalidation |
+| MTCaptcha | ✅ | ❌ | Implemented with runtime configuration and verified-callback support; awaiting live revalidation |
 | AWS WAF, token | ✅ | ✅ | Cleared by writing the token as a cookie and re-requesting the page |
 | Image to text | ❌ | ✅ | Asked for by name, with the answer field's selector, since a bare image has no reliable marker |
 | AWS WAF, image | ❌ | ❌ | Written but unproven, so it is named and refused rather than charged for |

@@ -1049,6 +1049,8 @@ def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
     assert hits >= 4
     assert "Do not attempt to solve CAPTCHAs manually" not in corrected
     assert "solve_captcha" in corrected
+    assert "non-CAPTCHA verification wall" in corrected
+    assert "email/verification wall" not in corrected
     assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
 
 
@@ -1265,6 +1267,18 @@ def test_the_no_solver_extension_offers_no_action_that_is_not_there() -> None:
     assert "solve_captcha" in _CAPTCHA_EXTENSION
     assert "solve_captcha" not in _CAPTCHA_UNAVAILABLE_EXTENSION
     assert "none can be solved in this session" in _CAPTCHA_UNAVAILABLE_EXTENSION
+
+
+def test_solver_instructions_cover_interactive_puzzles_before_manual_input() -> None:
+    from app.agent.captcha.tools import _SOLVE_DESCRIPTION
+    from app.agent.runner import _CAPTCHA_EXTENSION
+
+    for text in (_SOLVE_DESCRIPTION, _CAPTCHA_EXTENSION):
+        assert "authorised" in text
+        assert "slider" in text
+        assert "image grid" in text
+        assert "before" in text
+    assert "never click tiles or drag" in _SOLVE_DESCRIPTION
 
 
 def test_every_stale_captcha_claim_has_a_replacement_for_both_modes() -> None:

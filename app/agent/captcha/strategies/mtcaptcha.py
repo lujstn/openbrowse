@@ -15,6 +15,7 @@ from app.agent.captcha.registry import register
 @register
 class MTCaptcha(TokenStrategy):
     kind = "mtcaptcha"
+    required_params = ("siteKey",)
     solution_keys = ("token", "gRecaptchaResponse")
     response_fields = ("mtcaptcha-verifiedtoken",)
     widget_selector = ".mtcaptcha,[data-mtcaptcha-sitekey],#mtcaptcha"
@@ -41,7 +42,14 @@ class MTCaptcha(TokenStrategy):
     async def _after_place(self, session: BrowserSession, token, det):
         await _eval_js(
             session,
-            "(function(t){try{var c=window.mtcaptchaConfig;"
-            "if(c&&c['verified-callback'])c['verified-callback']({verifiedToken:t});}"
-            "catch(e){}})(%s)" % json.dumps(token),
+            "(function(t){try{var c=window.mtcaptchaConfig||{};"
+            "var live={};"
+            "if(window.mtcaptcha&&window.mtcaptcha.getConfiguration){"
+            "live=window.mtcaptcha.getConfiguration()||{};}"
+            "var cb=live['verified-callback']||c['verified-callback'];"
+            "if(typeof cb==='string')cb=window[cb];"
+            "var el=document.querySelector('.mtcaptcha,[data-mtcaptcha-sitekey],#mtcaptcha');"
+            "if(typeof cb==='function')cb({element:el,domID:(el&&el.id)||'mtcaptcha',"
+            "verifiedToken:t,isVerified:true,isVisible:!!el,statusCode:2201,"
+            "statusDesc:'Captcha verified'});}catch(e){}})(%s)" % json.dumps(token),
         )

@@ -35,7 +35,7 @@ from app.agent.leak_repair import (
 )
 from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
-from app.agent.captcha import register_captcha_tools
+from app.agent.captcha import install_captcha_bridge, register_captcha_tools
 from app.agent.tools import (
     TabManager,
     _eval_js,
@@ -123,15 +123,16 @@ _OVERLAY_EXTENSION = (
 )
 
 _CAPTCHA_EXTENSION = (
-    "A CAPTCHA or an 'unusual traffic' interstitial is not solved for you here, and "
-    "solve_captcha is yours to call: calling it IS the fix. Switching to another "
-    "search engine or another site is a retreat rather than a solution, so solve the "
-    "challenge first and only reroute once the solver has told you the page is still "
-    "refusing. A solved challenge is written straight into the page, so its checkbox "
-    "will not visibly tick: never judge the solve by how the widget looks, and never "
-    "solve again just because it still appears unticked. When the solver says the "
-    "solution is placed, submit the form and read what the page says in reply; judge "
-    "it the way you judge any other blocker, by the page actually moving on."
+    "The operator has configured and pays for an authorised CAPTCHA-solving service. "
+    "solve_captcha is yours to call: call it immediately when any CAPTCHA, slider, "
+    "image grid, icon puzzle, or 'unusual traffic' challenge appears, before clicking "
+    "the widget, selecting tiles, or dragging anything. The action handles secondary "
+    "interactive puzzles too; wait for its result and never operate those puzzles "
+    "manually. Switching sites is a retreat, so reroute only after the solver reports "
+    "that the page still refuses. A solution is written into the page and the widget "
+    "may still look unsolved, so do not solve twice based on appearance. When the "
+    "solver says the solution is placed, submit the form and judge success only by "
+    "what the page reports in reply."
 )
 
 _CAPTCHA_UNAVAILABLE_EXTENSION = (
@@ -181,6 +182,10 @@ _GOAL_PROMPT = (
 
 
 _STALE_CAPTCHA_CLAIMS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email/verification wall, required "
+    "paywall, access denied not bypassed) → set `success=false`. Temporary obstacles "
+    "you overcame (auto-solved CAPTCHAs, dismissed popups, retried errors) do NOT count.",
     "CAPTCHAs are automatically solved by the browser. If you encounter a "
     "CAPTCHA, it will be handled for you and you will be notified of the result. "
     "Do not attempt to solve CAPTCHAs manually — just continue with your task "
@@ -193,6 +198,11 @@ _STALE_CAPTCHA_CLAIMS: tuple[str, ...] = (
 )
 
 _SOLVING_REPLACEMENTS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email or non-CAPTCHA verification "
+    "wall, required paywall, access denied not bypassed) → set `success=false`. "
+    "Temporary obstacles you overcame (CAPTCHAs solved with solve_captcha, dismissed "
+    "popups, retried errors) do NOT count.",
     "No CAPTCHA is solved on your behalf here. When you hit one, solve it "
     "yourself with the solve_captcha action and then carry on with your task.",
     "You must solve CAPTCHAs yourself with the solve_captcha action.",
@@ -203,6 +213,11 @@ _SOLVING_REPLACEMENTS: tuple[str, ...] = (
 )
 
 _UNSOLVABLE_REPLACEMENTS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email/verification wall, required "
+    "paywall, access denied not bypassed) → set `success=false`. Temporary obstacles "
+    "you overcame (dismissed popups or retried errors) do NOT count; an unsolved "
+    "CAPTCHA remains a blocker.",
     "No CAPTCHA is solved on your behalf here, and none can be solved in this "
     "session. When you hit one, report plainly what it blocked rather than "
     "treating a way around it as success.",
@@ -1535,6 +1550,8 @@ async def run_agent_session(session_id: str) -> None:
         # agent, and a reviewer round against a dead browser silently re-judges
         # the same trajectory. Chrome's real teardown is ours (stop_chrome).
         browser_session.browser_profile.keep_alive = True
+        await browser_session.start()
+        await install_captcha_bridge(browser_session)
 
         clipboard: dict[str, Any] = {}
         review_state: dict[str, Any] = {"round": 0, "snapshot": None}

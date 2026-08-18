@@ -38,6 +38,40 @@ _PROBE_JS = r"""(function () {
     var src = el.getAttribute("src") || "";
     try { return new URL(src, location.href).origin; } catch (e) { return ""; }
   }
+  function runtimeParam(names) {
+    var urls = [];
+    var scripts = document.querySelectorAll("script[src]");
+    for (var i = 0; i < scripts.length; i++) urls.push(scripts[i].src || "");
+    try {
+      var entries = performance.getEntriesByType("resource");
+      for (var j = 0; j < entries.length; j++) urls.push(entries[j].name || "");
+    } catch (e) {}
+    for (var u = urls.length - 1; u >= 0; u--) {
+      try {
+        if (!/(^|[.\/])(gee(test|visit)|gcaptcha4)[.\/]/i.test(urls[u])) continue;
+        var params = new URL(urls[u], location.href).searchParams;
+        for (var n = 0; n < names.length; n++) {
+          var value = params.get(names[n]);
+          if (value) return value;
+        }
+      } catch (e) {}
+    }
+    return "";
+  }
+  function bridgeSlot(name) {
+    var bridge = window.__openbrowseCaptchaBridge;
+    return (bridge && bridge[name]) || {};
+  }
+  function mtConfiguration() {
+    var config = window.mtcaptchaConfig || {};
+    try {
+      if (window.mtcaptcha && typeof window.mtcaptcha.getConfiguration === "function") {
+        var live = window.mtcaptcha.getConfiguration();
+        if (live && live.sitekey) config = live;
+      }
+    } catch (e) {}
+    return config || {};
+  }
   // @nonobvious(forced-by): a score-based token is minted against the action name
   // the page passes to its own execute() call and is rejected under any other, so
   // the name has to be read off the page rather than assumed.
@@ -90,15 +124,23 @@ _PROBE_JS = r"""(function () {
       frameParam("hcaptcha.com", "sitekey");
     out.invisible = attr(hc, ["data-size"]) === "invisible";
     out.confidence = hc ? 20 : 8;
-  } else if (gtEl) {
-    out.captchaId = attr(gtEl, ["data-captcha-id"]);
-    out.gt = attr(gtEl, ["data-gt"]);
-    out.challenge = attr(gtEl, ["data-challenge"]);
+  } else if (gtEl || bridgeSlot("geetestV3").config || bridgeSlot("geetestV4").config) {
+    var gt3 = bridgeSlot("geetestV3").config || {};
+    var gt4 = bridgeSlot("geetestV4").config || {};
+    out.captchaId = gt4.captchaId || gt4.captcha_id ||
+      attr(gtEl, ["data-captcha-id"]) || runtimeParam(["captcha_id", "captchaId"]);
+    out.gt = gt3.gt || attr(gtEl, ["data-gt"]) || runtimeParam(["gt"]);
+    out.challenge = runtimeParam(["challenge"]) || gt3.challenge ||
+      attr(gtEl, ["data-challenge"]);
+    out.geetestApiServer = gt3.api_server || gt3.apiServer ||
+      runtimeParam(["api_server"]);
     out.kind = out.captchaId ? "geetest_v4" : "geetest_v3";
     out.confidence = 15;
   } else if (mt) {
+    var mtConfig = mtConfiguration();
     out.kind = "mtcaptcha";
-    out.siteKey = attr(mt, ["data-mtcaptcha-sitekey", "data-sitekey"]);
+    out.siteKey = mtConfig.sitekey ||
+      attr(mt, ["data-mtcaptcha-sitekey", "data-sitekey"]);
     out.confidence = 15;
   } else if (document.querySelector('iframe[src*="captcha-delivery.com"]')) {
     out.kind = "datadome";
