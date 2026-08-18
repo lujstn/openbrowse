@@ -127,10 +127,10 @@ check("completion collapses", cls("is-complete") && !cls("is-expanded"), [...con
 check("a collapsed thought is still on screen", cls("is-open"), [...container._classes].join(","));
 check("completion drops the working shimmer", !cls("is-working"), "");
 
-act.headEl.fire("click");
+act.toggleEl.fire("click");
 check("chevron expands a completed thought", cls("is-expanded"), [...container._classes].join(","));
-check("expanded reports itself", act.headEl.getAttribute("aria-expanded") === "true", "");
-act.headEl.fire("click");
+check("expanded reports itself", act.toggleEl.getAttribute("aria-expanded") === "true", "");
+act.toggleEl.fire("click");
 check("chevron collapses again", !cls("is-expanded"), "");
 check("collapsing does not hide the whole card", cls("is-open"), [...container._classes].join(","));
 

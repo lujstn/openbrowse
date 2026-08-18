@@ -224,29 +224,32 @@
     this.container.style.setProperty("--ob-activity-max", ACTIVITY_MAX_HEIGHT + "px");
     this.container.innerHTML =
       '<div class="ob-reveal-inner"><div class="ob-activity-card">' +
-      '<div class="ob-activity-body">' +
-      '<button type="button" class="ob-activity-head">' +
+      '<div class="ob-activity-head">' +
+      '<button type="button" class="ob-activity-toggle">' +
       '<span class="ob-activity-indicator"></span>' +
       '<span class="ob-activity-label"></span>' +
       '<span class="ob-activity-timer"></span>' +
-      '<span class="ob-activity-chev"></span>' +
+      '<span class="ob-activity-chev">' +
+      '<svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">' +
+      '<path d="M3 4.75 L6 7.75 L9 4.75" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+      "</svg></span>" +
       "</button>" +
+      '<button type="button" class="ob-activity-copy">Copy</button>' +
+      "</div>" +
       '<div class="ob-activity-viewport"><div class="ob-activity-track">' +
       '<div class="ob-activity-text"></div>' +
-      "</div></div></div>" +
-      '<div class="ob-activity-actions">' +
-      '<button type="button" class="ob-activity-copy">Copy</button>' +
-      "</div></div></div>";
+      "</div></div></div></div>";
     this.indicatorEl = this.container.querySelector(".ob-activity-indicator");
     this.labelEl = this.container.querySelector(".ob-activity-label");
     this.timerEl = this.container.querySelector(".ob-activity-timer");
-    this.headEl = this.container.querySelector(".ob-activity-head");
+    this.toggleEl = this.container.querySelector(".ob-activity-toggle");
     this.viewportEl = this.container.querySelector(".ob-activity-viewport");
     this.trackEl = this.container.querySelector(".ob-activity-track");
     this.textEl = this.container.querySelector(".ob-activity-text");
     this.copyBtn = this.container.querySelector(".ob-activity-copy");
     this.copyBtn.addEventListener("click", this._onCopy.bind(this));
-    this.headEl.addEventListener("click", this._onToggle.bind(this));
+    this.toggleEl.addEventListener("click", this._onToggle.bind(this));
     this.container.setAttribute("role", "log");
     this.container.setAttribute("aria-live", "polite");
     this.container.setAttribute("aria-busy", "false");
@@ -263,7 +266,7 @@
     if (!this._complete) return;
     this._expanded = !this._expanded;
     this.container.classList.toggle("is-expanded", this._expanded);
-    this.headEl.setAttribute("aria-expanded", this._expanded ? "true" : "false");
+    this.toggleEl.setAttribute("aria-expanded", this._expanded ? "true" : "false");
     if (this._expanded) this.viewportEl.scrollTop = 0;
   };
 
@@ -391,10 +394,10 @@
       this.timerEl.textContent = "";
       this._expanded = false;
       this.container.classList.remove("is-expanded");
-      this.headEl.setAttribute("aria-expanded", "false");
+      this.toggleEl.setAttribute("aria-expanded", "false");
     } else {
       this.labelEl.textContent = activity.label + (activity.step ? " · step " + activity.step : "");
-      this.headEl.removeAttribute("aria-expanded");
+      this.toggleEl.removeAttribute("aria-expanded");
       this._renderTimer();
     }
     this._syncScroll();

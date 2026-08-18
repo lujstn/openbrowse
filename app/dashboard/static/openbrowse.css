@@ -43,10 +43,7 @@
   margin-bottom: 8px;
 }
 .ob-activity-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  padding: 11px 13px 12px;
   border: 1px solid var(--ob-border);
   border-radius: var(--ob-radius-md);
   background: var(--ob-surface);
@@ -64,10 +61,6 @@
   transform: translateY(0);
 }
 
-.ob-activity-body {
-  flex: 1;
-  min-width: 0;
-}
 .ob-activity-text {
   font-size: 12.5px;
   line-height: 1.6;
@@ -123,9 +116,12 @@
 /* @nonobvious(forced-by): background-clip:text needs a transparent fill to let
    the gradient through, and Safari still wants the -webkit- pair. */
 .ob-activity-label {
-  flex: 1;
   min-width: 0;
-  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
   color: var(--ob-text-dim);
 }
 .ob-activity.is-working.is-reasoning .ob-activity-label {
@@ -187,19 +183,30 @@
   }
 }
 
+/* @nonobvious(forced-by): nothing in this row may stretch. A flexible label
+   pushes the timer to the far edge, which on a wide panel leaves a gulf of dead
+   space between a phase and its own clock. */
 .ob-activity-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  min-width: 0;
+}
+.ob-activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   background: none;
   border: none;
   padding: 0;
+  margin: 0;
   color: inherit;
   font: inherit;
   text-align: left;
+  cursor: default;
 }
-.ob-activity.is-complete .ob-activity-head {
+.ob-activity.is-complete .ob-activity-toggle {
   cursor: pointer;
 }
 .ob-activity-timer {
@@ -209,25 +216,34 @@
   flex: none;
 }
 .ob-activity-chev {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  border-right: 1.5px solid var(--ob-text-faint);
-  border-bottom: 1.5px solid var(--ob-text-faint);
-  transform: rotate(45deg);
-  transition: transform 0.24s var(--ob-ease-out);
   display: none;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--ob-text-faint);
+  transition: transform 0.24s var(--ob-ease-out);
+}
+.ob-activity-chev svg {
+  display: block;
+  width: 12px;
+  height: 12px;
 }
 .ob-activity.is-complete .ob-activity-chev {
   display: block;
 }
+.ob-activity.is-complete .ob-activity-toggle:hover .ob-activity-chev {
+  color: var(--ob-text-muted);
+}
 .ob-activity.is-complete.is-expanded .ob-activity-chev {
-  transform: rotate(-135deg);
+  transform: rotate(180deg);
 }
 
 /* @nonobvious(forced-by): the fade has to live on a wrapper, because a mask on
    the scrolling element itself travels with the scroll instead of pinning to
    the visible edges. */
+.ob-activity.has-prose .ob-activity-viewport {
+  margin-top: 7px;
+}
 .ob-activity-viewport {
   overflow: hidden;
   max-height: var(--ob-activity-max);
@@ -249,14 +265,13 @@
 }
 .ob-activity.is-complete:not(.is-expanded) .ob-activity-viewport {
   max-height: 0;
+  margin-top: 0;
 }
 .ob-activity-track {
   transition: transform 0.3s var(--ob-ease-out);
 }
 
-.ob-activity-actions {
-  display: flex;
-  align-items: flex-start;
+.ob-activity-copy {
   opacity: 0;
   transform: translateY(4px);
   transition:
@@ -264,12 +279,13 @@
     transform 0.22s var(--ob-ease-out);
   pointer-events: none;
 }
-.ob-activity.is-settled.has-prose .ob-activity-actions {
+.ob-activity.is-settled.has-prose .ob-activity-copy {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
 }
 .ob-activity-copy {
+  margin-left: 2px;
   background: none;
   border: 1px solid var(--ob-border-strong);
   color: var(--ob-text-dim);
@@ -324,7 +340,7 @@
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,
   .ob-activity-card,
-  .ob-activity-actions,
+  .ob-activity-copy,
   .ob-activity-viewport,
   .ob-activity-track,
   .ob-activity-chev,
