@@ -390,21 +390,13 @@ async def stop_session(
 
     body = body or StopSessionRequest()
 
-    if body.strategy == "task":
-        # @nonobvious(means): this strategy ends the task, not the session, so the
-        # agent is asked to stop and the session is marked keep-alive — it then
-        # parks with its browser open and stays addressable for the next task.
-        if live.stop_agent(session_id):
-            if not session.get("keep_alive"):
-                await crud.update_session(session_id, keep_alive=1)
-        else:
-            await pool.cancel(session_id)
-            await crud.update_session(session_id, status="idle")
-    else:
-        if await live.request_release(session_id, "Stopped by API", wait=False):
-            live.stop_agent(session_id)
-        await pool.cancel(session_id)
-        await crud.update_session(session_id, status="stopped")
+    # @nonobvious(mirrors): either strategy cancels the run, which closes the
+    # browser with it. They differ only in the status left behind, and "task"
+    # leaves the session addressable so a later call can give it new work.
+    await pool.cancel(session_id)
+    await crud.update_session(
+        session_id, status="idle" if body.strategy == "task" else "stopped"
+    )
 
     return _to_session_response(await crud.get_session(session_id))
 

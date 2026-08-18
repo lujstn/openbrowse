@@ -94,7 +94,6 @@ async def worker_env(tmp_path, monkeypatch):
         db_path=tmp_path / "test.db",
         data_dir=tmp_path / "data",
         profiles_dir=tmp_path / "data" / "profiles",
-        keep_alive_idle_timeout=30,
     )
     monkeypatch.setattr("app.config.settings", test_settings)
     monkeypatch.setattr("app.db.models.settings", test_settings)
@@ -246,21 +245,6 @@ async def test_a_turn_is_not_blamed_for_the_previous_turns_errors():
     await asyncio.wait_for(worker, timeout=3)
 
 
-async def test_idle_timeout_releases_the_browser(monkeypatch):
-    monkeypatch.setattr(
-        runner_mod, "settings", replace(runner_mod.settings, keep_alive_idle_timeout=0.05)
-    )
-    session = await crud.create_session(task="Summarise the news", keep_alive=True)
-    sid = session["id"]
-
-    await asyncio.wait_for(runner_mod.run_agent_session(sid), timeout=3)
-
-    final = await crud.get_session(sid)
-    assert final["status"] == "stopped"
-    assert any("idle minute" in s for s in await _summaries(sid))
-    assert live.is_live(sid) is False
-
-
 async def test_a_plain_session_still_ends_after_one_task():
     session = await crud.create_session(task="Summarise the news", keep_alive=False)
     sid = session["id"]
@@ -291,14 +275,14 @@ async def test_wait_for_followup_returns_the_message():
     entry = live.register("s1", SimpleNamespace())
     entry.inbox.put_nowait("next thing")
 
-    assert await runner_mod._wait_for_followup(entry, 5) == "next thing"
+    assert await runner_mod._wait_for_followup(entry) == "next thing"
 
 
 async def test_wait_for_followup_gives_up_when_released():
     entry = live.register("s1", SimpleNamespace())
     entry.release.set()
 
-    assert await runner_mod._wait_for_followup(entry, 5) is None
+    assert await runner_mod._wait_for_followup(entry) is None
 
 
 async def test_wait_for_followup_keeps_a_message_that_raced_the_release():
@@ -306,14 +290,8 @@ async def test_wait_for_followup_keeps_a_message_that_raced_the_release():
     entry.inbox.put_nowait("next thing")
     entry.release.set()
 
-    assert await runner_mod._wait_for_followup(entry, 5) is None
+    assert await runner_mod._wait_for_followup(entry) is None
     assert entry.inbox.get_nowait() == "next thing"
-
-
-async def test_wait_for_followup_times_out():
-    entry = live.register("s1", SimpleNamespace())
-
-    assert await runner_mod._wait_for_followup(entry, 0.05) is None
 
 
 async def test_prepare_task_frames_a_follow_up_for_the_agent():

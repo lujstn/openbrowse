@@ -478,45 +478,21 @@ async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client)
 
 
 @patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
-async def test_stop_task_strategy_leaves_a_keepalive_browser_standing(
+async def test_stop_task_strategy_cancels_the_run_and_leaves_the_session_usable(
     mock_cancel, client
 ):
-    from types import SimpleNamespace
-
-    from app.agent import live
+    """Stopping the task ends the run and the browser with it, as it always has,
+    and leaves the session addressable so a later call can give it new work."""
     from app.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="running")
-    stopped: list[bool] = []
-    entry = live.register(session["id"], SimpleNamespace(stop=lambda: stopped.append(True)))
 
     resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "task"})
 
     assert resp.status_code == 200
-    assert stopped == [True]
-    assert not entry.release.is_set()
-    mock_cancel.assert_not_called()
-    assert (await crud.get_session(session["id"]))["status"] == "running"
-
-
-@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
-async def test_stop_task_strategy_keeps_a_plain_session_addressable(mock_cancel, client):
-    from types import SimpleNamespace
-
-    from app.agent import live
-    from app.db import crud
-
-    session = await crud.create_session(task="first task", keep_alive=False)
-    await crud.update_session(session["id"], status="running")
-    live.register(session["id"], SimpleNamespace(stop=lambda: None))
-
-    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "task"})
-
-    assert resp.status_code == 200
-    # the task ends, the session does not: it parks and waits for the next one
-    assert (await crud.get_session(session["id"]))["keep_alive"] == 1
-    mock_cancel.assert_not_called()
+    mock_cancel.assert_called_once()
+    assert (await crud.get_session(session["id"]))["status"] == "idle"
 
 
 @patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
@@ -528,12 +504,9 @@ async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
-    entry = live.register(session["id"], SimpleNamespace(stop=lambda: None))
-    live.park(entry)
 
     resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "session"})
 
     assert resp.status_code == 200
-    assert entry.release.is_set()
     mock_cancel.assert_called_once()
     assert (await crud.get_session(session["id"]))["status"] == "stopped"
