@@ -224,25 +224,45 @@ async def test_pipeline_cost_cap_refuses():
     assert "cap" in (res.error or "").lower()
 
 
-async def test_solve_context_names_the_documents_base_address():
-    from app.agent.captcha import tools as ctools
-    seen = []
-
+def _address_eval(base, here):
     async def fake_eval(session, expr):
-        seen.append(expr)
         if "baseURI" in expr:
-            return {"base": "https://origin.example/verify",
-                    "here": "https://proxy.example/verify"}
+            return {"base": base, "here": here}
         return "agent/1.0"
+    return fake_eval
 
-    with patch.object(ctools, "_eval_js", fake_eval), \
+
+async def _ctx_for(base, here, api_origin):
+    from app.agent.captcha import tools as ctools
+    with patch.object(ctools, "_eval_js", _address_eval(base, here)), \
          patch.object(ctools.cdp, "page_cookie_header", AsyncMock(return_value="")):
-        ctx = await ctools._build_ctx(
-            SimpleNamespace(), Detection(kind="recaptcha_v2"), None, []
+        return await ctools._build_ctx(
+            SimpleNamespace(),
+            Detection(kind="recaptcha_v2", params={"apiOrigin": api_origin}),
+            None, [],
         )
-    assert any("baseURI" in e for e in seen)
+
+
+async def test_a_rebase_matching_the_challenge_origin_is_believed():
+    ctx = await _ctx_for("https://origin.example/verify",
+                         "https://proxy.example/verify",
+                         "https://origin.example")
     assert ctx.page_url == "https://origin.example/verify"
     assert ctx.host == "origin.example"
+
+
+async def test_a_rebase_the_challenge_does_not_corroborate_is_ignored():
+    ctx = await _ctx_for("https://attacker.example/",
+                         "https://real.example/page",
+                         "https://origin.example")
+    assert ctx.page_url == "https://real.example/page"
+    assert ctx.host == "real.example"
+
+
+async def test_an_ordinary_page_uses_its_own_address():
+    ctx = await _ctx_for("https://site.example/page",
+                         "https://site.example/page", "")
+    assert ctx.page_url == "https://site.example/page"
 
 
 def test_captcha_spend_is_capped_by_default():

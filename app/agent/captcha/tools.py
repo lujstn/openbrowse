@@ -54,13 +54,30 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
         ) or {}
     except Exception:
         addresses = {}
-    current_url = addresses.get("base") or addresses.get("here") or ""
+    base = addresses.get("base") or ""
     here = addresses.get("here") or ""
-    if current_url and here and urlparse(current_url).netloc != urlparse(here).netloc:
-        logger.info(
-            "solve_captcha: page rebases the challenge address from %s to %s",
-            urlparse(here).netloc, urlparse(current_url).netloc,
-        )
+    current_url = here or base
+    if base:
+        base_host = urlparse(base).netloc
+        api_host = urlparse(det.params.get("apiOrigin") or "").netloc
+        if base_host == urlparse(here).netloc:
+            current_url = base
+        elif api_host and base_host == api_host:
+            # @nonobvious(must-hold): a document may name any address as its base and
+            # the solve is billed against whatever we name, so a rebase is only
+            # believed when it agrees with where the challenge itself runs.
+            current_url = base
+            logger.info(
+                "solve_captcha: page is served by %s but rebases to %s, which matches "
+                "the challenge origin",
+                urlparse(here).netloc, base_host,
+            )
+        elif base_host:
+            logger.warning(
+                "solve_captcha: ignoring a rebase to %s that does not match the "
+                "challenge origin %s",
+                base_host, api_host or "unknown",
+            )
     parsed = urlparse(current_url)
     host = parsed.netloc
     if det.interstitial and parsed.scheme:
