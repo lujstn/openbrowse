@@ -826,25 +826,41 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 set_activity(sid, "Running actions")
 
 
-_ANTHROPIC_MODELS: dict[str, str] = {
-    "claude-fable-5": "claude-fable-5",
-    "claude-mythos-5": "claude-mythos-5",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "claude-sonnet-4.6": "claude-sonnet-4-6",
-    "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "claude-opus-5": "claude-opus-5",
-    "claude-opus-4.8": "claude-opus-4-8",
-    "claude-opus-4-8": "claude-opus-4-8",
-    "claude-opus-4.7": "claude-opus-4-7",
-    "claude-opus-4-7": "claude-opus-4-7",
-    "claude-opus-4.6": "claude-opus-4-6",
-    "claude-opus-4-6": "claude-opus-4-6",
-}
+_ANTHROPIC_MODELS: tuple[str, ...] = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+)
 
-_OPENAI_MODELS: dict[str, str] = {
-    "gpt-5.6-sol": "gpt-5.6-sol",
-    "gpt-5.6-terra": "gpt-5.6-terra",
-    "gpt-5.6-luna": "gpt-5.6-luna",
+_OPENAI_MODELS: tuple[str, ...] = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+)
+
+
+# @nonobvious(means): providers disagree on version punctuation
+# (claude-sonnet-4-6 against gpt-5.6-terra), so either spelling of a version
+# number resolves, and the canonical wire id is what comes back out.
+_VERSION_DOT = re.compile(r"(?<=\d)\.(?=\d)")
+
+
+def _lookup_key(model: str) -> str:
+    return _VERSION_DOT.sub("-", model)
+
+
+_MODELS_BY_KEY: dict[str, tuple[str, str]] = {
+    _lookup_key(model_id): (provider, model_id)
+    for provider, model_ids in (
+        ("anthropic", _ANTHROPIC_MODELS),
+        ("openai", _OPENAI_MODELS),
+    )
+    for model_id in model_ids
 }
 
 _THINKING_BUDGETS: dict[str, int] = {
@@ -946,11 +962,10 @@ def _resolve_model(model: str) -> tuple[str, str]:
     key = (model or "").strip()
     if key.endswith("[1m]"):
         key = key[:-4]
-    if key in _ANTHROPIC_MODELS:
-        return "anthropic", _ANTHROPIC_MODELS[key]
-    if key in _OPENAI_MODELS:
-        return "openai", _OPENAI_MODELS[key]
-    raise ValueError(f"'{key}' is not a valid model.")
+    resolved = _MODELS_BY_KEY.get(_lookup_key(key))
+    if resolved is None:
+        raise ValueError(f"'{key}' is not a valid model.")
+    return resolved
 
 
 def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]:

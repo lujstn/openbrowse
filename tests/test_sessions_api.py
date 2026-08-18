@@ -71,6 +71,23 @@ async def test_create_session_resolves_reasoning_default(client):
     assert resp.json()["reasoningEffort"] == "medium"
 
 
+async def test_create_session_accepts_either_version_punctuation(client):
+    resp = await client.post("/v3/sessions", json={"model": "gpt-5-6-terra"})
+    assert resp.status_code == 200
+    assert resp.json()["reasoningEffort"] == "medium"
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={"model": "gpt-5-6-terra", "reasoningEffort": "max"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reasoningEffort"] == "max"
+
+    resp = await client.post("/v3/sessions", json={"model": "claude-sonnet-4.6"})
+    assert resp.status_code == 200
+    assert resp.json()["reasoningEffort"] == "none"
+
+
 async def test_create_session_accepts_reasoning_effort(client):
     resp = await client.post(
         "/v3/sessions",

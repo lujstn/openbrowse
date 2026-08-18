@@ -37,12 +37,49 @@ def test_resolve_sonnet5_and_opus48():
 
 def test_resolve_openai_gpt56():
     assert _resolve_model("gpt-5.6-terra") == ("openai", "gpt-5.6-terra")
+    assert _resolve_model("gpt-5-6-terra") == ("openai", "gpt-5.6-terra")
     assert _resolve_model("gpt-5.6-sol") == ("openai", "gpt-5.6-sol")
+    assert _resolve_model("gpt-5-6-sol") == ("openai", "gpt-5.6-sol")
     assert _resolve_model("gpt-5.6-luna") == ("openai", "gpt-5.6-luna")
+    assert _resolve_model("gpt-5-6-luna") == ("openai", "gpt-5.6-luna")
+
+
+def test_resolve_accepts_either_version_punctuation():
+    import app.agent.runner as runner
+
+    for provider, model_ids in (
+        ("anthropic", runner._ANTHROPIC_MODELS),
+        ("openai", runner._OPENAI_MODELS),
+    ):
+        for model_id in model_ids:
+            assert _resolve_model(model_id) == (provider, model_id)
+            assert _resolve_model(model_id.replace(".", "-")) == (provider, model_id)
+
+    for spelling, model_id in (
+        ("claude-sonnet-4.6", "claude-sonnet-4-6"),
+        ("claude-opus-4.8", "claude-opus-4-8"),
+        ("claude-opus-4.7", "claude-opus-4-7"),
+        ("claude-opus-4.6", "claude-opus-4-6"),
+    ):
+        assert _resolve_model(spelling) == ("anthropic", model_id)
+
+
+def test_resolve_either_spelling_keeps_1m_suffix_working():
+    assert _resolve_model("claude-opus-4.8[1m]") == ("anthropic", "claude-opus-4-8")
+    assert _resolve_model("claude-opus-4-8[1m]") == ("anthropic", "claude-opus-4-8")
 
 
 def test_resolve_unknown_models_rejected():
-    for bad in ("gpt-4o", "o3-mini", "some-future-claude", "gpt-5.6", ""):
+    for bad in (
+        "gpt-4o",
+        "o3-mini",
+        "some-future-claude",
+        "gpt-5.6",
+        "gpt-5-6",
+        "gpt.5.6.terra",
+        "claude.sonnet.5",
+        "",
+    ):
         with pytest.raises(ValueError, match="not a valid model"):
             _resolve_model(bad)
 
@@ -139,7 +176,7 @@ def test_always_thinking_models_are_registered():
     import app.agent.runner as runner
 
     for model in ("claude-fable-5", "claude-mythos-5"):
-        assert model in runner._ANTHROPIC_MODELS.values()
+        assert model in runner._ANTHROPIC_MODELS
         spec = runner._MODEL_REASONING[model]
         assert spec.can_disable is False
         assert "none" not in valid_efforts(model)
@@ -150,7 +187,7 @@ def test_every_model_is_priced():
     from app.agent import cost
 
     now = datetime(2026, 8, 15, tzinfo=timezone.utc)
-    for model_id in set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values()):
+    for model_id in set(runner._ANTHROPIC_MODELS) | set(runner._OPENAI_MODELS):
         assert cost._lookup(model_id, now) is not None, model_id
 
 
@@ -196,7 +233,7 @@ def test_resolve_default_effort_per_generation():
 def test_registry_covers_every_model():
     import app.agent.runner as runner
 
-    all_ids = set(runner._ANTHROPIC_MODELS.values()) | set(runner._OPENAI_MODELS.values())
+    all_ids = set(runner._ANTHROPIC_MODELS) | set(runner._OPENAI_MODELS)
     assert all_ids == set(runner._MODEL_REASONING)
 
 
