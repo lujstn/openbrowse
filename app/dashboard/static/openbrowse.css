@@ -271,35 +271,6 @@
   transition: transform 0.3s var(--ob-ease-out);
 }
 
-.ob-activity-copy {
-  opacity: 0;
-  transform: translateY(4px);
-  transition:
-    opacity 0.22s var(--ob-ease-out),
-    transform 0.22s var(--ob-ease-out);
-  pointer-events: none;
-}
-.ob-activity.is-settled.has-prose .ob-activity-copy {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-.ob-activity-copy {
-  margin-left: 2px;
-  background: none;
-  border: 1px solid var(--ob-border-strong);
-  color: var(--ob-text-dim);
-  border-radius: var(--ob-radius-sm);
-  font-size: 11px;
-  padding: 3px 9px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.ob-activity-copy:hover {
-  border-color: var(--ob-text-muted);
-  color: var(--ob-text);
-}
-
 .msg-row.expanded .msg-cards.ob-handoff-grow {
   display: grid;
   grid-template-rows: 0fr;
@@ -340,7 +311,6 @@
   .ob-reveal,
   .ob-reveal > .ob-reveal-inner,
   .ob-activity-card,
-  .ob-activity-copy,
   .ob-activity-viewport,
   .ob-activity-track,
   .ob-activity-chev,

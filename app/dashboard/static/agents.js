@@ -235,7 +235,6 @@
       ' stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
       "</svg></span>" +
       "</button>" +
-      '<button type="button" class="ob-activity-copy">Copy</button>' +
       "</div>" +
       '<div class="ob-activity-viewport"><div class="ob-activity-track">' +
       '<div class="ob-activity-text"></div>' +
@@ -247,8 +246,6 @@
     this.viewportEl = this.container.querySelector(".ob-activity-viewport");
     this.trackEl = this.container.querySelector(".ob-activity-track");
     this.textEl = this.container.querySelector(".ob-activity-text");
-    this.copyBtn = this.container.querySelector(".ob-activity-copy");
-    this.copyBtn.addEventListener("click", this._onCopy.bind(this));
     this.toggleEl.addEventListener("click", this._onToggle.bind(this));
     this.container.setAttribute("role", "log");
     this.container.setAttribute("aria-live", "polite");
@@ -301,42 +298,6 @@
     this._syncScroll();
   };
 
-  AgentActivity.prototype._onCopy = function () {
-    var text = this._lastRawText || "";
-    var btn = this.copyBtn;
-    var restore = btn.textContent;
-    var flash = function (label) {
-      btn.textContent = label;
-      setTimeout(function () {
-        btn.textContent = restore;
-      }, 1200);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(
-        function () {
-          flash("Copied");
-        },
-        function () {
-          flash("Copy failed");
-        }
-      );
-      return;
-    }
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand("copy");
-      flash("Copied");
-    } catch (e) {
-      flash("Copy failed");
-    }
-    document.body.removeChild(ta);
-  };
-
   AgentActivity.prototype.update = function (activity) {
     if (!activity || !activity.label) {
       this.hide();
@@ -367,7 +328,6 @@
     // again afterwards — the flag has to be true before the call, not after.
     this._settled = !working;
     this._complete = done;
-    this.container.classList.toggle("is-settled", this._settled);
     this.container.classList.toggle("has-prose", !!text);
     this.container.classList.toggle("is-complete", done);
 
@@ -415,7 +375,7 @@
     this._label = "";
     this._startedAt = null;
     this.container.classList.remove(
-      "is-settled",
+      "has-prose",
       "is-complete",
       "is-working",
       "is-reasoning",
