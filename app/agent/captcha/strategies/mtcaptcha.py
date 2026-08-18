@@ -11,19 +11,14 @@ from app.agent.browser_cdp import _eval_js
 from app.agent.captcha.base import Detection, TokenStrategy, _first_present
 from app.agent.captcha.registry import register
 
-_PLACE_JS = r"""(function (token) {
-  var inputs = document.querySelectorAll('[name="mtcaptcha-verifiedtoken"], input.mtcaptcha-verifiedtoken-input');
-  for (var i = 0; i < inputs.length; i++) { inputs[i].value = token; }
-  try { if (window.mtcaptchaConfig && window.mtcaptchaConfig["verified-callback"]) {
-    window.mtcaptchaConfig["verified-callback"]({ verifiedToken: token });
-  } } catch (e) {}
-})(%s)"""
-
 
 @register
 class MTCaptcha(TokenStrategy):
     kind = "mtcaptcha"
     solution_keys = ("token", "gRecaptchaResponse")
+    response_fields = ("mtcaptcha-verifiedtoken",)
+    widget_selector = ".mtcaptcha,[data-mtcaptcha-sitekey],#mtcaptcha"
+    response_tag = "input"
 
     def detect(self, probe):
         if probe.get("kind") != "mtcaptcha":
@@ -43,6 +38,10 @@ class MTCaptcha(TokenStrategy):
         }
         return task
 
-    async def _place(self, session: BrowserSession, solution, det):
-        token = _first_present(solution, self.solution_keys) or ""
-        await _eval_js(session, _PLACE_JS % json.dumps(token))
+    async def _after_place(self, session: BrowserSession, token, det):
+        await _eval_js(
+            session,
+            "(function(t){try{var c=window.mtcaptchaConfig;"
+            "if(c&&c['verified-callback'])c['verified-callback']({verifiedToken:t});}"
+            "catch(e){}})(%s)" % json.dumps(token),
+        )

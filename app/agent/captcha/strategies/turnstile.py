@@ -11,30 +11,14 @@ from app.agent.browser_cdp import _eval_js
 from app.agent.captcha.base import Detection, TokenStrategy, _first_present
 from app.agent.captcha.registry import register
 
-_PLACE_JS = r"""(function (token) {
-  var inputs = document.querySelectorAll('[name="cf-turnstile-response"], #cf-turnstile-response');
-  if (!inputs.length) {
-    var el = document.createElement("input");
-    el.type = "hidden";
-    el.name = "cf-turnstile-response";
-    var w = document.querySelector(".cf-turnstile");
-    (w && w.closest("form") ? w.closest("form") : document.body).appendChild(el);
-    inputs = [el];
-  }
-  for (var i = 0; i < inputs.length; i++) { inputs[i].value = token; }
-  try { if (window.turnstile) window.turnstile.getResponse = function () { return token; }; } catch (e) {}
-  try {
-    var w = document.querySelector('.cf-turnstile[data-callback]');
-    var cb = w && w.getAttribute("data-callback");
-    if (cb && typeof window[cb] === "function") { window[cb](token); }
-  } catch (e) {}
-})(%s)"""
-
 
 @register
 class Turnstile(TokenStrategy):
     kind = "turnstile"
     solution_keys = ("token", "gRecaptchaResponse")
+    response_fields = ("cf-turnstile-response",)
+    widget_selector = ".cf-turnstile,[data-cf-turnstile-sitekey]"
+    response_tag = "input"
 
     def detect(self, probe):
         if probe.get("kind") != "turnstile":
@@ -54,9 +38,13 @@ class Turnstile(TokenStrategy):
         }
         return task
 
-    async def _place(self, session: BrowserSession, solution, det):
-        token = _first_present(solution, self.solution_keys) or ""
-        await _eval_js(session, _PLACE_JS % json.dumps(token))
+    async def _after_place(self, session: BrowserSession, token, det):
+        await _eval_js(
+            session,
+            "(function(t){try{if(window.turnstile)"
+            "window.turnstile.getResponse=function(){return t;};}catch(e){}})(%s)"
+            % json.dumps(token),
+        )
 
 
 @register

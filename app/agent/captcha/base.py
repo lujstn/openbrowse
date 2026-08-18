@@ -7,13 +7,18 @@ recognition sub-bases share the machinery each family needs.
 
 from __future__ import annotations
 
+import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, ClassVar
 
 from browser_use import BrowserSession
 
+from app.agent.browser_cdp import _eval_js
 from app.agent.captcha import cdp
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -102,19 +107,95 @@ class CaptchaStrategy(ABC):
         return await cdp.page_advanced(ctx.session, before_url, self)
 
 
+_PLACE_JS = r"""(function (token, names, tag, widgetSel) {
+  var out = { fields: 0, inForm: false, valueLen: 0, callback: "" };
+  var parts = [];
+  for (var i = 0; i < names.length; i++) { parts.push('[name="' + names[i] + '"]'); }
+  var sel = parts.join(",");
+  var widget = widgetSel ? document.querySelector(widgetSel) : null;
+  var form = widget && widget.closest ? widget.closest("form") : null;
+  if (!form) {
+    var any = document.querySelector(sel);
+    form = any && any.closest ? any.closest("form") : null;
+  }
+  var found = document.querySelectorAll(sel);
+  for (var i = 0; i < found.length; i++) {
+    found[i].value = token;
+    if (found[i].tagName === "TEXTAREA") { found[i].innerHTML = token; }
+  }
+  // @nonobvious(forced-by): only fields inside the form element are serialised on
+  // submit, so a response box the widget has not rendered yet, or one rendered
+  // outside the form, must be replaced by one the submit will actually carry.
+  function make(parent) {
+    var el = document.createElement(tag);
+    if (tag === "input") { el.type = "hidden"; }
+    el.name = names[0];
+    el.id = names[0];
+    el.style.display = "none";
+    el.value = token;
+    if (tag === "textarea") { el.innerHTML = token; }
+    parent.appendChild(el);
+  }
+  if (form && !form.querySelector(sel)) { make(form); }
+  else if (!form && !found.length) { make(document.body); }
+  var all = document.querySelectorAll(sel);
+  out.fields = all.length;
+  out.valueLen = all.length ? (all[0].value || "").length : 0;
+  out.inForm = !!(form && form.querySelector(sel));
+  try {
+    var cb = widget && widget.getAttribute("data-callback");
+    if (cb && typeof window[cb] === "function") { window[cb](token); out.callback = cb; }
+  } catch (e) {}
+  return out;
+})(%s, %s, %s, %s)"""
+
+
 class TokenStrategy(CaptchaStrategy):
-    """Family that injects a returned token (or fields) into the page."""
+    """Family that injects a returned token (or fields) into the page.
+
+    A subclass normally only declares which response field the page expects and
+    how to find its widget; the shared placement below then writes the token
+    where a submit will actually carry it and reports what it did.
+    """
+
+    response_fields: ClassVar[tuple[str, ...]] = ()
+    widget_selector: ClassVar[str] = ""
+    response_tag: ClassVar[str] = "textarea"
 
     async def redeem(self, solution, det, ctx):
         await self._place(ctx.session, solution, det)
         if det.interstitial:
             await cdp.submit_widget_form(ctx.session)
 
-    @abstractmethod
     async def _place(
         self, session: BrowserSession, solution: dict[str, Any], det: Detection
     ) -> None:
-        """Write the token/fields into the page and fire any declared callback."""
+        if not self.response_fields:
+            raise NotImplementedError(f"{self.kind} declares no response field")
+        token = _first_present(solution, self.solution_keys) or ""
+        placed = await _eval_js(
+            session,
+            _PLACE_JS
+            % (
+                json.dumps(token),
+                json.dumps(list(self.response_fields)),
+                json.dumps(self.response_tag),
+                json.dumps(self.widget_selector),
+            ),
+        ) or {}
+        logger.info(
+            "solve_captcha: placed %s token (len=%d fields=%s in_form=%s "
+            "written=%s callback=%s)",
+            self.kind, len(str(token)), placed.get("fields"), placed.get("inForm"),
+            placed.get("valueLen"), placed.get("callback") or "none",
+        )
+        await self._after_place(session, str(token), det)
+
+    async def _after_place(
+        self, session: BrowserSession, token: str, det: Detection
+    ) -> None:
+        """Any provider-specific step once the token is in the page."""
+        return None
 
 
 class RecognitionStrategy(CaptchaStrategy):

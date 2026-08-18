@@ -270,10 +270,52 @@ def test_captcha_spend_is_capped_by_default():
     assert Settings().captcha_cost_cap_usd > 0
 
 
+def test_every_token_strategy_can_actually_place_its_solution():
+    from app.agent.captcha.base import TokenStrategy
+    for s in all_strategies():
+        if not isinstance(s, TokenStrategy):
+            continue
+        declares = bool(getattr(s, "response_fields", ()))
+        overrides = type(s)._place is not TokenStrategy._place
+        assert declares or overrides, (
+            f"{s.kind} would silently drop its solution: it names no response "
+            "field and defines no placement of its own"
+        )
+
+
+async def test_shared_placement_writes_into_the_widgets_form():
+    from app.agent.captcha.base import TokenStrategy, _PLACE_JS
+    seen = {}
+
+    class _Probe(TokenStrategy):
+        kind = "probe-only"
+        solution_keys = ("token",)
+        response_fields = ("x-response",)
+        widget_selector = ".x-widget"
+
+        def detect(self, probe):
+            return None
+
+        def build_task(self, det, ctx):
+            return {}
+
+    async def fake_eval(session, expr):
+        seen["js"] = expr
+        return {"fields": 1, "inForm": True, "valueLen": 9, "callback": "cb"}
+
+    from app.agent.captcha import base as base_mod
+    with patch.object(base_mod, "_eval_js", fake_eval):
+        await _Probe()._place(SimpleNamespace(), {"token": "abcdefghi"},
+                              Detection(kind="probe-only"))
+    assert '"x-response"' in seen["js"]
+    assert ".x-widget" in seen["js"]
+    assert "form.querySelector" in _PLACE_JS
+
+
 def test_token_is_placed_inside_the_widgets_form():
-    from app.agent.captcha.strategies.recaptcha import _PLACE_JS
+    from app.agent.captcha.base import _PLACE_JS
     assert 'closest("form")' in _PLACE_JS
-    assert "form.appendChild(ta)" in _PLACE_JS
+    assert "make(form)" in _PLACE_JS
     assert "out.inForm" in _PLACE_JS
 
 
