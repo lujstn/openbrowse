@@ -38,22 +38,20 @@ _PROBE_JS = r"""(function () {
     var src = el.getAttribute("src") || "";
     try { return new URL(src, location.href).origin; } catch (e) { return ""; }
   }
-  function dominant() {
-    var t = document.body ? (document.body.innerText || "").trim().length : 0;
-    return t < 2000;
-  }
   function isInterstitial(widget) {
     if (!widget) return false;
     var form = widget.closest ? widget.closest("form") : null;
     if (!form) return false;
-    var sameOrigin = true;
-    var action = form.getAttribute("action") || "";
-    if (action) {
-      try { sameOrigin = new URL(action, location.href).origin === location.origin; }
-      catch (e) { sameOrigin = true; }
+    if (attr(widget, ["data-callback"])) return false;
+    var creds = form.querySelectorAll(
+      'input[type="text"],input[type="password"],input[type="email"],' +
+      'input[type="tel"],input[type="search"],input:not([type]),textarea'
+    );
+    for (var i = 0; i < creds.length; i++) {
+      var s = window.getComputedStyle(creds[i]);
+      if (s && s.display !== "none" && s.visibility !== "hidden") return false;
     }
-    var hasCallback = !!attr(widget, ["data-callback"]);
-    return sameOrigin && !hasCallback && dominant();
+    return true;
   }
 
   var out = {
