@@ -5,9 +5,34 @@
   <h1>OpenBrowse is configured</h1>
   <p>Your <code>.env</code> has been written. Copy your API key now; it is shown only once:</p>
   <p><code style="font-size:1.1em; user-select: all;">{{ api_key }}</code></p>
+  {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
+  {% if hw_checklist %}
+  <h2>Host tuning</h2>
+  <ul>
+    {% for row in hw_checklist %}
+    <li>
+      <strong>{{ row.label }}</strong>
+      {% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}(recommended){% endif %}
+      &mdash; {{ row.detail }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if actions %}
+  <p>Apply the recommended items with one command on this machine:</p>
+  <pre>sudo bash scripts/host_tune.sh --share {{ share }}</pre>
+  <p>It is safe to re-run, and it also enables the dashboard to apply future tuning changes at the click of a button.</p>
+  {% endif %}
+  {% endif %}
+  {% if hw_systemd %}
+  <p>Restart to apply the configuration:</p>
+  <form method="post" action="/setup/restart">
+    <button type="submit">Restart now</button>
+  </form>
+  {% else %}
   <p>Restart the server to apply the configuration:</p>
   <pre>sudo systemctl restart browser-use.service
 # or, if you run it manually, stop and re-run uvicorn</pre>
+  {% endif %}
   <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>
   <h2>Reach it from anywhere (optional)</h2>
   <p>To use OpenBrowse from outside this machine without opening ports, install <a href="https://tailscale.com/">Tailscale</a>:</p>
@@ -35,11 +60,44 @@ sudo tailscale funnel --bg 8420</pre>
     <label>Dashboard password (optional; defaults to the API key)
       <input name="dashboard_password" type="password" />
     </label>
+    {% if hw_complete %}
+    <fieldset id="capacity">
+      <legend>Capacity</legend>
+      <p>Detected: <strong>{{ hw_summary }}</strong></p>
+      <p>How much of this machine can OpenBrowse use?</p>
+      <label><input type="radio" name="share" value="all" data-rec="{{ hw_recs.all }}" /> All of it &mdash; nothing else important runs here</label>
+      <label><input type="radio" name="share" value="most" checked data-rec="{{ hw_recs.most }}" /> Most of it &mdash; leave some headroom</label>
+      <label><input type="radio" name="share" value="shared" data-rec="{{ hw_recs.shared }}" /> Share it &mdash; other services matter too</label>
+      <label>Concurrent sessions (1&ndash;{{ hw_hard_max }})
+        <input type="range" name="max_concurrent_sessions" id="mcs-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_recs.most }}" />
+        <output id="mcs-value">{{ hw_recs.most }}</output>
+      </label>
+      <small id="mcs-note">Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session.</small>
+    </fieldset>
+    {% else %}
     <label>Max concurrent sessions on this device
       <input name="max_concurrent_sessions" value="1" inputmode="numeric" pattern="[0-9]*" />
       <small>Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session. 2 suits ~4GB/2 cores, 5 suits ~8&ndash;16GB/4 cores, 20 needs ~40GB/16+ cores.</small>
     </label>
+    {% endif %}
     <button type="submit">Save configuration</button>
   </form>
+  {% if hw_complete %}
+  <script>
+    (function () {
+      var slider = document.getElementById("mcs-slider");
+      var value = document.getElementById("mcs-value");
+      document.querySelectorAll('input[name="share"]').forEach(function (radio) {
+        radio.addEventListener("change", function () {
+          slider.value = radio.dataset.rec;
+          value.textContent = radio.dataset.rec;
+        });
+      });
+      slider.addEventListener("input", function () {
+        value.textContent = slider.value;
+      });
+    })();
+  </script>
+  {% endif %}
 {% endif %}
 {% endblock %}
