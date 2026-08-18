@@ -9,7 +9,6 @@ const source = readFileSync(join(here, "../../app/dashboard/static/agents.js"), 
 function makeEl() {
   const el = {
     className: "",
-    innerHTML: "",
     scrollTop: 0,
     scrollHeight: 0,
     style: { setProperty: () => {} },
@@ -35,6 +34,16 @@ function makeEl() {
   };
   el._q = {};
   el._on = {};
+  // assigning innerHTML detaches existing children in a real DOM, and code under
+  // test clears containers that way; a plain string field would keep them alive
+  let html = "";
+  Object.defineProperty(el, "innerHTML", {
+    get: () => html,
+    set: (v) => {
+      html = v;
+      el.children.length = 0;
+    },
+  });
   return el;
 }
 
@@ -92,10 +101,12 @@ const act = new (loadAgents(false).AgentActivity)(container);
 const hasCaret = () => act.textEl.innerHTML.includes("ob-caret");
 const cls = (c) => container._classes.has(c);
 
-act.update({ label: "Thinking", stream: "the model is thinking about", spin: true, startedAt: NOW });
+act.update({ label: "Thinking", stream: "the model is thinking about", spin: true, startedAt: NOW, kind: "reasoning" });
 flush();
 check("streaming shows the caret", hasCaret(), act.textEl.innerHTML);
 check("streaming marks the label as working", cls("is-working"), "");
+check("a thought shimmers", cls("is-reasoning"), [...container._classes].join(","));
+check("a thought does not also spin", act.indicatorEl.children.length === 0, "spinner present during reasoning");
 check("label is the phase, not the prose", act.labelEl.textContent === "Thinking", act.labelEl.textContent);
 check("timer counts while working", /\ds$/.test(act.timerEl.textContent), act.timerEl.textContent);
 check("no emoji reaches the label", !/[\u{1F300}-\u{1FAFF}]/u.test(act.labelEl.textContent), act.labelEl.textContent);
@@ -106,6 +117,7 @@ act.update({
   spin: false,
   startedAt: NOW,
   seconds: 4.2,
+  kind: "reasoning",
 });
 flush();
 check("settling removes the caret", !hasCaret(), act.textEl.innerHTML);
@@ -122,19 +134,22 @@ act.headEl.fire("click");
 check("chevron collapses again", !cls("is-expanded"), "");
 check("collapsing does not hide the whole card", cls("is-open"), [...container._classes].join(","));
 
-act.update({ label: "Running actions", spin: false, startedAt: NOW });
+act.update({ label: "Running actions", spin: true, startedAt: NOW });
 flush();
 check("a phase with no prose empties the body", act.textEl.innerHTML === "", act.textEl.innerHTML);
 check("a phase with no prose is not complete", !cls("is-complete"), "");
 check("a phase with no prose offers no Copy", !cls("has-prose"), [...container._classes].join(","));
 check("label follows the new phase", act.labelEl.textContent === "Running actions", act.labelEl.textContent);
+check("a phase that acts spins", act.indicatorEl.children.length === 1, "no spinner while acting");
+check("a phase that acts does not shimmer", !cls("is-reasoning"), [...container._classes].join(","));
 
-act.update({ label: "Thinking", stream: "next thought", spin: true, startedAt: NOW });
+act.update({ label: "Thinking", stream: "next thought", spin: true, startedAt: NOW, kind: "reasoning" });
 flush(1);
 check("caret returns on the next stream", hasCaret(), act.textEl.innerHTML);
+check("the spinner clears when thinking resumes", act.indicatorEl.children.length === 0, "spinner lingered");
 
 act.trackEl.scrollHeight = 400;
-act.update({ label: "Thinking", stream: "a very long thought", spin: true, startedAt: NOW });
+act.update({ label: "Thinking", stream: "a very long thought", spin: true, startedAt: NOW, kind: "reasoning" });
 flush();
 check("overflow masks the viewport", act.viewportEl._classes.has("is-masked"), "");
 check(
@@ -143,12 +158,12 @@ check(
   act.trackEl.style.transform
 );
 
-act.update({ label: "Thinking", stream: "a very long thought", spin: false, startedAt: NOW, seconds: 9 });
+act.update({ label: "Thinking", stream: "a very long thought", spin: false, startedAt: NOW, seconds: 9, kind: "reasoning" });
 flush();
 check("completion stops sliding the track", act.trackEl.style.transform === "", act.trackEl.style.transform);
 
 const rm = new (loadAgents(true).AgentActivity)(makeEl());
-rm.update({ label: "Thinking", stream: "reduced motion thought", spin: false, startedAt: NOW, seconds: 1 });
+rm.update({ label: "Thinking", stream: "reduced motion thought", spin: false, startedAt: NOW, seconds: 1, kind: "reasoning" });
 check(
   "reduced motion settles without a caret",
   !rm.textEl.innerHTML.includes("ob-caret"),

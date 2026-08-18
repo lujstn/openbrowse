@@ -20,6 +20,7 @@ def set_activity(
     spin: bool = False,
     stream: str | None = None,
     seconds: float | None = None,
+    kind: str | None = None,
 ) -> None:
     """Record what a session is doing. ``stream`` carries the full accumulated
     text of a token-by-token phase (model reasoning as it generates); it is
@@ -43,6 +44,10 @@ def set_activity(
         # loses its clock, so a caller that measured the real elapsed time says so
         # here rather than leaving the dashboard to infer it from startedAt.
         "seconds": seconds,
+        # @nonobvious(means): "reasoning" marks a phase whose prose is the point.
+        # The dashboard shimmers those and spins the rest, so a phase that thinks
+        # and a phase that acts do not claim the same affordance.
+        "kind": kind,
     }
 
 

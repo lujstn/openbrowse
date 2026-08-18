@@ -775,7 +775,7 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -836,7 +836,7 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -882,7 +882,7 @@ async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: (
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
             pushes.append(stream) if stream is not None else None
         ),
     )
@@ -1514,7 +1514,7 @@ async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeyp
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: (
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
             pushes.append(stream) if stream is not None else None
         ),
     )
@@ -1582,7 +1582,7 @@ async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypa
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
             {"label": label, "spin": spin, "stream": stream}
         ),
     )
@@ -1634,7 +1634,7 @@ async def test_reasoning_row_records_how_long_the_thought_took(monkeypatch):
     monkeypatch.setattr(
         runner_mod,
         "set_activity",
-        lambda sid, label, step=None, spin=False, stream=None, seconds=None: pushes.append(
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
             {"label": label, "stream": stream, "seconds": seconds}
         ),
     )
@@ -1681,3 +1681,70 @@ async def test_reasoning_row_records_how_long_the_thought_took(monkeypatch):
     settle = [p for p in pushes if p["seconds"] is not None]
     assert settle, "the settle push must carry the measured elapsed time"
     assert settle[-1]["seconds"] == llm._last_reasoning_seconds
+
+
+async def test_thinking_declares_itself_so_only_thought_shimmers(monkeypatch):
+    """The dashboard spins a phase that acts and shimmers a phase that thinks, so
+    every push has to say which it is.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    llm._activity_session = "sess-kind"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
+            pushes.append({"label": label, "spin": spin, "kind": kind})
+        ),
+    )
+
+    events = [
+        types.SimpleNamespace(
+            type="content_block_start",
+            content_block=types.SimpleNamespace(type="thinking"),
+        ),
+        types.SimpleNamespace(
+            type="content_block_delta",
+            delta=types.SimpleNamespace(type="thinking_delta", thinking="weighing it up"),
+        ),
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            self._it = iter(events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_message(self):
+            return "final"
+
+    await llm._drain_stream(FakeStream())
+
+    assert pushes, "thinking must reach the feed"
+    for push in pushes:
+        assert push["label"] == _REASONING_LABEL
+        assert push["kind"] == "reasoning", f"an unmarked thought would spin: {push}"
+
+
+def test_every_acting_phase_says_it_is_working():
+    """A phase that acts without spin renders as a still label, which reads as a
+    stalled agent rather than a busy one.
+    """
+    import re
+
+    from app.agent import runner
+
+    src = Path(runner.__file__).read_text()
+    for label in ("Running actions", "Preparing next step"):
+        calls = re.findall(r"set_activity\([^)]*" + re.escape(label) + r"[^)]*\)", src)
+        assert calls, f"expected {label} to still be pushed"
+        for call in calls:
+            assert "spin=True" in call, f"{label} would render as a stalled agent: {call}"

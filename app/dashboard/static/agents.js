@@ -180,6 +180,18 @@
 
   var ACTIVITY_MAX_HEIGHT = 208;
 
+  function buildSpinner() {
+    var span = document.createElement("span");
+    span.className = "ob-spin";
+    for (var i = 0; i < 8; i++) {
+      var bar = document.createElement("i");
+      bar.style.transform = "rotate(" + i * 45 + "deg)";
+      bar.style.animationDelay = -(7 - i) * 100 + "ms";
+      span.appendChild(bar);
+    }
+    return span;
+  }
+
   function formatDuration(seconds) {
     if (seconds >= 60) {
       var mins = Math.floor(seconds / 60);
@@ -214,6 +226,7 @@
       '<div class="ob-reveal-inner"><div class="ob-activity-card">' +
       '<div class="ob-activity-body">' +
       '<button type="button" class="ob-activity-head">' +
+      '<span class="ob-activity-indicator"></span>' +
       '<span class="ob-activity-label"></span>' +
       '<span class="ob-activity-timer"></span>' +
       '<span class="ob-activity-chev"></span>' +
@@ -224,6 +237,7 @@
       '<div class="ob-activity-actions">' +
       '<button type="button" class="ob-activity-copy">Copy</button>' +
       "</div></div></div>";
+    this.indicatorEl = this.container.querySelector(".ob-activity-indicator");
     this.labelEl = this.container.querySelector(".ob-activity-label");
     this.timerEl = this.container.querySelector(".ob-activity-timer");
     this.headEl = this.container.querySelector(".ob-activity-head");
@@ -236,6 +250,13 @@
     this.container.setAttribute("role", "log");
     this.container.setAttribute("aria-live", "polite");
     this.container.setAttribute("aria-busy", "false");
+  };
+
+  AgentActivity.prototype._setSpinner = function (spinning) {
+    if (this._spinnerShown === spinning) return;
+    this._spinnerShown = spinning;
+    this.indicatorEl.innerHTML = "";
+    if (spinning) this.indicatorEl.appendChild(buildSpinner());
   };
 
   AgentActivity.prototype._onToggle = function () {
@@ -332,7 +353,10 @@
       this._startedAt = Date.parse(activity.startedAt) || Date.now();
     }
 
+    var reasoning = activity.kind === "reasoning";
     this.container.classList.toggle("is-working", working);
+    this.container.classList.toggle("is-reasoning", reasoning);
+    this._setSpinner(working && !reasoning);
     this.container.setAttribute("aria-busy", working ? "true" : "false");
 
     // @nonobvious(forced-by): finishInstantly renders synchronously and reads
@@ -387,7 +411,14 @@
     this._complete = false;
     this._label = "";
     this._startedAt = null;
-    this.container.classList.remove("is-settled", "is-complete", "is-working", "is-expanded");
+    this.container.classList.remove(
+      "is-settled",
+      "is-complete",
+      "is-working",
+      "is-reasoning",
+      "is-expanded"
+    );
+    this._setSpinner(false);
     this.typewriter.reset();
     revealClose(this.container);
   };

@@ -128,7 +128,7 @@
   font-size: 12px;
   color: var(--ob-text-dim);
 }
-.ob-activity.is-working .ob-activity-label {
+.ob-activity.is-working.is-reasoning .ob-activity-label {
   background-image: linear-gradient(
     90deg,
     var(--ob-text-dim) 35%,
@@ -148,6 +148,42 @@
   }
   to {
     background-position: -50% 0;
+  }
+}
+
+.ob-activity-indicator {
+  display: flex;
+  flex: none;
+}
+/* a thinking phase has no spinner, and an empty box would still hold the gap,
+   indenting the label away from the prose underneath it */
+.ob-activity-indicator:empty {
+  display: none;
+}
+.ob-spin {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  opacity: 0.75;
+}
+.ob-spin i {
+  position: absolute;
+  top: 0;
+  left: 43.75%;
+  width: 12.5%;
+  height: 30%;
+  border-radius: 999px;
+  background: var(--ob-accent);
+  transform-origin: 50% 166.7%;
+  animation: ob-spin-fade 0.8s linear infinite;
+}
+@keyframes ob-spin-fade {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
   }
 }
 
@@ -297,12 +333,16 @@
   .ob-row-enter {
     transition: none !important;
   }
-  .ob-activity.is-working .ob-activity-label {
+  .ob-activity.is-working.is-reasoning .ob-activity-label {
     animation: none;
     -webkit-text-fill-color: var(--ob-text-dim);
     color: var(--ob-text-dim);
   }
   .ob-caret {
     animation: none;
+  }
+  .ob-spin i {
+    animation: none;
+    opacity: 0.55;
   }
 }

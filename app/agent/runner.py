@@ -622,6 +622,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                             _REASONING_LABEL,
                             spin=True,
                             stream=text[:_REASONING_MAX_CHARS],
+                            kind="reasoning",
                         )
             self._reasoning_seconds = (
                 round(loop.time() - began_at, 1) if began_at is not None else None
@@ -694,7 +695,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         if sid:
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
-            set_activity(sid, label, spin=True)
+            set_activity(sid, label, spin=True, kind="reasoning")
         summary_box = {"text": ""}
 
         async def _once(msgs: Any) -> Any:
@@ -736,7 +737,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ) from e
         finally:
             if sid:
-                set_activity(sid, "Running actions")
+                set_activity(sid, "Running actions", spin=True)
         summary = summary_box["text"]
         if summary:
             self._last_model_reasoning = summary
@@ -747,6 +748,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                     _REASONING_LABEL,
                     stream=summary[:_REASONING_MAX_CHARS],
                     seconds=self._last_reasoning_seconds,
+                    kind="reasoning",
                 )
         await _settle_code_stream(self, result, output_format)
         return result
@@ -908,7 +910,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                 if getattr(block, "type", None) == "thinking":
                     if began_at is None:
                         began_at = loop.time()
-                    set_activity(sid, _REASONING_LABEL, spin=True)
+                    set_activity(sid, _REASONING_LABEL, spin=True, kind="reasoning")
             if sid and etype == "content_block_delta":
                 delta = getattr(event, "delta", None)
                 chunk = getattr(delta, "thinking", None)
@@ -925,6 +927,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                             _REASONING_LABEL,
                             spin=True,
                             stream=text[:_REASONING_MAX_CHARS],
+                            kind="reasoning",
                         )
             if observer is None:
                 continue
@@ -950,6 +953,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                     _REASONING_LABEL,
                     stream=thinking_text[:_REASONING_MAX_CHARS],
                     seconds=self._last_reasoning_seconds,
+                    kind="reasoning",
                 )
         return result
 
@@ -960,7 +964,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         if sid:
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
-            set_activity(sid, label, spin=True)
+            set_activity(sid, label, spin=True, kind="reasoning")
         async def _call(msgs: Any) -> Any:
             return await super(_RepairingChatAnthropic, self).ainvoke(
                 msgs, output_format, **kwargs
@@ -983,7 +987,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                     self._force_stream = False
         finally:
             if sid:
-                set_activity(sid, "Running actions")
+                set_activity(sid, "Running actions", spin=True)
 
 
 _ANTHROPIC_MODELS: tuple[str, ...] = (
@@ -2114,7 +2118,7 @@ async def run_agent_session(session_id: str) -> None:
 
         async def on_step_start(agent_instance: Agent) -> None:
             step_started_at["t"] = datetime.now(timezone.utc)
-            set_activity(session_id, "Preparing next step")
+            set_activity(session_id, "Preparing next step", spin=True)
 
         async def on_step_end(agent_instance: Agent) -> None:
             nonlocal step_count
@@ -2291,7 +2295,7 @@ async def run_agent_session(session_id: str) -> None:
                 summary=summary or action_name or f"Step {step_count}",
             )
             llm._last_action = action_name
-            set_activity(session_id, "Running actions")
+            set_activity(session_id, "Running actions", spin=True)
 
             usage_history = agent_instance.token_cost_service.usage_history
             llm_cost = carried["llm"] + cost.history_cost(usage_history)
