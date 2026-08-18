@@ -230,7 +230,10 @@ async def test_solve_context_names_the_documents_base_address():
 
     async def fake_eval(session, expr):
         seen.append(expr)
-        return "https://origin.example/verify"
+        if "baseURI" in expr:
+            return {"base": "https://origin.example/verify",
+                    "here": "https://proxy.example/verify"}
+        return "agent/1.0"
 
     with patch.object(ctools, "_eval_js", fake_eval), \
          patch.object(ctools.cdp, "page_cookie_header", AsyncMock(return_value="")):
@@ -240,6 +243,11 @@ async def test_solve_context_names_the_documents_base_address():
     assert any("baseURI" in e for e in seen)
     assert ctx.page_url == "https://origin.example/verify"
     assert ctx.host == "origin.example"
+
+
+def test_captcha_spend_is_capped_by_default():
+    from app.config import Settings
+    assert Settings().captcha_cost_cap_usd > 0
 
 
 def test_token_is_placed_inside_the_widgets_form():

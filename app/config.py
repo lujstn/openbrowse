@@ -57,8 +57,11 @@ class Settings:
         default_factory=lambda: os.environ.get("CAPTCHA_AUTO_SOLVE", "").lower()
         in ("1", "true", "yes")
     )
+    # @nonobvious(must-hold): the address a solve is billed against comes from the
+    # page, which can name any site it likes, so spending is capped by default and
+    # only an explicit setting may widen or remove the ceiling.
     captcha_cost_cap_usd: float = field(
-        default_factory=lambda: float(os.environ.get("CAPTCHA_MAX_COST_USD") or 0.0)
+        default_factory=lambda: float(os.environ.get("CAPTCHA_MAX_COST_USD") or 1.0)
     )
     data_dir: Path = field(default_factory=lambda: _BASE / "data")
     db_path: Path = field(default_factory=lambda: _BASE / "data" / "browser_use.db")

@@ -48,11 +48,19 @@ async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: 
     # it must be the document's own base address, which is what a rewriting proxy
     # rebases to the original page rather than to the host now serving it.
     try:
-        current_url = await _eval_js(
-            browser_session, "document.baseURI || window.location.href"
-        ) or ""
+        addresses = await _eval_js(
+            browser_session,
+            "({base: document.baseURI || '', here: window.location.href || ''})",
+        ) or {}
     except Exception:
-        current_url = ""
+        addresses = {}
+    current_url = addresses.get("base") or addresses.get("here") or ""
+    here = addresses.get("here") or ""
+    if current_url and here and urlparse(current_url).netloc != urlparse(here).netloc:
+        logger.info(
+            "solve_captcha: page rebases the challenge address from %s to %s",
+            urlparse(here).netloc, urlparse(current_url).netloc,
+        )
     parsed = urlparse(current_url)
     host = parsed.netloc
     if det.interstitial and parsed.scheme:
