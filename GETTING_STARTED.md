@@ -58,16 +58,43 @@ To configure by hand instead, create `.env` in the repo root with:
 | `API_KEY`                 | A secret bearer token used to authenticate API requests                        |
 | `ANTHROPIC_API_KEY`       | Your Anthropic API key (`sk-ant-...`), for `claude-*` models                   |
 | `OPENAI_API_KEY`          | _(Optional)_ Your OpenAI API key, for `gpt-*` models                           |
-| `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving  |
+| `CAPSOLVER_API_KEY`       | _(Optional)_ Your [Capsolver](https://capsolver.com/) key for CAPTCHA solving. Without it a challenge simply blocks the session, and the feed says so. Billed per solve by Capsolver, typically well under a cent, and shown against the session |
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
+| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; set `0` to remove the ceiling |
 
 Generate a secure `API_KEY`:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+### What CAPTCHA solving covers
+
+With `CAPSOLVER_API_KEY` set, the agent solves a challenge itself by calling its `solve_captcha` action. The page is inspected and the right solver chosen, so the agent never has to name the challenge type.
+
+| Challenge | Spotted on the page | Solved | Notes |
+| --- | :---: | :---: | --- |
+| reCAPTCHA v2, including invisible and full-page verification walls | ✅ | ✅ | Proven end to end against live challenges |
+| reCAPTCHA v2 Enterprise | ✅ | ✅ | Proven end to end against live challenges |
+| reCAPTCHA v3 | ✅ | ✅ | Score based; proven end to end against live challenges |
+| reCAPTCHA v3 Enterprise | ✅ | ✅ | Proven end to end against live challenges |
+| reCAPTCHA image grids, "select every bus" | ✅ | ✅ | Answered by the ordinary reCAPTCHA solve, which clears the grid for you; proven end to end against live challenges |
+| Cloudflare Turnstile | ✅ | ✅ | Proven end to end against live challenges |
+| Geetest v3 and v4 | ✅ | ✅ | Proven end to end against live challenges, including fresh v3 challenge registration and provider callbacks |
+| MTCaptcha | ✅ | ✅ | Proven end to end against a live challenge using runtime configuration and verified-callback support |
+| AWS WAF, token | ✅ | ✅ | Cleared by writing the token as a cookie and re-requesting the page |
+| Image to text | ❌ | ✅ | Asked for by name, with the answer field's selector, since a bare image has no reliable marker |
+| hCaptcha | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no hCaptcha task |
+| DataDome | ✅ | ❌ | Recognised and reported plainly: Capsolver publishes no DataDome task |
+| AWS WAF, image | ❌ | ❌ | Not yet implemented |
+
+Coverage follows Capsolver's published service list, and a test refuses any task type that list does not offer, so this table cannot quietly drift from what the service will actually accept. A challenge it cannot solve is still recognised and named, costing nothing, rather than being missed or charged for.
+
+The live acceptance suite proves reCAPTCHA v2 (checkbox, explicit and invisible), reCAPTCHA v3 with multiple page actions, Cloudflare Turnstile, MTCaptcha and Geetest v3 and v4. Other solved types are implemented and covered by local tests, and each will tell you plainly if it cannot clear a challenge rather than reporting a success it did not achieve. A challenge type marked as not solved creates no task, so it costs nothing to meet one.
+
+A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves a session. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
 
 ---
 

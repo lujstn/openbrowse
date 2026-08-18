@@ -23,6 +23,13 @@ from browser_use.browser.events import (
 )
 from browser_use.filesystem.file_system import FileSystem
 
+from app.agent.browser_cdp import (
+    _emit_progress,
+    _eval_js,
+    _eval_on_target,
+    _iframe_targets,
+)
+from app.agent.captcha.bridge import install_captcha_bridge
 from app.agent.output_store import (
     OutputStore,
     _coerce_scalar,
@@ -32,11 +39,9 @@ from app.agent.output_store import (
 )
 from app.agent.textguard import guard_key
 from app import system_metrics
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-CAPSOLVER_API = "https://api.capsolver.com"
 
 _MAX_INLINE_FETCH_CHARS = 3000
 _FETCH_PREVIEW_CHARS = 2000
@@ -152,37 +157,6 @@ def _parse_jsonld_blobs(raw_list: Any) -> Any:
     return parsed[0] if parsed else None
 
 
-async def _eval_js(browser_session: BrowserSession, expression: str) -> Any:
-    """Execute JavaScript via BrowserSession's CDP connection.
-
-    @nonobvious(forced-by): browser-use 0.13.7's CDP client only supports the typed
-    ``send.Runtime.evaluate(params=..., session_id=...)`` form via a per-target
-    ``get_or_create_cdp_session()``, not ``send(method, params)``.
-    """
-    cdp_session = await browser_session.get_or_create_cdp_session()
-    result = await cdp_session.cdp_client.send.Runtime.evaluate(
-        params={"expression": expression, "returnByValue": True, "awaitPromise": True},
-        session_id=cdp_session.session_id,
-    )
-    if result.get("exceptionDetails"):
-        raise RuntimeError(f"JS error: {result['exceptionDetails']}")
-    return result.get("result", {}).get("value")
-
-
-async def _eval_on_target(
-    browser_session: BrowserSession, target_id: str, expression: str
-) -> Any:
-    """Runtime.evaluate against a specific CDP target (a background tab or an OOPIF)."""
-    sess = await browser_session.get_or_create_cdp_session(target_id, focus=False)
-    result = await sess.cdp_client.send.Runtime.evaluate(
-        params={"expression": expression, "returnByValue": True, "awaitPromise": True},
-        session_id=sess.session_id,
-    )
-    if result.get("exceptionDetails"):
-        raise RuntimeError(f"JS error: {result['exceptionDetails']}")
-    return result.get("result", {}).get("value")
-
-
 async def _spawn_tab(browser_session: BrowserSession, url: str) -> str | None:
     """Create a real background tab via CDP and return its target id, emitting the
     TabCreatedEvent browser-use's watchdogs expect.
@@ -233,16 +207,6 @@ async def _focus_target(browser_session: BrowserSession, target_id: str | None) 
             )
         except Exception:
             logger.warning("_focus_target: raw activateTarget failed", exc_info=True)
-
-
-async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str]]:
-    cdp = await browser_session.get_or_create_cdp_session()
-    targets = await cdp.cdp_client.send.Target.getTargets()
-    return [
-        {"targetId": t["targetId"], "url": t.get("url", "")}
-        for t in targets.get("targetInfos", [])
-        if t.get("type") == "iframe"
-    ]
 
 
 _IFRAME_HOSTS_JS = (
@@ -660,15 +624,6 @@ async def _read_one_page(
                 f"read_pages with frame_url_contains='{hosts[0]}'"
             )
     return page
-
-
-async def _emit_progress(progress: Any, message: str) -> None:
-    if progress is None:
-        return
-    try:
-        await progress(message)
-    except Exception:
-        logger.debug("_emit_progress failed", exc_info=True)
 
 
 _FRAME_FAILURE_MARKERS = (
@@ -1489,204 +1444,6 @@ def register_fetch_tool(tools: Tools) -> None:
             return ActionResult(error=f"HTTP request failed: {e}")
 
 
-def _parse_capsolver_cost(result: dict[str, Any]) -> float:
-    """Read the per-solve USD cost Capsolver returns in its task result."""
-    try:
-        return float(result.get("cost") or 0)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def register_capsolver_tool(tools: Tools, cost_sink: list[float] | None = None) -> None:
-    """Register the Capsolver CAPTCHA-solving tool on a Tools instance.
-
-    Each solved CAPTCHA's real cost (from Capsolver's response) is appended to
-    ``cost_sink`` if given, so the caller can fold it into the run's total cost.
-    """
-
-    if not settings.capsolver_api_key:
-        logger.warning("CAPSOLVER_API_KEY not set — CAPTCHA tool disabled")
-        return
-
-    @tools.action(
-        "Solve a CAPTCHA challenge on the current page. "
-        "Call this when you encounter a Cloudflare challenge, reCAPTCHA, hCaptcha, or similar."
-    )
-    async def solve_captcha(
-        captcha_type: str,
-        browser_session: BrowserSession,
-        site_key: str | None = None,
-    ) -> ActionResult:
-        """Attempt to solve a CAPTCHA using Capsolver.
-
-        Args:
-            captcha_type: One of 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', 'turnstile'
-            browser_session: Injected by browser-use — must be named exactly this
-            site_key: The site key from the page's CAPTCHA widget (if detectable)
-        """
-        current_url = ""
-        try:
-            current_url = await _eval_js(browser_session, "window.location.href") or ""
-        except Exception:
-            pass
-
-        task_type_map: dict[str, str] = {
-            "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
-            "recaptcha_v3": "ReCaptchaV3TaskProxyLess",
-            "hcaptcha": "HCaptchaTaskProxyLess",
-            "turnstile": "AntiTurnstileTaskProxyLess",
-        }
-        task_type = task_type_map.get(captcha_type)
-        if not task_type:
-            return ActionResult(
-                error=f"Unknown captcha type: {captcha_type}. "
-                f"Supported: {', '.join(task_type_map.keys())}"
-            )
-
-        if not site_key:
-            try:
-                site_key = await _eval_js(
-                    browser_session,
-                    """(function() {
-                        var rc = document.querySelector('[data-sitekey]');
-                        if (rc) return rc.getAttribute('data-sitekey');
-                        var cf = document.querySelector('[data-cf-turnstile-sitekey]')
-                            || document.querySelector('.cf-turnstile');
-                        if (cf) return cf.getAttribute('data-sitekey')
-                            || cf.getAttribute('data-cf-turnstile-sitekey');
-                        return null;
-                    })()""",
-                )
-            except Exception:
-                pass
-
-        if not site_key:
-            return ActionResult(
-                error="Could not detect CAPTCHA site key. "
-                "Please provide the site_key parameter."
-            )
-
-        task_payload: dict[str, str | float] = {
-            "type": task_type,
-            "websiteURL": current_url,
-            "websiteKey": site_key,
-        }
-        if captcha_type == "recaptcha_v3":
-            task_payload["pageAction"] = "verify"
-            task_payload["minScore"] = 0.9
-
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{CAPSOLVER_API}/createTask",
-                    json={
-                        "clientKey": settings.capsolver_api_key,
-                        "task": task_payload,
-                    },
-                    timeout=30.0,
-                )
-                result = resp.json()
-                if result.get("errorId", 0) != 0:
-                    return ActionResult(
-                        error=f"Capsolver error: {result.get('errorDescription', 'unknown')}"
-                    )
-
-                task_id = result.get("taskId")
-                if not task_id:
-                    solution = result.get("solution", {})
-                    token = solution.get("gRecaptchaResponse") or solution.get("token")
-                    if token:
-                        if cost_sink is not None:
-                            cost_sink.append(_parse_capsolver_cost(result))
-                        await _inject_token(browser_session, captcha_type, token)
-                        return ActionResult(
-                            extracted_content="CAPTCHA solved successfully"
-                        )
-                    return ActionResult(error="No taskId or immediate solution returned")
-
-                import asyncio
-
-                for _ in range(60):
-                    await asyncio.sleep(2)
-                    resp = await client.post(
-                        f"{CAPSOLVER_API}/getTaskResult",
-                        json={
-                            "clientKey": settings.capsolver_api_key,
-                            "taskId": task_id,
-                        },
-                        timeout=30.0,
-                    )
-                    result = resp.json()
-                    status = result.get("status")
-                    if status == "ready":
-                        if cost_sink is not None:
-                            cost_sink.append(_parse_capsolver_cost(result))
-                        solution = result.get("solution", {})
-                        token = (
-                            solution.get("gRecaptchaResponse")
-                            or solution.get("token")
-                            or solution.get("text")
-                        )
-                        if token:
-                            await _inject_token(browser_session, captcha_type, token)
-                            return ActionResult(
-                                extracted_content="CAPTCHA solved successfully"
-                            )
-                        return ActionResult(error="Solution has no token")
-                    elif status == "failed":
-                        return ActionResult(
-                            error=f"Capsolver failed: {result.get('errorDescription', 'unknown')}"
-                        )
-
-                return ActionResult(error="Capsolver timed out after 2 minutes")
-
-        except httpx.HTTPError as e:
-            return ActionResult(error=f"Capsolver HTTP error: {e}")
-
-
-async def _inject_token(
-    browser_session: BrowserSession, captcha_type: str, token: str
-) -> None:
-    """Inject the solved CAPTCHA token into the page via CDP."""
-    token_json = json.dumps(token)
-    if captcha_type in ("recaptcha_v2", "recaptcha_v3"):
-        await _eval_js(
-            browser_session,
-            f"""(function() {{
-                var token = {token_json};
-                var el = document.getElementById('g-recaptcha-response');
-                if (el) el.value = token;
-                if (typeof ___grecaptcha_cfg !== 'undefined') {{
-                    Object.entries(___grecaptcha_cfg.clients).forEach(function(entry) {{
-                        var k = entry[0]; var v = entry[1];
-                        var cb = (v && v.S && v.S.S && v.S.S.callback)
-                            || (v && v.R && v.R.R && v.R.R.callback);
-                        if (cb) cb(token);
-                    }});
-                }}
-            }})()""",
-        )
-    elif captcha_type == "hcaptcha":
-        await _eval_js(
-            browser_session,
-            f"""(function() {{
-                var token = {token_json};
-                var textarea = document.querySelector('[name="h-captcha-response"]');
-                if (textarea) textarea.value = token;
-            }})()""",
-        )
-    elif captcha_type == "turnstile":
-        await _eval_js(
-            browser_session,
-            f"""(function() {{
-                var token = {token_json};
-                var input = document.querySelector('[name="cf-turnstile-response"]');
-                if (input) input.value = token;
-                if (window.turnstile) turnstile.getResponse = function() {{ return token; }};
-            }})()""",
-        )
-
-
 class _AwaitableStr(str):
     """A plain string that also tolerates being awaited, so a helper that completes
     its work synchronously accepts both call styles — ``save_json(...)`` and
@@ -2116,7 +1873,17 @@ class TabManager:
         the watchdogs and session manager track it, mirroring browser-use's own sequence.
         """
         try:
-            target_id = await self._session._cdp_create_new_page(url, background=background)
+            target_id = await self._session._cdp_create_new_page(
+                "about:blank", background=background
+            )
+            await install_captcha_bridge(self._session, target_id)
+            if url != "about:blank":
+                cdp = await self._session.get_or_create_cdp_session(
+                    target_id, focus=False
+                )
+                await cdp.cdp_client.send.Page.navigate(
+                    params={"url": url}, session_id=cdp.session_id
+                )
         except Exception:
             logger.debug("_new_page: _cdp_create_new_page failed", exc_info=True)
             return None

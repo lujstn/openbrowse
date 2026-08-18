@@ -1,7 +1,6 @@
 """Tool registration tests (no live API calls)."""
 
-from unittest.mock import patch
-
+import pytest
 from browser_use import Tools
 
 
@@ -11,26 +10,6 @@ def test_register_fetch_tool() -> None:
 
     register_fetch_tool(tools)
     assert "http_fetch" in tools.registry.registry.actions
-
-
-def test_register_capsolver_with_key() -> None:
-    with patch("app.agent.tools.settings") as mock_settings:
-        mock_settings.capsolver_api_key = "test-key"
-        tools = Tools()
-        from app.agent.tools import register_capsolver_tool
-
-        register_capsolver_tool(tools)
-        assert "solve_captcha" in tools.registry.registry.actions
-
-
-def test_register_capsolver_without_key() -> None:
-    with patch("app.agent.tools.settings") as mock_settings:
-        mock_settings.capsolver_api_key = ""
-        tools = Tools()
-        from app.agent.tools import register_capsolver_tool
-
-        register_capsolver_tool(tools)
-        assert "solve_captcha" not in tools.registry.registry.actions
 
 
 def test_register_code_tools() -> None:
@@ -52,16 +31,6 @@ def test_normalise_py_name() -> None:
     assert _normalise_py_name("a/b/scrape") == "scrape.py"
     assert _normalise_py_name("weird name!.txt") == "weird_name_.txt.py"
     assert _normalise_py_name("") == "script.py"
-
-
-def test_parse_capsolver_cost() -> None:
-    from app.agent.tools import _parse_capsolver_cost
-
-    assert _parse_capsolver_cost({"cost": "0.0008"}) == 0.0008
-    assert _parse_capsolver_cost({"cost": 0.0012}) == 0.0012
-    assert _parse_capsolver_cost({}) == 0.0
-    assert _parse_capsolver_cost({"cost": None}) == 0.0
-    assert _parse_capsolver_cost({"cost": "not-a-number"}) == 0.0
 
 
 def test_item_url_field_prefers_detail_over_company() -> None:
@@ -2389,6 +2358,55 @@ async def test_open_in_new_tab_miss_names_unattached_embed(monkeypatch) -> None:
     assert "No element at index 7" in note
     assert "board.example.com" in note
     assert "frame_url_contains" in note
+
+
+async def test_new_tabs_install_captcha_bridge_before_real_navigation(
+    monkeypatch,
+) -> None:
+    import types as _t
+    from unittest.mock import AsyncMock
+
+    import app.agent.tools as tools_mod
+    from app.agent.tools import TabManager
+
+    class _Event:
+        def __await__(self):
+            async def done():
+                return None
+
+            return done().__await__()
+
+        async def event_result(self, **kwargs):
+            return None
+
+    navigate = AsyncMock()
+    cdp = _t.SimpleNamespace(
+        cdp_client=_t.SimpleNamespace(
+            send=_t.SimpleNamespace(Page=_t.SimpleNamespace(navigate=navigate))
+        ),
+        session_id="session-1",
+    )
+    session = _t.SimpleNamespace(
+        _cdp_create_new_page=AsyncMock(return_value="target-1"),
+        get_or_create_cdp_session=AsyncMock(return_value=cdp),
+        event_bus=_t.SimpleNamespace(dispatch=lambda event: _Event()),
+    )
+    bridge = AsyncMock()
+    monkeypatch.setattr(tools_mod, "install_captcha_bridge", bridge)
+
+    target = await TabManager(session)._new_page(
+        "https://challenge.example/page", background=True
+    )
+
+    assert target == "target-1"
+    session._cdp_create_new_page.assert_awaited_once_with(
+        "about:blank", background=True
+    )
+    bridge.assert_awaited_once_with(session, "target-1")
+    navigate.assert_awaited_once_with(
+        params={"url": "https://challenge.example/page"},
+        session_id="session-1",
+    )
 
 
 async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:

@@ -35,11 +35,11 @@ from app.agent.leak_repair import (
 )
 from app.agent.output_store import OutputStore
 from app.agent.schema import json_schema_to_pydantic
+from app.agent.captcha import install_captcha_bridge, register_captcha_tools
 from app.agent.tools import (
     TabManager,
     _eval_js,
     action_param_kinds,
-    register_capsolver_tool,
     register_clipboard_tools,
     register_code_tools,
     register_completeness_gate,
@@ -122,6 +122,27 @@ _OVERLAY_EXTENSION = (
     "shows is real."
 )
 
+_CAPTCHA_EXTENSION = (
+    "The operator has configured and pays for an authorised CAPTCHA-solving service. "
+    "solve_captcha is yours to call: call it immediately when any CAPTCHA, slider, "
+    "image grid, icon puzzle, or 'unusual traffic' challenge appears, before clicking "
+    "the widget, selecting tiles, or dragging anything. The action handles secondary "
+    "interactive puzzles too; wait for its result and never operate those puzzles "
+    "manually. Switching sites is a retreat, so reroute only after the solver reports "
+    "that the page still refuses. A solution is written into the page and the widget "
+    "may still look unsolved, so do not solve twice based on appearance. When the "
+    "solver says the solution is placed, submit the form and judge success only by "
+    "what the page reports in reply."
+)
+
+_CAPTCHA_UNAVAILABLE_EXTENSION = (
+    "No CAPTCHA is solved for you here, and none can be solved in this session: "
+    "there is no solver configured, so there is no action that will get you past a "
+    "challenge. If one blocks the page you need, say so plainly and say what it "
+    "blocked. Reaching a different page instead is a partial result, not a success, "
+    "so never report the task as done because you found a way around the block."
+)
+
 _CLIPBOARD_EXTENSION = (
     "You carry a clipboard: remember(key, value) keeps anything you need to remember "
     "between pages, recall(key) brings it back, and startUrl is already stored there."
@@ -157,6 +178,114 @@ _GOAL_PROMPT = (
     "correct result looks like, in the task's own words. Start directly with "
     "the substance (never with a phrase like 'the goal is'); name the purpose, "
     "not the output's shape; do not list fields or restate the schema."
+)
+
+
+_STALE_CAPTCHA_CLAIMS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email/verification wall, required "
+    "paywall, access denied not bypassed) → set `success=false`. Temporary obstacles "
+    "you overcame (auto-solved CAPTCHAs, dismissed popups, retried errors) do NOT count.",
+    "CAPTCHAs are automatically solved by the browser. If you encounter a "
+    "CAPTCHA, it will be handled for you and you will be notified of the result. "
+    "Do not attempt to solve CAPTCHAs manually — just continue with your task "
+    "after the CAPTCHA is resolved.",
+    "CAPTCHAs are handled automatically.",
+    "CAPTCHAs are solved automatically.",
+    "auto-solved CAPTCHAs",
+    "Captcha appeared twice on this site. Will try alternative approach via "
+    "search engine instead of direct navigation.",
+)
+
+_SOLVING_REPLACEMENTS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email or non-CAPTCHA verification "
+    "wall, required paywall, access denied not bypassed) → set `success=false`. "
+    "Temporary obstacles you overcame (CAPTCHAs solved with solve_captcha, dismissed "
+    "popups, retried errors) do NOT count.",
+    "No CAPTCHA is solved on your behalf here. When you hit one, solve it "
+    "yourself with the solve_captcha action and then carry on with your task.",
+    "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    "You must solve CAPTCHAs yourself with the solve_captcha action.",
+    "CAPTCHAs you solved",
+    "Captcha appeared twice on this site. Solved it with solve_captcha both "
+    "times and carried on.",
+)
+
+_UNSOLVABLE_REPLACEMENTS: tuple[str, ...] = (
+    "5. **Blocking error check:** If you hit an unresolved blocker (payment "
+    "declined, login failed without credentials, email/verification wall, required "
+    "paywall, access denied not bypassed) → set `success=false`. Temporary obstacles "
+    "you overcame (dismissed popups or retried errors) do NOT count; an unsolved "
+    "CAPTCHA remains a blocker.",
+    "No CAPTCHA is solved on your behalf here, and none can be solved in this "
+    "session. When you hit one, report plainly what it blocked rather than "
+    "treating a way around it as success.",
+    "CAPTCHAs cannot be solved in this session.",
+    "CAPTCHAs cannot be solved in this session.",
+    "CAPTCHAs that blocked you",
+    "Captcha appeared twice on this site. Reported it as a block rather than "
+    "calling a way around it a success.",
+)
+
+
+def _captcha_claim_fixes(solving_available: bool) -> tuple[tuple[str, str], ...]:
+    """Upstream's captcha claims paired with what is actually true of this session."""
+    replacements = (
+        _SOLVING_REPLACEMENTS if solving_available else _UNSOLVABLE_REPLACEMENTS
+    )
+    return tuple(zip(_STALE_CAPTCHA_CLAIMS, replacements))
+
+
+def _captcha_corrected_system_prompt(
+    llm: Any,
+    max_actions: int,
+    *,
+    solving_available: bool,
+    use_thinking: bool = True,
+    flash_mode: bool = False,
+) -> tuple[str | None, int]:
+    """Upstream's own system prompt with its "CAPTCHAs are solved for you" claims put
+    right, and how many of them were found.
+
+    @nonobvious(forced-by): those claims hold only on Browser-Use's cloud browsers,
+    whose proxy emits the CDP events the captcha watchdog waits for. Nothing emits
+    them here, so the stock prompt forbids the one action that gets past a challenge.
+    Rebuilding through upstream's SystemPrompt keeps whichever template it would have
+    picked, and keeps inheriting its later edits.
+    """
+    try:
+        from browser_use.agent.prompts import SystemPrompt
+
+        model_name = str(getattr(llm, "model", "") or "")
+        message = SystemPrompt(
+            max_actions_per_step=max_actions,
+            # @nonobvious(must-hold): these two pick the template, and the Agent parses
+            # the model's replies against the schema its own template describes, so a
+            # rebuild that guesses them can install a prompt for the wrong schema.
+            use_thinking=use_thinking,
+            flash_mode=flash_mode,
+            is_anthropic=isinstance(llm, ChatAnthropic),
+            is_browser_use_model="browser-use/" in model_name.lower(),
+            model_name=model_name,
+        ).get_system_message()
+        base = message.content
+    except Exception:
+        logger.warning("could not rebuild the system prompt", exc_info=True)
+        return None, 0
+    if not isinstance(base, str):
+        return None, 0
+    hits = 0
+    for stale, corrected in _captcha_claim_fixes(solving_available):
+        found = base.count(stale)
+        if found:
+            hits += found
+            base = base.replace(stale, corrected)
+    return base, hits
+
+
+_STALE_CAPTCHA_CLAIM_RE = re.compile(
+    r"CAPTCHAs?[^.\n]{0,90}?(automatically|handled for you|solved for you)", re.I
 )
 
 
@@ -1182,6 +1311,44 @@ def _friendly_error(error: str) -> str:
     return text[:140] + ("…" if len(text) > 140 else "")
 
 
+def _gated_done_output(history: Any) -> str:
+    """history.final_result() returns the last action's extracted_content
+    regardless of whether done() was ever reached, so an unfinished run must
+    not have its last step mistaken for delivered output."""
+    if not history.is_done():
+        return ""
+    return history.final_result() or ""
+
+
+def _completion_summary(
+    *,
+    is_successful: bool,
+    is_done: bool,
+    raw_success: bool,
+    schema_valid: bool,
+    stopped: bool,
+    done_text: str,
+    recovered_errors: int,
+) -> str:
+    """One honest sentence for the ending, distinguishing an agent-reported
+    failure from a user stop and from running out of steps — the three were
+    previously collapsed into a single "Task finished with errors"."""
+    if is_successful:
+        summary = "Task completed successfully"
+        if recovered_errors:
+            plural = "s" if recovered_errors != 1 else ""
+            summary += f" (recovered from {recovered_errors} transient error{plural})"
+        return summary
+    if is_done and raw_success and not schema_valid:
+        return "Task finished but the result did not match the requested schema"
+    if is_done and not raw_success:
+        reason = f": {_friendly_error(done_text)}" if done_text else ""
+        return f"Task failed{reason}"
+    if stopped:
+        return "Task failed: stopped before the goal was reached"
+    return "Task failed: ran out of steps before the goal was reached"
+
+
 def _primary_action_name(actions: list) -> str | None:
     if not actions:
         return None
@@ -1398,6 +1565,8 @@ async def run_agent_session(session_id: str) -> None:
         # agent, and a reviewer round against a dead browser silently re-judges
         # the same trajectory. Chrome's real teardown is ours (stop_chrome).
         browser_session.browser_profile.keep_alive = True
+        await browser_session.start()
+        await install_captcha_bridge(browser_session)
 
         clipboard: dict[str, Any] = {}
         review_state: dict[str, Any] = {"round": 0, "snapshot": None}
@@ -1440,6 +1609,17 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
+        async def _captcha_progress(label: str) -> None:
+            set_activity(session_id, label, spin=True)
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "interaction", "action": "captcha"}),
+                summary=label[:200],
+                count_step=False,
+            )
+
         code_observer = CodeStreamObserver(browser_session, clipboard, _code_progress)
         object.__setattr__(llm, "stream_observer", code_observer)
 
@@ -1448,7 +1628,12 @@ async def run_agent_session(session_id: str) -> None:
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
-        register_capsolver_tool(tools, capsolver_costs)
+        register_captcha_tools(tools, capsolver_costs, _captcha_progress)
+        if not settings.capsolver_api_key:
+            await _captcha_progress(
+                "CAPTCHA solving is off: no CAPSOLVER_API_KEY is configured, so a "
+                "challenge will block this session."
+            )
 
         if store is not None:
             register_output_store_tools(tools, store, clipboard)
@@ -1585,11 +1770,16 @@ async def run_agent_session(session_id: str) -> None:
             # @nonobvious(forced-by): on_step_end also fires for steps cancelled
             # by step_timeout, where re-reading history[-1] would double-log.
             if len(steps) == logged_history_len["n"]:
+                stopped = bool(getattr(agent_instance.state, "stopped", False))
                 await crud.create_message(
                     session_id=session_id,
                     role="ai",
                     msg_type="browser_action_error",
-                    summary="Step timed out and was cancelled before completing",
+                    summary=(
+                        "Cancelled by stop request"
+                        if stopped
+                        else "Step timed out and was cancelled before completing"
+                    ),
                 )
                 return
             logged_history_len["n"] = len(steps)
@@ -1767,6 +1957,37 @@ async def run_agent_session(session_id: str) -> None:
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,
         ]
+        # @nonobvious(must-hold): the stock prompt tells the model four times over
+        # that captchas are handled for it. That is false here whether or not a solver
+        # is configured, and it is worse without one: the model waits for a solve that
+        # can never arrive, or quietly reroutes and calls that success.
+        solving_available = bool(settings.capsolver_api_key)
+        extension_parts.append(
+            _CAPTCHA_EXTENSION if solving_available else _CAPTCHA_UNAVAILABLE_EXTENSION
+        )
+        # @nonobvious(mirrors): the Agent forces flash mode for its own provider's
+        # models, and parses replies against the schema its template describes.
+        flash_mode = bool(agent_kwargs.get("flash_mode", False)) or (
+            getattr(llm, "provider", "") == "browser-use"
+        )
+        corrected, claim_hits = _captcha_corrected_system_prompt(
+            llm,
+            agent_kwargs["max_actions_per_step"],
+            solving_available=solving_available,
+            use_thinking=bool(agent_kwargs.get("use_thinking", True)),
+            flash_mode=flash_mode,
+        )
+        if corrected and claim_hits:
+            agent_kwargs["override_system_message"] = corrected
+            logger.info("corrected %d CAPTCHA claims in the system prompt", claim_hits)
+        # @nonobvious(must-hold): a claim reworded upstream leaves the literals only
+        # half matched, so what survived has to be read off the result rather than
+        # inferred from the number that matched.
+        if corrected is None or _STALE_CAPTCHA_CLAIM_RE.search(corrected):
+            await _captcha_progress(
+                "Could not fully correct the model's built-in CAPTCHA instructions, "
+                "so it may still believe challenges are handled for it."
+            )
         if store is not None:
             extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
         extension_parts.append(_BEGIN_EXTENSION)
@@ -1798,7 +2019,7 @@ async def run_agent_session(session_id: str) -> None:
                     file_output = file_content
         except Exception:
             logger.debug("result.json read from agent.file_system failed", exc_info=True)
-        done_output = history.final_result() or ""
+        done_output = _gated_done_output(history)
         from_store = store is not None and not store.is_empty()
         if from_store:
             output = store.read_output()
@@ -1822,11 +2043,8 @@ async def run_agent_session(session_id: str) -> None:
                 pass
 
         recovered_errors = sum(1 for e in history.errors() if e)
-        is_successful = (
-            history.is_done()
-            and (history.is_successful() is not False)
-            and schema_valid
-        )
+        raw_success = history.is_successful() is not False
+        is_successful = history.is_done() and raw_success and schema_valid
         # @nonobvious(means): a run that died before done but left a complete,
         # valid store has delivered the answer; the gate check is the arbiter.
         if not is_successful and not history.is_done() and from_store and schema_valid:
@@ -1895,15 +2113,15 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
 
-        if is_successful:
-            completion_summary = "Task completed successfully"
-            if recovered_errors:
-                plural = "s" if recovered_errors != 1 else ""
-                completion_summary += (
-                    f" (recovered from {recovered_errors} transient error{plural})"
-                )
-        else:
-            completion_summary = "Task finished with errors"
+        completion_summary = _completion_summary(
+            is_successful=is_successful,
+            is_done=history.is_done(),
+            raw_success=raw_success,
+            schema_valid=schema_valid,
+            stopped=bool(getattr(agent.state, "stopped", False)),
+            done_text=done_output,
+            recovered_errors=recovered_errors,
+        )
         await crud.create_message(
             session_id=session_id,
             role="ai",

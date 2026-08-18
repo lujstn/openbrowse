@@ -50,6 +50,15 @@ class Settings:
     capsolver_api_key: str = field(
         default_factory=lambda: os.environ.get("CAPSOLVER_API_KEY", "")
     )
+    # @nonobvious(must-hold): the address a solve is billed against comes from the
+    # page, which can name any site it likes, so spending is capped by default and
+    # only an explicit setting may widen or remove the ceiling.
+    # @nonobvious(means): the dearest tier the solver publishes is $3 per thousand,
+    # so the default buys ten solves in a session and no task costs more than a
+    # thirtieth of it.
+    captcha_cost_cap_usd: float = field(
+        default_factory=lambda: float(os.environ.get("CAPTCHA_MAX_COST_USD") or 0.03)
+    )
     data_dir: Path = field(default_factory=lambda: _BASE / "data")
     db_path: Path = field(default_factory=lambda: _BASE / "data" / "browser_use.db")
     profiles_dir: Path = field(default_factory=lambda: _BASE / "data" / "profiles")

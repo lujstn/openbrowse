@@ -46,7 +46,7 @@ Given the same real-world extraction task (a careers page with 14 records behind
 
 Here's a snippet of our benchmark run, with `claude-opus-5` taking agentic actions across parallel tabs while its code streams into a live IDE.
 
-https://github.com/user-attachments/assets/c1330d77-67b6-4a7d-bd43-7cdfa230b9d1
+<https://github.com/user-attachments/assets/c1330d77-67b6-4a7d-bd43-7cdfa230b9d1>
 
 ## Model providers
 

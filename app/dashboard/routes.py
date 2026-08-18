@@ -45,7 +45,8 @@ _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
-    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CAPSOLVER_API_KEY"]),
+    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
+    ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
     ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
@@ -569,11 +570,27 @@ async def dashboard_stop_session(session_id: str):
     if agent is not None:
         try:
             agent.stop()
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "system", "action": "stop"}),
+                summary="Stop requested from the dashboard",
+                count_step=False,
+            )
             return JSONResponse({"ok": True, "action": "stop"})
         except Exception:
             logger.warning("agent.stop() failed for %s; falling back to cancel", session_id, exc_info=True)
     await pool.cancel(session_id)
     await crud.update_session(session_id, status="stopped")
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="event",
+        data=json.dumps({"category": "system", "action": "stop"}),
+        summary="Stop requested from the dashboard",
+        count_step=False,
+    )
     return JSONResponse({"ok": True, "action": "stop"})
 
 

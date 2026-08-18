@@ -9,6 +9,8 @@ from app.agent.runner import (
     _THINKING_BUDGETS,
     _build_llm,
     _canonical_stored_effort,
+    _completion_summary,
+    _gated_done_output,
     _resolve_model,
     resolve_default_effort,
     valid_efforts,
@@ -1069,3 +1071,261 @@ def test_action_detail_humanises_bare_steps():
     assert detail == "Add output rows from rows.json"
     detail, _ = _action_detail([_Act({"read_output": {}})])
     assert detail == "Check the output built so far"
+
+
+def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    corrected, hits = _captcha_corrected_system_prompt(llm, 8, solving_available=True)
+
+    assert corrected is not None
+    assert hits >= 4
+    assert "Do not attempt to solve CAPTCHAs manually" not in corrected
+    assert "solve_captcha" in corrected
+    assert "non-CAPTCHA verification wall" in corrected
+    assert "email/verification wall" not in corrected
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
+
+
+def test_the_prompt_is_corrected_when_nothing_can_solve_a_captcha() -> None:
+    """Without a solver the stock prompt is more dangerous, not less: it tells the
+    model a solve is coming that never will."""
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    corrected, hits = _captcha_corrected_system_prompt(llm, 8, solving_available=False)
+
+    assert corrected is not None and hits >= 4
+    assert "cannot be solved in this session" in corrected
+    assert "solve_captcha" not in corrected
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is None
+
+
+def test_a_half_corrected_prompt_is_not_read_as_a_clean_one() -> None:
+    """A claim reworded upstream leaves the literals half matched; what survived has
+    to be read off the result, not inferred from the number that matched."""
+    from unittest.mock import patch
+
+    from app.agent.runner import (
+        _STALE_CAPTCHA_CLAIM_RE,
+        _captcha_corrected_system_prompt,
+    )
+
+    reworded = (
+        "CAPTCHAs are handled automatically.\n"
+        "Any CAPTCHA you meet gets resolved for you automatically."
+    )
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch("browser_use.agent.prompts.SystemPrompt") as system_prompt:
+        system_prompt.return_value.get_system_message.return_value = (
+            types.SimpleNamespace(content=reworded)
+        )
+        corrected, hits = _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True
+        )
+
+    assert hits == 1
+    assert _STALE_CAPTCHA_CLAIM_RE.search(corrected) is not None
+
+
+def test_the_rebuilt_prompt_mirrors_the_agents_own_template_choice() -> None:
+    """The Agent parses replies against the schema its template describes, so a
+    rebuild that guesses these two can install a prompt for the wrong schema."""
+    from unittest.mock import patch
+
+    from app.agent.runner import _captcha_corrected_system_prompt
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch("browser_use.agent.prompts.SystemPrompt") as system_prompt:
+        system_prompt.return_value.get_system_message.return_value = (
+            types.SimpleNamespace(content="no claims here")
+        )
+        _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True, use_thinking=False, flash_mode=True
+        )
+
+    kwargs = system_prompt.call_args.kwargs
+    assert kwargs["use_thinking"] is False
+    assert kwargs["flash_mode"] is True
+
+
+def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
+    from unittest.mock import patch
+
+    from app.agent.runner import _captcha_corrected_system_prompt
+
+    llm = types.SimpleNamespace(model="claude-sonnet-5")
+    with patch(
+        "browser_use.agent.prompts.SystemPrompt", side_effect=RuntimeError("gone")
+    ):
+        corrected, hits = _captcha_corrected_system_prompt(
+            llm, 8, solving_available=True
+        )
+
+    assert corrected is None
+    assert hits == 0
+
+
+def test_a_failed_run_does_not_paste_its_result_into_the_session_row() -> None:
+    """The completion summary is copied to sessions.last_step_summary, which the
+    sessions list renders as a one-line headline for every row."""
+    from app.agent.runner import _completion_summary
+
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="x" * 40_000,
+        recovered_errors=0,
+    )
+
+    assert summary.startswith("Task failed: ")
+    assert len(summary) < 200
+
+
+def _fake_history(*, is_done: bool, final_result: str = ""):
+    return types.SimpleNamespace(
+        is_done=lambda: is_done,
+        final_result=lambda: final_result,
+    )
+
+
+def test_gated_done_output_empty_when_run_never_reached_done():
+    history = _fake_history(is_done=False, final_result="Searched Bing for 'X'")
+    assert _gated_done_output(history) == ""
+
+
+def test_gated_done_output_returns_final_result_when_done():
+    history = _fake_history(is_done=True, final_result="the extracted answer")
+    assert _gated_done_output(history) == "the extracted answer"
+
+
+def test_completion_summary_success_notes_recovered_errors():
+    summary = _completion_summary(
+        is_successful=True,
+        is_done=True,
+        raw_success=True,
+        schema_valid=True,
+        stopped=False,
+        done_text="all good",
+        recovered_errors=2,
+    )
+    assert summary == "Task completed successfully (recovered from 2 transient errors)"
+
+
+def test_completion_summary_agent_reported_failure_surfaces_done_text():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="Could not find the requested item",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: Could not find the requested item"
+
+
+def test_completion_summary_agent_reported_failure_without_done_text():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed"
+
+
+def test_completion_summary_stopped_before_done():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=False,
+        schema_valid=True,
+        stopped=True,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: stopped before the goal was reached"
+
+
+def test_completion_summary_ran_out_of_steps():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    )
+    assert summary == "Task failed: ran out of steps before the goal was reached"
+
+
+def test_completion_summary_schema_mismatch():
+    summary = _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=True,
+        schema_valid=False,
+        stopped=False,
+        done_text="the raw text",
+        recovered_errors=0,
+    )
+    assert summary == "Task finished but the result did not match the requested schema"
+
+
+def test_on_step_end_reports_stop_not_timeout_when_agent_was_stopped():
+    import inspect
+
+    from app.agent import runner as runner_mod
+
+    src = inspect.getsource(runner_mod.run_agent_session)
+    assert "Cancelled by stop request" in src
+    assert "Step timed out and was cancelled before completing" in src
+    assert 'getattr(agent_instance.state, "stopped", False)' in src
+
+
+def test_the_no_solver_extension_offers_no_action_that_is_not_there() -> None:
+    from app.agent.runner import _CAPTCHA_EXTENSION, _CAPTCHA_UNAVAILABLE_EXTENSION
+
+    assert "solve_captcha" in _CAPTCHA_EXTENSION
+    assert "solve_captcha" not in _CAPTCHA_UNAVAILABLE_EXTENSION
+    assert "none can be solved in this session" in _CAPTCHA_UNAVAILABLE_EXTENSION
+
+
+def test_solver_instructions_cover_interactive_puzzles_before_manual_input() -> None:
+    from app.agent.captcha.tools import _SOLVE_DESCRIPTION
+    from app.agent.runner import _CAPTCHA_EXTENSION
+
+    for text in (_SOLVE_DESCRIPTION, _CAPTCHA_EXTENSION):
+        assert "authorised" in text
+        assert "slider" in text
+        assert "image grid" in text
+        assert "before" in text
+    assert "never click tiles or drag" in _SOLVE_DESCRIPTION
+
+
+def test_every_stale_captcha_claim_has_a_replacement_for_both_modes() -> None:
+    """The three tables are zipped, and zip would silently drop the tail of any
+    claim left without a replacement."""
+    from app.agent.runner import (
+        _SOLVING_REPLACEMENTS,
+        _STALE_CAPTCHA_CLAIMS,
+        _UNSOLVABLE_REPLACEMENTS,
+    )
+
+    assert len(_SOLVING_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)
+    assert len(_UNSOLVABLE_REPLACEMENTS) == len(_STALE_CAPTCHA_CLAIMS)

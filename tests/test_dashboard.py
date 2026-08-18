@@ -250,6 +250,54 @@ async def test_session_log_export_scopes(client):
     assert output == {"items": [{"title": "A"}]}
 
 
+async def test_stop_endpoint_records_stop_event_in_feed(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape listings")
+    sid = session["id"]
+    await crud.update_session(sid, status="running")
+
+    resp = await client.post(
+        f"/session/{sid}/stop", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+
+    messages, _ = await crud.list_messages(sid, limit=50)
+    assert any(
+        m["type"] == "event" and m["summary"] == "Stop requested from the dashboard"
+        for m in messages
+    )
+
+
+async def test_session_detail_renders_failed_pill_not_warning(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape listings")
+    sid = session["id"]
+    await crud.update_session(sid, status="stopped", is_task_successful=0)
+
+    resp = await client.get(f"/session/{sid}", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    body = resp.text
+    assert "status-d-failed" in body
+    assert "status-d-warning" not in body
+    assert 'data-success="0"' in body
+
+
+async def test_sessions_list_renders_failed_pill_not_warning(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape listings")
+    sid = session["id"]
+    await crud.update_session(sid, status="stopped", is_task_successful=0)
+
+    resp = await client.get("/sessions", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    body = resp.text
+    assert "status-d-failed" in body
+    assert "status-d-warning" not in body
+
+
 async def test_settings_page_hides_secrets_behind_password_inputs(
     client, tmp_path, monkeypatch
 ):
@@ -407,3 +455,13 @@ async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monke
     assert stored["max_cost_usd"] == 3.0
     if routes._dispatched_tasks:
         await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
+
+
+async def test_settings_page_offers_every_captcha_setting(client):
+    """A setting only reachable by hand-editing .env is one most users never find."""
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+
+    assert resp.status_code == 200
+    assert "CAPTCHA solving" in resp.text
+    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"):
+        assert name in resp.text, f"{name} is not offered on the settings page"

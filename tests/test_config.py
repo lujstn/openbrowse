@@ -27,3 +27,36 @@ def test_cost_factor_rejects_values_that_would_break_the_cap(monkeypatch):
         monkeypatch.setenv("CLOUD_MAX_COST_FACTOR", raw)
         with pytest.raises(ValueError, match="CLOUD_MAX_COST_FACTOR"):
             _cost_factor()
+
+
+def test_every_captcha_setting_is_reachable_from_both_places_a_user_looks():
+    """A setting that changes behaviour but appears in neither the example file nor
+    the dashboard is one nobody can find, spend ceiling included."""
+    import pathlib
+
+    from app.dashboard.routes import _ENV_GROUPS
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    example = (root / ".env.example").read_text()
+    group = dict(_ENV_GROUPS)["CAPTCHA solving"]
+    for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"):
+        assert name in example, f"{name} is missing from .env.example"
+        assert name in group, f"{name} is missing from the dashboard's CAPTCHA group"
+
+
+def test_no_captcha_setting_is_read_by_nothing():
+    """A dataclass field with no reader reads as a supported feature and is not."""
+    import pathlib
+
+    from app.config import Settings
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    sources = "\n".join(
+        p.read_text()
+        for p in (root / "app").rglob("*.py")
+        if p.name != "config.py"
+    )
+    for name in vars(Settings()):
+        if not name.startswith("captcha"):
+            continue
+        assert name in sources, f"settings.{name} is never read"
