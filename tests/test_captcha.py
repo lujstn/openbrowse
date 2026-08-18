@@ -224,6 +224,35 @@ async def test_pipeline_cost_cap_refuses():
     assert "cap" in (res.error or "").lower()
 
 
+def test_token_is_placed_inside_the_widgets_form():
+    from app.agent.captcha.strategies.recaptcha import _PLACE_JS
+    assert 'closest("form")' in _PLACE_JS
+    assert "form.appendChild(ta)" in _PLACE_JS
+    assert "out.inForm" in _PLACE_JS
+
+
+def test_submit_refuses_an_empty_response_field():
+    from app.agent.captcha.cdp import _SUBMIT_WIDGET_JS
+    assert '"empty"' in _SUBMIT_WIDGET_JS
+    assert "g-recaptcha-response" in _SUBMIT_WIDGET_JS
+
+
+async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
+    from app.agent.captcha import cdp as cdp_mod
+    still_there = AsyncMock(return_value={"kind": "recaptcha_v2"})
+    with patch.object(cdp_mod, "probe_strict", still_there):
+        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=2.0) is False
+    gone = AsyncMock(return_value=None)
+    with patch.object(cdp_mod, "probe_strict", gone):
+        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=5.0) is True
+
+
+def test_interstitial_detection_allows_a_widget_with_a_callback():
+    js = probe_mod._PROBE_JS
+    assert 'attr(widget, ["data-callback"])' not in js
+    assert "creds" in js
+
+
 def test_no_site_or_prompt_literals_in_captcha_package():
     root = pathlib.Path(__file__).resolve().parent.parent / "app" / "agent" / "captcha"
     banned = ("google", "/sorry/", "andy burnham", "newsfetcher", "diversify",

@@ -23,9 +23,23 @@ _SUBMIT_WIDGET_JS = r"""(function () {
   var w = document.querySelector('.g-recaptcha,[data-sitekey],.h-captcha,.cf-turnstile,[data-mtcaptcha-sitekey]');
   var f = w && w.closest ? w.closest("form") : null;
   if (!f) f = document.querySelector("form");
-  if (!f) return false;
+  if (!f) return "no-form";
+  // @nonobvious(must-hold): a challenge refused after a submit is re-served with an
+  // empty response box, so submitting whenever a form exists would post nothing and
+  // loop; only a form actually carrying a solution may be sent.
+  var fields = f.querySelectorAll(
+    'textarea[name="g-recaptcha-response"],[name="h-captcha-response"],' +
+    '[name="cf-turnstile-response"],[name="mtcaptcha-verifiedtoken"]'
+  );
+  if (fields.length) {
+    var filled = false;
+    for (var i = 0; i < fields.length; i++) {
+      if ((fields[i].value || "").length > 20) { filled = true; break; }
+    }
+    if (!filled) return "empty";
+  }
   if (f.requestSubmit) f.requestSubmit(); else f.submit();
-  return true;
+  return "submitted";
 })()"""
 
 
@@ -42,12 +56,9 @@ async def page_advanced(
     deadline = loop.time() + timeout_s
     while loop.time() < deadline:
         await asyncio.sleep(1.0)
-        try:
-            now_url = await _eval_js(browser_session, "window.location.href") or ""
-        except Exception:
-            now_url = ""
-        if now_url and now_url != before_url:
-            return True
+        # @nonobvious(must-hold): a refused challenge is re-served on a fresh URL
+        # carrying a new challenge token, so a changed address proves nothing; only
+        # the challenge being gone means we were let through.
         try:
             if await probe_strict(browser_session) is None:
                 return True
@@ -65,7 +76,8 @@ async def submit_widget_form(browser_session: BrowserSession) -> None:
     """
     await asyncio.sleep(0.8)
     try:
-        await _eval_js(browser_session, _SUBMIT_WIDGET_JS)
+        outcome = await _eval_js(browser_session, _SUBMIT_WIDGET_JS)
+        logger.info("solve_captcha: form submit %s", outcome)
     except Exception:
         logger.debug("submit_widget_form failed", exc_info=True)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from typing import Any
 
 from browser_use import BrowserSession
@@ -20,21 +21,44 @@ from app.agent.captcha.base import (
 )
 from app.agent.captcha.registry import register
 
+logger = logging.getLogger(__name__)
+
 _PLACE_JS = r"""(function (token) {
+  var out = { fields: 0, inForm: false, valueLen: 0, callback: "", navigated: false };
+  var widget = document.querySelector('.g-recaptcha,[data-sitekey]');
+  var form = widget && widget.closest ? widget.closest("form") : null;
+  if (!form) {
+    var anyTa = document.querySelector('textarea[name="g-recaptcha-response"]');
+    form = anyTa && anyTa.closest ? anyTa.closest("form") : null;
+  }
   var tas = document.querySelectorAll('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
-  if (!tas.length) {
+  for (var i = 0; i < tas.length; i++) { tas[i].value = token; tas[i].innerHTML = token; }
+  // @nonobvious(forced-by): only fields inside the form element are serialised on
+  // submit, so a response box the widget has not rendered yet, or one rendered
+  // outside the form, must be replaced by one the submit will actually carry.
+  if (form && !form.querySelector('textarea[name="g-recaptcha-response"]')) {
     var ta = document.createElement("textarea");
     ta.name = "g-recaptcha-response";
     ta.id = "g-recaptcha-response";
     ta.style.display = "none";
-    document.body.appendChild(ta);
-    tas = [ta];
+    ta.value = token;
+    ta.innerHTML = token;
+    form.appendChild(ta);
+  } else if (!form && !tas.length) {
+    var loose = document.createElement("textarea");
+    loose.name = "g-recaptcha-response";
+    loose.id = "g-recaptcha-response";
+    loose.style.display = "none";
+    loose.value = token;
+    document.body.appendChild(loose);
   }
-  for (var i = 0; i < tas.length; i++) { tas[i].value = token; tas[i].innerHTML = token; }
+  var all = document.querySelectorAll('textarea[name="g-recaptcha-response"]');
+  out.fields = all.length;
+  out.valueLen = all.length ? (all[0].value || "").length : 0;
+  out.inForm = !!(form && form.querySelector('textarea[name="g-recaptcha-response"]'));
   try {
-    var w = document.querySelector('.g-recaptcha[data-callback],[data-sitekey][data-callback]');
-    var cb = w && w.getAttribute("data-callback");
-    if (cb && typeof window[cb] === "function") { window[cb](token); }
+    var cb = widget && widget.getAttribute("data-callback");
+    if (cb && typeof window[cb] === "function") { window[cb](token); out.callback = cb; }
   } catch (e) {}
   try {
     var cfg = window.___grecaptcha_cfg;
@@ -47,7 +71,7 @@ _PLACE_JS = r"""(function (token) {
             for (var q in o) {
               var t = o[q];
               if (t && typeof t === "object" && typeof t.callback === "function") {
-                try { t.callback(token); } catch (e) {}
+                try { t.callback(token); out.callback = out.callback || "cfg"; } catch (e) {}
               }
             }
           }
@@ -55,6 +79,7 @@ _PLACE_JS = r"""(function (token) {
       }
     }
   } catch (e) {}
+  return out;
 })(%s)"""
 
 
@@ -68,7 +93,17 @@ class _RecaptchaTokenBase(TokenStrategy):
 
     async def _place(self, session: BrowserSession, solution, det):
         token = _first_present(solution, self.solution_keys) or ""
-        await _eval_js(session, _PLACE_JS % json.dumps(token))
+        placed = await _eval_js(session, _PLACE_JS % json.dumps(token))
+        logger.info(
+            "solve_captcha: placed %s token (len=%d fields=%s in_form=%s "
+            "written=%s callback=%s)",
+            det.kind,
+            len(token),
+            (placed or {}).get("fields"),
+            (placed or {}).get("inForm"),
+            (placed or {}).get("valueLen"),
+            (placed or {}).get("callback") or "none",
+        )
 
 
 @register

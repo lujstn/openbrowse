@@ -42,7 +42,6 @@ _PROBE_JS = r"""(function () {
     if (!widget) return false;
     var form = widget.closest ? widget.closest("form") : null;
     if (!form) return false;
-    if (attr(widget, ["data-callback"])) return false;
     var creds = form.querySelectorAll(
       'input[type="text"],input[type="password"],input[type="email"],' +
       'input[type="tel"],input[type="search"],input:not([type]),textarea'
