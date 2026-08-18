@@ -62,12 +62,44 @@ To configure by hand instead, create `.env` in the repo root with:
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
+| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `1.0`; set `0` to remove the ceiling |
+| `CAPTCHA_PROXY`           | _(Optional)_ Upstream proxy for the challenge types that cannot be solved without one (see the table below) |
 
 Generate a secure `API_KEY`:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+### What CAPTCHA solving covers
+
+With `CAPSOLVER_API_KEY` set, the agent solves a challenge itself by calling its
+`solve_captcha` action. The page is inspected and the right solver chosen, so the
+agent never has to name the challenge type.
+
+| Challenge | Spotted on the page | Solved | Notes |
+| --- | :---: | :---: | --- |
+| reCAPTCHA v2, including invisible and full-page verification walls | ✅ | ✅ | Proven end to end against live challenges |
+| reCAPTCHA v2 Enterprise | ✅ | ✅ | |
+| reCAPTCHA v3 | ✅ | ✅ | Score based, and the page action is assumed rather than read |
+| hCaptcha | ✅ | ✅ | |
+| Cloudflare Turnstile | ✅ | ✅ | |
+| Geetest v3 and v4 | ✅ | ✅ | Single-use parameters are refreshed before a retry |
+| MTCaptcha | ✅ | ✅ | |
+| AWS WAF, token | ✅ | ✅ | |
+| DataDome | ✅ | ⚠️ | Needs `CAPTCHA_PROXY`; without it the session is told so plainly |
+| Cloudflare Challenge | ❌ | ⚠️ | Needs `CAPTCHA_PROXY`, and is not yet spotted automatically |
+| Image to text, and its vision engine | ❌ | ✅ | Solved when asked for by name, since a bare image has no reliable marker |
+| reCAPTCHA image grids, "select every bus" | ❌ | ✅ | Cleared by the ordinary reCAPTCHA solve, which answers the grid for you |
+| AWS WAF, image | ❌ | ❌ | Written but unproven, so it is not offered |
+
+A solved challenge is written straight into the page, so its checkbox does not
+visibly tick. Success is judged only by the page moving on, never by the widget's
+appearance, and a challenge that will not clear is reported as a failure rather
+than dressed up as one. Each solve is billed by Capsolver, typically well under a
+cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD`
+ceiling. After two solves that do not clear the same host, further spending on
+that host is refused for the rest of the session.
 
 ---
 
