@@ -44,8 +44,13 @@ def _apply_overrides(
 
 
 async def _build_ctx(browser_session: BrowserSession, det: Detection, progress: Any, cost_sink):
+    # @nonobvious(forced-by): the solver mints a token for the address we name, so
+    # it must be the document's own base address, which is what a rewriting proxy
+    # rebases to the original page rather than to the host now serving it.
     try:
-        current_url = await _eval_js(browser_session, "window.location.href") or ""
+        current_url = await _eval_js(
+            browser_session, "document.baseURI || window.location.href"
+        ) or ""
     except Exception:
         current_url = ""
     parsed = urlparse(current_url)

@@ -239,12 +239,25 @@ def test_submit_refuses_an_empty_response_field():
 
 async def test_page_advanced_needs_the_challenge_gone_not_a_new_url():
     from app.agent.captcha import cdp as cdp_mod
+    settled = AsyncMock(return_value=True)
     still_there = AsyncMock(return_value={"kind": "recaptcha_v2"})
-    with patch.object(cdp_mod, "probe_strict", still_there):
-        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=2.0) is False
+    with patch.object(cdp_mod, "_eval_js", settled), \
+         patch.object(cdp_mod, "probe_strict", still_there):
+        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=2.5) is False
     gone = AsyncMock(return_value=None)
-    with patch.object(cdp_mod, "probe_strict", gone):
-        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=5.0) is True
+    with patch.object(cdp_mod, "_eval_js", settled), \
+         patch.object(cdp_mod, "probe_strict", gone):
+        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=6.0) is True
+
+
+async def test_page_advanced_ignores_a_single_clear_read_mid_load():
+    from app.agent.captcha import cdp as cdp_mod
+    settled = AsyncMock(return_value=True)
+    flicker = AsyncMock(side_effect=[None, {"kind": "recaptcha_v2"},
+                                     {"kind": "recaptcha_v2"}])
+    with patch.object(cdp_mod, "_eval_js", settled), \
+         patch.object(cdp_mod, "probe_strict", flicker):
+        assert await cdp_mod.page_advanced(SimpleNamespace(), "before", timeout_s=3.5) is False
 
 
 def test_interstitial_detection_allows_a_widget_with_a_callback():

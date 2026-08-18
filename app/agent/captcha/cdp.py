@@ -54,15 +54,28 @@ async def page_advanced(
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
+    # @nonobvious(must-hold): a refused challenge is re-served on a fresh URL
+    # carrying a new challenge token, so a changed address proves nothing; and a
+    # page still loading shows no widget yet, so absence only counts once the
+    # document has settled and stayed clear.
+    clear_streak = 0
     while loop.time() < deadline:
         await asyncio.sleep(1.0)
-        # @nonobvious(must-hold): a refused challenge is re-served on a fresh URL
-        # carrying a new challenge token, so a changed address proves nothing; only
-        # the challenge being gone means we were let through.
         try:
+            settled = await _eval_js(
+                browser_session, "document.readyState === 'complete'"
+            )
+            if not settled:
+                clear_streak = 0
+                continue
             if await probe_strict(browser_session) is None:
-                return True
+                clear_streak += 1
+                if clear_streak >= 2:
+                    return True
+            else:
+                clear_streak = 0
         except Exception:
+            clear_streak = 0
             logger.debug("captcha re-check failed; retrying", exc_info=True)
     return False
 
