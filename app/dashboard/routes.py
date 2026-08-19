@@ -159,6 +159,16 @@ def _usd(value: Any) -> str:
 
 templates.env.filters["usd"] = _usd
 
+
+def _usd4(value: Any) -> str:
+    """The breakdown is for reading a real charge, not for paying it, so it shows
+    the figure as billed rather than rounded up to the nearest cent.
+    """
+    return f"{float(value or 0):.4f}"
+
+
+templates.env.filters["usd4"] = _usd4
+
 _SELECTOR_RE = re.compile(
     r"^[a-zA-Z][a-zA-Z0-9]*(\[[a-zA-Z_:][\w:-]*(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\])*$"
 )

@@ -968,3 +968,62 @@ def test_a_reasoning_row_states_its_duration_once():
     # every other step keeps the badge, since its headline says nothing about time
     other = _render_row("read", "read_pages", "3 pages")
     assert "msg-dur" in other
+
+
+def test_the_cost_breakdown_only_offers_itself_when_capsolver_charged():
+    """A popover that always says CapSolver $0.0000 is a popover that never had
+    anything to add.
+    """
+    from app.dashboard.routes import _format_duration, _format_relative_time, model_provider, templates
+
+    def render(capsolver):
+        return templates.get_template("_session_rows.html").render(
+            sessions=[{
+                "id": "s1", "task": "t", "status": "idle", "model": "claude-sonnet-5",
+                "created_at": "2026-08-19T22:00:00+00:00",
+                "updated_at": "2026-08-19T22:05:00+00:00",
+                "total_cost_usd": 0.12, "llm_cost_usd": 0.1187,
+                "capsolver_cost_usd": capsolver, "step_count": 3,
+                "total_input_tokens": 1, "total_output_tokens": 2,
+                "is_task_successful": True, "live_url": None, "keep_alive": False,
+            }],
+            model_provider=model_provider,
+            format_relative=_format_relative_time,
+            format_duration=_format_duration,
+        )
+
+    assert "has-breakdown" not in render(0)
+    assert "has-breakdown" not in render(None)
+    assert "has-breakdown" in render(0.0025)
+
+
+def test_money_reads_in_cents_but_the_breakdown_reads_as_billed():
+    from app.dashboard.routes import _usd, _usd4
+
+    assert _usd(0.1187) == "0.12"
+    assert _usd4(0.1187) == "0.1187"
+    assert _usd(0.0032) == "0.01", "a real charge must never round down to nothing"
+    assert _usd4(0.0032) == "0.0032"
+    assert _usd4(None) == "0.0000"
+
+
+async def test_a_finished_run_hides_its_copy_button_until_it_is_opened(client):
+    """The copy control belongs to the output, so a collapsed card should not
+    offer to copy something it is not showing.
+    """
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    body = resp.text
+
+    # the disclosure is a button at the end of the head, styled like a feed row's
+    assert '<button class="cc-caret" type="button" aria-label="Expand result">' in body
+    assert '<span class="cc-caret">' not in body, "the caret is no longer a glyph in the title"
+
+    # copy lives inside the output block, which is what a collapsed card hides
+    assert '<div class="cc-out"><button class="cc-copy"' in body
+    assert ".completion-card.collapsed .cc-out" in body
+    assert "COPY_ICON" in body and "COPIED_ICON" in body

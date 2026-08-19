@@ -33,10 +33,10 @@
     {{ format_duration(s.created_at, s.updated_at, s.status) }}
   </td>
   <td class="mono">
-    <span class="cost-cell"
+    <span class="cost-cell{% if (s.capsolver_cost_usd or 0) > 0 %} has-breakdown{% endif %}"
       >${{ s.total_cost_usd | usd }}<span class="cost-tip"
-        >{{ model_provider(s.model) }}: ${{ s.llm_cost_usd | usd
-        }}<br />CapSolver: ${{ s.capsolver_cost_usd | usd
+        >{{ model_provider(s.model) }}: ${{ s.llm_cost_usd | usd4
+        }}<br />CapSolver: ${{ s.capsolver_cost_usd | usd4
         }}</span
       ></span
     >
