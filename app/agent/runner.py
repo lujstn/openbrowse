@@ -1760,16 +1760,17 @@ async def _finalise_task(
     )
 
 
-async def _wait_for_followup(entry: live.LiveSession) -> str | None:
-    """Park until the next follow-up arrives, or until this session is released,
-    which is either a stop or a new session claiming its display slot. A parked
-    session waits as long as it takes. None means: tear down.
+async def _wait_for_followup(entry: live.LiveSession, idle_timeout: int) -> str | None:
+    """Park until the next follow-up arrives, or until this session is released —
+    by a stop, by a new session claiming its display slot, or by sitting idle for
+    ``idle_timeout`` seconds (0 waits forever). None means: tear down.
     """
     inbox = asyncio.ensure_future(entry.inbox.get())
     released = asyncio.ensure_future(entry.release.wait())
     try:
         done, _ = await asyncio.wait(
             {inbox, released},
+            timeout=idle_timeout or None,
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
@@ -1790,7 +1791,12 @@ async def _record_release(session_id: str, entry: live.LiveSession) -> None:
     """Close out a keep-alive session: say why the browser went away and move the
     row off 'idle', which is what offers a follow-up box for a parked browser.
     """
-    note = entry.release_reason or "Keep-alive session released"
+    if entry.release.is_set():
+        note = entry.release_reason or "Keep-alive session released"
+    else:
+        minutes = max(1, round(settings.keep_alive_idle_timeout / 60))
+        plural = "" if minutes == 1 else "s"
+        note = f"Expired: no follow-up for {minutes} idle minute{plural}"
     if not entry.inbox.empty():
         note += (
             " — a follow-up arrived as it was closing and did not run; send it "
@@ -1813,7 +1819,8 @@ async def run_agent_session(session_id: str) -> None:
     A keep-alive session does not end when its task does: the worker parks with
     Chrome and the agent still alive and runs each follow-up on that same agent,
     so the conversation, the open tabs and the running cost all continue. It lets
-    go when the session is stopped, or when a new session claims its display slot.
+    go when the session is stopped, when a new session claims its display slot, or
+    after ``KEEP_ALIVE_IDLE_TIMEOUT`` seconds without a follow-up.
     """
     session = await crud.get_session(session_id)
     if not session:
@@ -2393,19 +2400,13 @@ async def run_agent_session(session_id: str) -> None:
             live.park(entry)
             clear_activity(session_id)
             await crud.update_session(session_id, status="idle")
-            follow_up = await _wait_for_followup(entry)
+            follow_up = await _wait_for_followup(
+                entry, settings.keep_alive_idle_timeout
+            )
             if follow_up is None:
                 break
 
             await crud.update_session(session_id, task=follow_up, status="running")
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                data=json.dumps({"category": "planning", "action": "continuation"}),
-                summary="Continuing this session — same browser, same history",
-                count_step=False,
-            )
             steps_before = len(agent.history.history)
             carried["capsolver"] += sum(capsolver_costs)
             capsolver_costs.clear()

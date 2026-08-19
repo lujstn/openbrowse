@@ -652,3 +652,18 @@ async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, c
         await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
     sessions, _ = await crud.list_sessions(page_size=1)
     assert sessions[0]["default_max_cost_usd"] == 2.25
+
+
+async def test_session_detail_stacks_completions_rather_than_replacing_one(client):
+    """Every turn of a keep-alive session finishes, so the page needs somewhere to
+    keep the turns that already have, not a single slot the next one overwrites."""
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape listings", keep_alive=True)
+
+    body = (await client.get(f"/session/{session['id']}", headers=_basic("admin", "secret-key"))).text
+
+    assert 'id="completion-cards"' in body
+    assert "function archiveCompletion()" in body
+    assert ".completion-card.collapsed .cc-out" in body
+    assert "cc-caret" in body

@@ -245,6 +245,21 @@ OpenBrowse{% endblock %} {% block head %}
     gap: 6px;
     min-width: 0;
   }
+  .completion-card.collapsed .cc-out {
+    display: none;
+  }
+  .cc-caret {
+    flex: 0 0 auto;
+    font-size: 10px;
+    opacity: 0.75;
+    transition: transform 0.12s ease;
+  }
+  .completion-card.collapsed .cc-caret {
+    transform: rotate(-90deg);
+  }
+  .cc-head {
+    cursor: pointer;
+  }
   .cc-out {
     position: relative;
     margin-top: 10px;
@@ -610,7 +625,9 @@ OpenBrowse{% endblock %} {% block head %}
       </span>
     </div>
     <div class="panel-body" id="output-panel">
-      <div id="completion-card" class="completion-card hidden"></div>
+      <div id="completion-cards">
+        <div id="completion-card" class="completion-card hidden"></div>
+      </div>
       <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="feed-rows"></div>
     </div>
@@ -634,6 +651,7 @@ OpenBrowse{% endblock %} {% block head %}
   const feedRows = document.getElementById("feed-rows");
   const outputPanel = document.getElementById("output-panel");
   const completionCard = document.getElementById("completion-card");
+  const completionCards = document.getElementById("completion-cards");
   const browserPanel = document.getElementById("browser-panel");
 
   let completionSummary = "";
@@ -843,34 +861,47 @@ OpenBrowse{% endblock %} {% block head %}
     return "failed";
   }
 
+  function paintCard(card, verdict, summary, output) {
+    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
+    card.className = "completion-card " + verdict;
+    card.dataset.output = output || "";
+    let html =
+      '<div class="cc-head"><span class="cc-title"><span class="cc-caret">▼</span>' +
+      glyph + " " + esc(summary || "Run ended") + "</span>" +
+      (output ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
+      "</div>";
+    if (output) {
+      let parsed = null;
+      try { parsed = JSON.parse(output); } catch (e) {}
+      const body =
+        parsed !== null && typeof parsed === "object"
+          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
+          : "<pre>" + esc(output) + "</pre>";
+      html += '<div class="cc-out">' + body + "</div>";
+    }
+    card.innerHTML = html;
+  }
+
   function renderCompletion() {
     if (!completionSummary && !currentOutput) {
       completionCard.classList.add("hidden");
       return;
     }
-    const verdict = completionVerdict();
-    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
-    completionCard.className = "completion-card " + verdict;
-    let html =
-      '<div class="cc-head"><span class="cc-title">' + glyph + " " +
-      esc(completionSummary || "Run ended") + "</span>" +
-      (currentOutput ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
-      "</div>";
-    if (currentOutput) {
-      let parsed = null;
-      try { parsed = JSON.parse(currentOutput); } catch (e) {}
-      const body =
-        parsed !== null && typeof parsed === "object"
-          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
-          : "<pre>" + esc(currentOutput) + "</pre>";
-      html += '<div class="cc-out">' + body + "</div>";
-    }
-    completionCard.innerHTML = html;
-    const btn = completionCard.querySelector(".cc-copy");
-    if (btn)
-      btn.onclick = function () {
-        copyText(prettyOutput(currentOutput)).then(function () { flash(btn, "Copied"); });
-      };
+    paintCard(completionCard, completionVerdict(), completionSummary, currentOutput);
+  }
+
+  // @nonobvious(means): each turn of a keep-alive session finishes, so the card
+  // is a stack rather than one slot. The turn that just ended is frozen exactly
+  // as it was last painted and folded away, and the live card starts again above
+  // it — the answer you are waiting on is always the one at the top, open.
+  function archiveCompletion() {
+    if (completionCard.classList.contains("hidden")) return;
+    if (!completionSummary && !currentOutput) return;
+    const kept = completionCard.cloneNode(true);
+    kept.removeAttribute("id");
+    kept.classList.add("collapsed");
+    completionCards.insertBefore(kept, completionCard.nextSibling);
+    currentOutput = "";
   }
 
   function handleRows(html) {
@@ -882,7 +913,11 @@ OpenBrowse{% endblock %} {% block head %}
       const sumEl = row.querySelector(".msg-summary");
       const summary = (sumEl ? sumEl.textContent : "").trim();
       if (type === "completion") {
-        completionSummary = summary || "Run ended";
+        const next = summary || "Run ended";
+        // a reload replays every turn's completion line, which rebuilds the
+        // stack; live, the archive above has usually already run
+        if (completionSummary && next !== completionSummary) archiveCompletion();
+        completionSummary = next;
         renderCompletion();
         return;
       }
@@ -891,6 +926,19 @@ OpenBrowse{% endblock %} {% block head %}
     detectOverflow(feedRows);
     outputPanel.scrollTop = 0;
   }
+
+  completionCards.addEventListener("click", function (e) {
+    const card = e.target.closest(".completion-card");
+    if (!card) return;
+    const copy = e.target.closest(".cc-copy");
+    if (copy) {
+      copyText(prettyOutput(card.dataset.output || "")).then(function () {
+        flash(copy, "Copied");
+      });
+      return;
+    }
+    if (e.target.closest(".cc-head")) card.classList.toggle("collapsed");
+  });
 
   feedRows.addEventListener("click", function (e) {
     const target = e.target.closest(".msg-caret");
@@ -966,6 +1014,16 @@ OpenBrowse{% endblock %} {% block head %}
       document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-d-" + dstat;
+      // @nonobvious(forced-by): fold the finished turn away as the next one
+      // starts, not when its completion line arrives. The session carries one
+      // output field, so a poll landing between the new turn's output and its
+      // completion row would otherwise freeze the old card around the new
+      // answer.
+      if (data.status === "running" && lastStatus !== "running") {
+        archiveCompletion();
+        completionSummary = "";
+        completionCard.classList.add("hidden");
+      }
       lastStatus = data.status;
       const nextIsSuccessful =
         data.isTaskSuccessful === true || data.isTaskSuccessful === 1

@@ -292,14 +292,14 @@ async def test_wait_for_followup_returns_the_message():
     entry = live.register("s1", SimpleNamespace())
     entry.inbox.put_nowait("next thing")
 
-    assert await runner_mod._wait_for_followup(entry) == "next thing"
+    assert await runner_mod._wait_for_followup(entry, 0) == "next thing"
 
 
 async def test_wait_for_followup_gives_up_when_released():
     entry = live.register("s1", SimpleNamespace())
     entry.release.set()
 
-    assert await runner_mod._wait_for_followup(entry) is None
+    assert await runner_mod._wait_for_followup(entry, 0) is None
 
 
 async def test_wait_for_followup_keeps_a_message_that_raced_the_release():
@@ -307,7 +307,7 @@ async def test_wait_for_followup_keeps_a_message_that_raced_the_release():
     entry.inbox.put_nowait("next thing")
     entry.release.set()
 
-    assert await runner_mod._wait_for_followup(entry) is None
+    assert await runner_mod._wait_for_followup(entry, 0) is None
     assert entry.inbox.get_nowait() == "next thing"
 
 
@@ -475,3 +475,28 @@ async def test_a_budget_written_while_parked_binds_the_very_next_turn():
     stored = await crud.get_session(sid)
     assert stored["status"] == "idle"
     assert any("exceeded budget" in line for line in await _summaries(sid))
+
+
+async def test_a_parked_session_gives_up_after_its_idle_timeout():
+    """A browser left parked holds the display slot and its memory, so a session
+    nobody comes back to has to close itself rather than wait for ever."""
+    entry = live.register("s1", SimpleNamespace())
+
+    assert await runner_mod._wait_for_followup(entry, 0.05) is None
+
+
+async def test_an_idle_timeout_of_zero_waits_for_ever():
+    entry = live.register("s1", SimpleNamespace())
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(runner_mod._wait_for_followup(entry, 0), timeout=0.15)
+
+
+async def test_the_expiry_note_says_it_was_idle_rather_than_released():
+    session = await crud.create_session(task="t", keep_alive=True)
+    entry = live.register(session["id"], SimpleNamespace())
+
+    await runner_mod._record_release(session["id"], entry)
+
+    assert "Expired: no follow-up for" in (await _summaries(session["id"]))[-1]
+    assert (await crud.get_session(session["id"]))["status"] == "stopped"
