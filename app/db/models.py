@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     profile_id TEXT,
     sensitive_data TEXT,
     max_cost_usd REAL,
+    default_max_cost_usd REAL,
     total_input_tokens INTEGER NOT NULL DEFAULT 0,
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     llm_cost_usd REAL NOT NULL DEFAULT 0.0,
@@ -92,6 +93,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "capsolver_cost_usd" not in columns:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN capsolver_cost_usd REAL NOT NULL DEFAULT 0.0"
+        )
+    if "default_max_cost_usd" not in columns:
+        # @nonobvious(means): an existing session keeps its budget as an absolute
+        # ceiling, because nothing recorded what allowance it was granted, and
+        # inventing one would quietly raise a cap its caller chose.
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN default_max_cost_usd REAL"
         )
 
 

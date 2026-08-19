@@ -465,3 +465,205 @@ async def test_settings_page_offers_every_captcha_setting(client):
     assert "CAPTCHA solving" in resp.text
     for name in ("CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"):
         assert name in resp.text, f"{name} is not offered on the settings page"
+
+@pytest.fixture(autouse=True)
+def _clear_live_sessions():
+    from app.agent import live
+
+    live._live.clear()
+    yield
+    live._live.clear()
+
+
+async def test_run_records_what_the_user_asked(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    resp = await client.post(
+        "/run",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "Summarise the news", "model": "claude-sonnet-5"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    sessions, _ = await crud.list_sessions(page=1, page_size=1)
+    messages, _ = await crud.list_messages(sessions[0]["id"], limit=10)
+    assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
+        "Summarise the news"
+    ]
+
+
+async def test_followup_continues_a_parked_session_without_a_new_run(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.agent import live
+    from app.db import crud
+
+    submit = AsyncMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "Is he really PM?"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "continued": True}
+    assert entry.inbox.get_nowait() == "Is he really PM?"
+    submit.assert_not_called()
+    updated = await crud.get_session(session["id"])
+    assert updated["status"] == "running"
+    assert updated["task"] == "Is he really PM?"
+
+
+async def test_followup_starts_a_fresh_run_once_the_browser_is_gone(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    submit = AsyncMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "Is he really PM?"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "continued": False}
+    submit.assert_called_once()
+    assert (await crud.get_session(session["id"]))["status"] == "created"
+
+
+async def test_followup_rejected_while_the_agent_is_mid_task(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.agent import live
+    from app.db import crud
+
+    submit = AsyncMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    live.register(session["id"], SimpleNamespace())
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "Is he really PM?"},
+    )
+
+    assert resp.status_code == 409
+    submit.assert_not_called()
+
+
+async def test_stop_releases_a_parked_session(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.agent import live
+    from app.db import crud
+
+    cancel = AsyncMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.cancel", cancel)
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    stopped: list[bool] = []
+    entry = live.register(session["id"], SimpleNamespace(stop=lambda: stopped.append(True)))
+    live.park(entry)
+
+    resp = await client.post(
+        f"/session/{session['id']}/stop", headers=_basic("admin", "secret-key")
+    )
+
+    assert resp.status_code == 200
+    assert entry.release.is_set()
+    assert stopped == [True]
+    cancel.assert_not_called()
+
+
+async def test_session_page_offers_a_follow_up_after_the_browser_is_gone(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+
+    assert resp.status_code == 200
+    assert 'id="followup-form"' in resp.text
+    assert "starts a fresh browser" in resp.text
+
+
+async def test_followup_message_tops_the_session_budget_back_up(client, monkeypatch):
+    """The follow-up box is where keep-alive is actually used, so a conversation
+    started from the dashboard must not strangle itself as its pot drains."""
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    session = await crud.create_session(
+        task="first task", keep_alive=True, max_cost_usd=1.5, default_max_cost_usd=1.5
+    )
+    await crud.update_session(session["id"], status="idle", total_cost_usd=1.2)
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "now check the pricing page"},
+    )
+
+    assert resp.status_code == 200
+    assert (await crud.get_session(session["id"]))["max_cost_usd"] == 2.7
+
+
+@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, client):
+    """Without the allowance on the row there is nothing to top a follow-up up by."""
+    import asyncio
+
+    from app.dashboard import routes
+    from app.db import crud
+
+    resp = await client.post(
+        "/run",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "go", "model": "claude-sonnet-5", "max_cost_usd": "2.25"},
+    )
+
+    assert resp.status_code == 303
+    if routes._dispatched_tasks:
+        await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
+    sessions, _ = await crud.list_sessions(page_size=1)
+    assert sessions[0]["default_max_cost_usd"] == 2.25
+
+
+async def test_session_detail_stacks_completions_rather_than_replacing_one(client):
+    """Every turn of a keep-alive session finishes, so the page needs somewhere to
+    keep the turns that already have, not a single slot the next one overwrites."""
+    from app.db import crud
+
+    session = await crud.create_session(task="scrape listings", keep_alive=True)
+
+    body = (await client.get(f"/session/{session['id']}", headers=_basic("admin", "secret-key"))).text
+
+    assert 'id="completion-cards"' in body
+    assert "function archiveCompletion()" in body
+    assert ".completion-card.collapsed .cc-out" in body
+    assert "cc-caret" in body

@@ -9,8 +9,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
+from app.agent import live
 from app.agent.pool import pool
-from app.agent.runner import resolve_default_effort, validate_effort
+from app.agent.runner import _resolve_model, resolve_default_effort, validate_effort
 from app.auth import require_api_key
 from app.config import settings
 from app.db import crud
@@ -204,6 +205,53 @@ def _resolved_effort(model: str, requested: str | None) -> str:
     return resolve_default_effort(model) if effort == "default" else effort
 
 
+def _same_model(asked: str, stored: str | None) -> bool:
+    """Whether two model names mean the same model, in either version spelling, so
+    respelling claude-sonnet-4.6 as claude-sonnet-4-6 does not read as a change of
+    model and cost a live session its browser.
+    """
+    try:
+        return _resolve_model(asked) == _resolve_model(stored or "")
+    except ValueError:
+        return asked == (stored or "")
+
+
+def _restart_fields(
+    sent: set[str], body: "RunTaskRequest", existing: dict[str, Any]
+) -> list[str]:
+    """Which requested changes a running agent cannot adopt.
+
+    The model, its reasoning effort, the output schema, the sensitive-data map and
+    the system-prompt extension are all fixed when the agent is built, so a
+    follow-up that changes any of them has to close the browser and start over.
+    Anything else — the task itself, the budget, keep-alive — a live session takes
+    in its stride.
+    """
+    changed: list[str] = []
+    if "model" in sent and not _same_model(body.model, existing.get("model")):
+        changed.append("model")
+    if "reasoningEffort" in sent:
+        resolved = _resolved_effort(
+            body.model if "model" in sent else existing.get("model") or body.model,
+            body.reasoningEffort,
+        )
+        if resolved != (existing.get("reasoning_effort") or ""):
+            changed.append("reasoningEffort")
+    if "outputSchema" in sent:
+        schema = json.dumps(body.outputSchema) if body.outputSchema else None
+        if schema != existing.get("output_schema"):
+            changed.append("outputSchema")
+    if "sensitiveData" in sent:
+        secrets = json.dumps(body.sensitiveData) if body.sensitiveData else None
+        if secrets != existing.get("sensitive_data"):
+            changed.append("sensitiveData")
+    if "systemPromptExtension" in sent and body.systemPromptExtension != (
+        existing.get("system_prompt_extension") or None
+    ):
+        changed.append("systemPromptExtension")
+    return changed
+
+
 @router.post("", response_model=SessionResponse)
 async def create_session(
     body: RunTaskRequest | None = None,
@@ -216,9 +264,14 @@ async def create_session(
         existing = await crud.get_session(body.sessionId)
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
-        if existing["status"] not in ("idle", "created"):
+        status = existing["status"]
+        busy = status == "running" or (status == "created" and existing.get("task"))
+        # @nonobvious(means): a keep-alive session is a conversation, so it takes
+        # follow-ups after its browser has been released too — every other session
+        # is still only addressable while idle.
+        if busy or (status not in ("idle", "created") and not existing.get("keep_alive")):
             raise HTTPException(
-                status_code=422, detail=f"Session is {existing['status']}, not idle"
+                status_code=422, detail=f"Session is {status}, not idle"
             )
         if not body.task:
             raise HTTPException(
@@ -240,8 +293,15 @@ async def create_session(
             )
         if "systemPromptExtension" in sent:
             updates["system_prompt_extension"] = body.systemPromptExtension
+        # @nonobvious(means): a named budget is the session's new absolute
+        # ceiling for this dispatch only — it does not become the allowance, so
+        # the turn after it tops up from what the session was created with.
         if "maxCostUsd" in sent:
             updates["max_cost_usd"] = _local_budget(body.maxCostUsd)
+        else:
+            topped_up = crud.topped_up_budget(existing)
+            if topped_up is not None:
+                updates["max_cost_usd"] = topped_up
         if "keepAlive" in sent:
             updates["keep_alive"] = int(body.keepAlive)
         if sent & {"model", "reasoningEffort"}:
@@ -250,10 +310,34 @@ async def create_session(
                 body.reasoningEffort,
             )
 
+        restart = _restart_fields(sent, body, existing)
+        if restart:
+            await live.request_release(
+                body.sessionId,
+                "Browser released to apply new " + ", ".join(restart),
+            )
+            outcome = live.COLD
+        else:
+            outcome = await pool.follow_up(body.sessionId, body.task)
+        # @nonobvious(must-hold): nothing is written until the outcome is known —
+        # a session that turned out to be mid-task must keep the task it is
+        # actually working on.
+        if outcome == live.BUSY:
+            raise HTTPException(status_code=422, detail="Session is running, not idle")
+        updates["status"] = "running" if outcome == live.DELIVERED else "created"
         session = await crud.update_session(body.sessionId, **updates)
-        await pool.submit(body.sessionId)
+        await crud.create_message(
+            session_id=body.sessionId,
+            role="user",
+            msg_type="user_message",
+            summary=body.task[:2000],
+            count_step=False,
+        )
+        if outcome != live.DELIVERED:
+            await pool.submit(body.sessionId)
         return _to_session_response(session)
 
+    budget = _local_budget(body.maxCostUsd)
     session = await crud.create_session(
         task=body.task,
         model=body.model,
@@ -261,12 +345,20 @@ async def create_session(
         output_schema=body.outputSchema,
         sensitive_data=body.sensitiveData,
         system_prompt_extension=body.systemPromptExtension,
-        max_cost_usd=_local_budget(body.maxCostUsd),
+        max_cost_usd=budget,
+        default_max_cost_usd=budget,
         keep_alive=body.keepAlive,
         reasoning_effort=_resolved_effort(body.model, body.reasoningEffort),
     )
 
     if body.task:
+        await crud.create_message(
+            session_id=session["id"],
+            role="user",
+            msg_type="user_message",
+            summary=body.task[:2000],
+            count_step=False,
+        )
         await pool.submit(session["id"])
 
     return _to_session_response(session)
@@ -307,12 +399,13 @@ async def stop_session(
 
     body = body or StopSessionRequest()
 
-    if body.strategy == "task":
-        await pool.cancel(session_id)
-        await crud.update_session(session_id, status="idle")
-    else:
-        await pool.cancel(session_id)
-        await crud.update_session(session_id, status="stopped")
+    # @nonobvious(mirrors): either strategy cancels the run, which closes the
+    # browser with it. They differ only in the status left behind, and "task"
+    # leaves the session addressable so a later call can give it new work.
+    await pool.cancel(session_id)
+    await crud.update_session(
+        session_id, status="idle" if body.strategy == "task" else "stopped"
+    )
 
     return _to_session_response(await crud.get_session(session_id))
 

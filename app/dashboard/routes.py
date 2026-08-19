@@ -25,10 +25,10 @@ from sse_starlette.sse import EventSourceResponse
 
 from app import system_metrics
 from app.agent.activity import get_activity
+from app.agent import live
 from app.agent.pool import pool
 from app.agent.runner import (
     _category_for,
-    get_live_agent,
     model_reasoning,
     resolve_default_effort,
     validate_effort,
@@ -50,6 +50,9 @@ _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
+
+
+_BUSY_STATUSES = ("running", "created")
 
 
 def _is_secret_var(key: str) -> bool:
@@ -299,8 +302,16 @@ async def _novnc_port_for_session(session_id: str) -> int | None:
 
 
 def _live_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    live = [s for s in sessions if s.get("status") in _LIVE_STATUSES and s.get("live_url")]
-    return live[: settings.max_concurrent_sessions]
+    """Sessions with a browser worth watching — running, or parked between
+    follow-ups with their tabs still open.
+    """
+    watchable = [
+        s
+        for s in sessions
+        if (s.get("status") in _LIVE_STATUSES or live.is_live(s["id"]))
+        and s.get("live_url")
+    ]
+    return watchable[: settings.max_concurrent_sessions]
 
 
 def model_provider(model: str | None) -> str:
@@ -413,8 +424,16 @@ async def run_task(
         profile_id=(profile_id or None),
         output_schema=parsed_schema,
         max_cost_usd=max_cost_usd,
+        default_max_cost_usd=max_cost_usd,
         keep_alive=keep_alive,
         reasoning_effort=effort,
+    )
+    await crud.create_message(
+        session_id=session["id"],
+        role="user",
+        msg_type="user_message",
+        summary=task[:2000],
+        count_step=False,
     )
     dispatched = asyncio.create_task(pool.submit(session["id"]))
     _dispatched_tasks.add(dispatched)
@@ -451,6 +470,7 @@ async def session_detail(request: Request, session_id: str):
         context={
             "session": session,
             "messages": messages,
+            "browser_live": live.is_live(session_id),
             "max_concurrent": settings.max_concurrent_sessions,
             "output_types": ["planning", "result", "completion"],
             "format_duration": _format_duration,
@@ -537,16 +557,25 @@ async def session_log(session_id: str, scope: str = "full", download: bool = Fal
 
 @router.post("/session/{session_id}/message")
 async def session_followup(session_id: str, task: str = Form(...)):
+    """Send the next thing the user says to a keep-alive session.
+
+    A session whose browser is still parked continues on the same agent, keeping
+    its history and its tabs. One whose browser has already been released starts
+    a fresh run instead, with the conversation so far replayed into it.
+    """
     session = await crud.get_session(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
     if not session.get("keep_alive"):
         return JSONResponse({"error": "Session was not started as keep-alive"}, status_code=400)
-    if session.get("status") != "idle":
-        return JSONResponse({"error": "Session is not idle"}, status_code=409)
+    if session.get("status") in _BUSY_STATUSES:
+        return JSONResponse({"error": "Session is still working"}, status_code=409)
     text = (task or "").strip()
     if not text:
         return JSONResponse({"error": "Message is empty"}, status_code=400)
+    outcome = await pool.follow_up(session_id, text)
+    if outcome == live.BUSY:
+        return JSONResponse({"error": "Session is still working"}, status_code=409)
     await crud.create_message(
         session_id=session_id,
         role="user",
@@ -554,11 +583,18 @@ async def session_followup(session_id: str, task: str = Form(...)):
         summary=text[:2000],
         count_step=False,
     )
-    await crud.update_session(session_id, task=text, status="created")
+    budget = crud.topped_up_budget(session)
+    topped_up = {} if budget is None else {"max_cost_usd": budget}
+    if outcome == live.DELIVERED:
+        await crud.update_session(
+            session_id, task=text, status="running", **topped_up
+        )
+        return JSONResponse({"ok": True, "continued": True})
+    await crud.update_session(session_id, task=text, status="created", **topped_up)
     dispatched = asyncio.create_task(pool.submit(session_id))
     _dispatched_tasks.add(dispatched)
     dispatched.add_done_callback(_dispatched_tasks.discard)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "continued": False})
 
 
 @router.post("/session/{session_id}/stop")
@@ -566,21 +602,22 @@ async def dashboard_stop_session(session_id: str):
     session = await crud.get_session(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
-    agent = get_live_agent(session_id)
-    if agent is not None:
-        try:
-            agent.stop()
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                data=json.dumps({"category": "system", "action": "stop"}),
-                summary="Stop requested from the dashboard",
-                count_step=False,
-            )
-            return JSONResponse({"ok": True, "action": "stop"})
-        except Exception:
-            logger.warning("agent.stop() failed for %s; falling back to cancel", session_id, exc_info=True)
+    # @nonobvious(forced-by): the release flag has to be set before the agent is
+    # asked to stop — a keep-alive worker that sees only a stopped agent parks
+    # with its browser open and waits for a follow-up that is never coming.
+    released = await live.request_release(
+        session_id, "Stopped from the dashboard", wait=False
+    )
+    if released and live.stop_agent(session_id):
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            data=json.dumps({"category": "system", "action": "stop"}),
+            summary="Stop requested from the dashboard",
+            count_step=False,
+        )
+        return JSONResponse({"ok": True, "action": "stop"})
     await pool.cancel(session_id)
     await crud.update_session(session_id, status="stopped")
     await crud.create_message(
@@ -800,6 +837,7 @@ async def sse_session_messages(request: Request, session_id: str):
                         "output": session.get("output") or "",
                         "activity": get_activity(session_id),
                         "isTaskSuccessful": session.get("is_task_successful"),
+                        "browserLive": live.is_live(session_id),
                     }),
                 }
             await asyncio.sleep(1)

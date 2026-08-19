@@ -28,6 +28,25 @@ def _cost_factor() -> float:
     return factor
 
 
+def _keep_alive_idle_timeout() -> int:
+    """Seconds a finished keep-alive session waits, browser still open, for the
+    next follow-up before it closes itself. 0 parks indefinitely — until the
+    session is stopped or its display slot is claimed by a new session.
+    """
+    raw = os.environ.get("KEEP_ALIVE_IDLE_TIMEOUT", "").strip()
+    if not raw:
+        return 600
+    try:
+        seconds = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"KEEP_ALIVE_IDLE_TIMEOUT must be a whole number of seconds; got {raw!r}."
+        ) from None
+    if seconds < 0:
+        raise ValueError(f"KEEP_ALIVE_IDLE_TIMEOUT must not be negative; got {raw!r}.")
+    return seconds
+
+
 @dataclass(frozen=True)
 class Settings:
     api_key: str = field(default_factory=lambda: os.environ.get("API_KEY", ""))
@@ -68,6 +87,7 @@ class Settings:
     max_concurrent_sessions: int = field(
         default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_SESSIONS", "1"))
     )
+    keep_alive_idle_timeout: int = field(default_factory=_keep_alive_idle_timeout)
     cloud_max_cost_factor: float = field(default_factory=_cost_factor)
     default_model: str = "claude-sonnet-5"
     stale_session_minutes: int = 15

@@ -1,5 +1,6 @@
 """Tests for the v3-compatible Sessions API."""
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -50,6 +51,13 @@ async def test_create_session_with_task(mock_submit, client):
     assert data["status"] == "created"
     assert data["model"] == "claude-sonnet-4.6"
     mock_submit.assert_called_once()
+
+    from app.db import crud
+
+    messages, _ = await crud.list_messages(data["id"], limit=10)
+    assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
+        "Go to google.com"
+    ]
 
 
 async def test_create_session_without_task(client):
@@ -332,3 +340,247 @@ async def test_rerun_scales_a_budget_the_caller_resends(
     )
     assert again.status_code == 200
     assert again.json()["maxCostUsd"] == "2.0"
+
+
+@pytest.fixture(autouse=True)
+def _clear_live_sessions():
+    from app.agent import live
+
+    live._live.clear()
+    yield
+    live._live.clear()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_continues_a_parked_session(mock_submit, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "Is he really PM?"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+    assert entry.inbox.get_nowait() == "Is he really PM?"
+    mock_submit.assert_not_called()
+    messages, _ = await crud.list_messages(session["id"], limit=10)
+    assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
+        "Is he really PM?"
+    ]
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_changing_the_model_starts_over(mock_submit, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(
+        task="first task", model="claude-sonnet-5", keep_alive=True
+    )
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    async def worker():
+        await entry.release.wait()
+        live.unregister(entry)
+
+    released = asyncio.create_task(worker())
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={
+            "sessionId": session["id"],
+            "task": "Is he really PM?",
+            "model": "claude-opus-4.8",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "created"
+    await released
+    assert entry.release.is_set()
+    assert entry.inbox.empty()
+    mock_submit.assert_called_once()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_differently(
+    mock_submit, client
+):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(
+        task="first task", model="claude-sonnet-4-6", keep_alive=True
+    )
+    await crud.update_session(session["id"], status="idle")
+    entry = live.register(session["id"], SimpleNamespace())
+    live.park(entry)
+
+    resp = await client.post(
+        "/v3/sessions",
+        json={
+            "sessionId": session["id"],
+            "task": "Is he really PM?",
+            "model": "claude-sonnet-4.6",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert entry.inbox.get_nowait() == "Is he really PM?"
+    assert not entry.release.is_set()
+    mock_submit.assert_not_called()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_accepted_after_a_keepalive_session_was_released(
+    mock_submit, client
+):
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "Is he really PM?"}
+    )
+
+    assert resp.status_code == 200
+    mock_submit.assert_called_once()
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client):
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=False)
+    await crud.update_session(session["id"], status="stopped")
+
+    resp = await client.post(
+        "/v3/sessions", json={"sessionId": session["id"], "task": "again please"}
+    )
+
+    assert resp.status_code == 422
+    mock_submit.assert_not_called()
+
+
+@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+async def test_stop_task_strategy_cancels_the_run_and_leaves_the_session_usable(
+    mock_cancel, client
+):
+    """Stopping the task ends the run and the browser with it, as it always has,
+    and leaves the session addressable so a later call can give it new work."""
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="running")
+
+    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "task"})
+
+    assert resp.status_code == 200
+    mock_cancel.assert_called_once()
+    assert (await crud.get_session(session["id"]))["status"] == "idle"
+
+
+@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
+    from types import SimpleNamespace
+
+    from app.agent import live
+    from app.db import crud
+
+    session = await crud.create_session(task="first task", keep_alive=True)
+    await crud.update_session(session["id"], status="idle")
+
+    resp = await client.post(f"/v3/sessions/{session['id']}/stop", json={"strategy": "session"})
+
+    assert resp.status_code == 200
+    mock_cancel.assert_called_once()
+    assert (await crud.get_session(session["id"]))["status"] == "stopped"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
+    mock_submit, client, setup, monkeypatch
+):
+    """maxCostUsd bounds the session, not the turn, so a conversation would
+    strangle itself if every follow-up drew from the same fixed pot."""
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=2.40)
+
+    again = await client.post("/v3/sessions", json={"sessionId": sid, "task": "next"})
+
+    assert again.status_code == 200
+    assert again.json()["maxCostUsd"] == "5.4"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
+    mock_submit, client, setup, monkeypatch
+):
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=2.40)
+
+    again = await client.post(
+        "/v3/sessions", json={"sessionId": sid, "task": "next", "maxCostUsd": 4}
+    )
+
+    assert again.json()["maxCostUsd"] == "2.0"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_named_budget_does_not_become_the_session_allowance(
+    mock_submit, client, setup, monkeypatch
+):
+    """A one-off ceiling for a single dispatch must not resize every later top-up."""
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await client.post(
+        "/v3/sessions", json={"sessionId": sid, "task": "next", "maxCostUsd": 4}
+    )
+    await crud.update_session(sid, status="idle", total_cost_usd=1.0)
+
+    third = await client.post("/v3/sessions", json={"sessionId": sid, "task": "third"})
+
+    assert third.json()["maxCostUsd"] == "4.0"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_session_created_without_a_budget_stays_unbudgeted(
+    mock_submit, client
+):
+    from app.db import crud
+
+    sid = (await client.post("/v3/sessions", json={})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=1.75)
+
+    again = await client.post("/v3/sessions", json={"sessionId": sid, "task": "next"})
+
+    assert again.json()["maxCostUsd"] is None

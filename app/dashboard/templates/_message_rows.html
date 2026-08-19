@@ -1,4 +1,4 @@
-{% set CAT_ICON = {'navigation':'🧭','interaction':'⚙️','code':'</>','network':'🌐','read':'🔍','wait':'⏳','done':'✓','error':'⚠','planning':'📋','completion':'✓','action':'•','memory':'🧠','schema':'🧩','reasoning':'💭','user':'👤','judge':'🧑‍🏫','goal':'🎯'} %}
+{% set CAT_ICON = {'navigation':'🧭','interaction':'⚙️','code':'</>','network':'🌐','read':'🔍','wait':'⏳','done':'✓','error':'⚠','planning':'📋','completion':'✓','action':'•','memory':'🧠','schema':'🧩','reasoning':'💭','user':'👤','judge':'🧑‍🏫','goal':'🎯','system':'🖥️'} %}
 {% for m in messages %}
 {% set d = (m.data | fromjson) if m.data else {} %}
 {% set md = message_display(m) %}

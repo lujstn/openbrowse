@@ -24,7 +24,7 @@ from browser_use.llm.openai.responses_serializer import ResponsesAPIMessageSeria
 from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
-from app.agent import cost
+from app.agent import cost, live
 from app import system_metrics
 from app.agent.code_stream import CodeStreamObserver
 from app.agent.activity import clear_activity, set_activity
@@ -59,14 +59,9 @@ logger = logging.getLogger(__name__)
 
 ONE_M_BETA = "context-1m-2025-08-07"
 
-_live_agents: dict[str, Any] = {}
-
-
-def get_live_agent(session_id: str) -> Any | None:
-    """The running browser-use ``Agent`` for a session, or None. Lets the dashboard
-    call the agent's native cooperative ``stop()``/``pause()``/``resume()``.
-    """
-    return _live_agents.get(session_id)
+# @nonobvious(mirrors): re-exported so callers that reach for the running agent
+# keep importing it from the runner while the registry itself lives in live.
+get_live_agent = live.get_live_agent
 
 _CARDS_EXTENSION = (
     "Every step, before you act, fill three one-sentence fields: what_i_see (what is "
@@ -1510,8 +1505,323 @@ def _patch_agent_output_cards() -> None:
 _patch_agent_output_cards()
 
 
+_CONTINUATION_PREFIX = (
+    "This is a follow-up in the same session. The browser is exactly as you left "
+    "it — same tabs, same page, same logins and cookie choices — and everything "
+    "you learned above still holds. Look at where you already are before you "
+    "navigate, and only open a new page if this request genuinely needs one. "
+    "Resolve any names or pronouns below from the conversation so far.\n\n"
+)
+
+_TURN_OUTPUT_CAP = 4000
+
+# @nonobvious(forced-by): browser-use counts steps for the life of the agent and
+# stops at max_steps, so a keep-alive session that has already taken 500 steps
+# would see later follow-ups return instantly having done nothing. Each turn gets
+# its own allowance on top of what the session has already spent.
+_TURN_STEP_BUDGET = 500
+
+
+def _turn_step_cap(agent: Any) -> int:
+    taken = getattr(getattr(agent, "state", None), "n_steps", None)
+    if not isinstance(taken, int):
+        taken = len(getattr(getattr(agent, "history", None), "history", []) or [])
+    return taken + _TURN_STEP_BUDGET
+
+
+def _north_star_preflight(requested_model: str, text: str) -> asyncio.Task | None:
+    """Start the one-line North Star call for a turn, so it overlaps with the
+    browser launch (first turn) or with the agent waking up (a follow-up).
+    """
+    try:
+        preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
+        _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
+        try:
+            preflight_llm.max_tokens = 300
+        except Exception:
+            pass
+        return asyncio.create_task(_derive_north_star(preflight_llm, text))
+    except Exception:
+        logger.debug("North Star pre-flight setup failed", exc_info=True)
+        return None
+
+
+async def _prepare_task(
+    *,
+    session_id: str,
+    task: str,
+    url_text: str,
+    clipboard: dict[str, Any],
+    review_state: dict[str, Any],
+    preflight: "asyncio.Task | None",
+    output_schema: dict[str, Any] | None,
+    output_model: type | None,
+    preamble: str = "",
+) -> str:
+    """What one turn needs before the agent runs: its North Star, a clean review
+    state, the goal and startUrl rows, and the text the agent is actually given.
+    """
+    review_state["round"] = 0
+    review_state["snapshot"] = None
+
+    north_star = ""
+    if preflight is not None:
+        try:
+            north_star = await preflight
+        except Exception:
+            logger.debug("North Star pre-flight await failed", exc_info=True)
+    if not north_star:
+        north_star = re.split(r"(?<=[.!?])\s", (task or "").strip(), maxsplit=1)[0][:400]
+    clipboard["northStar"] = north_star
+
+    full_task = f"{preamble}{task}" if preamble else task
+    if north_star:
+        full_task = f"{full_task}\n\nGOAL: {north_star}"
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            data=json.dumps({"category": "goal", "action": "goal"}),
+            summary=north_star,
+            count_step=False,
+        )
+    if output_schema and output_model is None:
+        schema_str = json.dumps(output_schema, indent=2)
+        full_task = (
+            f"{full_task}\n\n"
+            f"OUTPUT FORMAT: Return your result as JSON conforming to this schema:\n"
+            f"```json\n{schema_str}\n```"
+        )
+
+    start_match = re.search(r"https?://[^\s\"'<>)\]]+", url_text or "")
+    if start_match:
+        start_url = start_match.group(0).rstrip(".,;)")
+        clipboard["startUrl"] = start_url
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            data=json.dumps({"category": "memory", "action": "startUrl"}),
+            summary=f"startUrl: {start_url}",
+            count_step=False,
+        )
+    return full_task
+
+
+async def _finalise_task(
+    *,
+    session_id: str,
+    agent: Any,
+    history: Any,
+    llm: Any,
+    store: "OutputStore | None",
+    output_model: type | None,
+    output_schema: dict[str, Any] | None,
+    clipboard: dict[str, Any],
+    capsolver_costs: list[float],
+    carried: dict[str, float],
+    steps_before: int,
+    final_status: str | None,
+) -> None:
+    """Record one finished turn: its answer, whether it succeeded, the session's
+    running cost, and the completion row. ``steps_before`` is where this turn
+    started in the agent's history, so a follow-up is not blamed for the errors
+    of the turn before it. ``carried`` is the spend and token count the session
+    had already recorded before this worker began, so the totals written here are
+    the session's rather than this worker's. ``final_status`` is left None by a
+    keep-alive session, whose row only turns 'idle' once its worker is genuinely
+    parked and able to take the next follow-up.
+    """
+    file_output = ""
+    try:
+        result_file = agent.file_system.get_file("result.json") if agent.file_system else None
+        if result_file:
+            file_content = result_file.read()
+            if file_content and file_content.strip():
+                file_output = file_content
+    except Exception:
+        logger.debug("result.json read from agent.file_system failed", exc_info=True)
+    done_output = _gated_done_output(history)
+    from_store = store is not None and not store.is_empty()
+    if from_store:
+        output = store.read_output()
+    else:
+        output = done_output or file_output
+
+    schema_valid = True
+    if output_model is not None and from_store:
+        schema_valid = _validate_only(output, output_model)
+    elif output_model is not None:
+        output, schema_valid = await _coerce_to_schema(output, output_model, llm)
+        if not schema_valid and done_output and file_output and file_output != done_output:
+            alt, alt_valid = await _coerce_to_schema(file_output, output_model, llm)
+            if alt_valid:
+                output, schema_valid = alt, alt_valid
+    elif output_schema and output:
+        try:
+            parsed = json.loads(output) if isinstance(output, str) else output
+            output = json.dumps(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    recovered_errors = sum(1 for e in history.errors()[steps_before:] if e)
+    raw_success = history.is_successful() is not False
+    is_successful = history.is_done() and raw_success and schema_valid
+    # @nonobvious(means): a run that died before done but left a complete,
+    # valid store has delivered the answer; the gate check is the arbiter.
+    if not is_successful and not history.is_done() and from_store and schema_valid:
+        try:
+            if store is not None and not _gate_empty_fields(store, clipboard):
+                is_successful = True
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    summary=(
+                        "Run ended without done, but the output store is "
+                        "complete and schema-valid — recorded as success"
+                    ),
+                    data=json.dumps({"category": "judge", "action": "storeComplete"}),
+                    count_step=False,
+                )
+        except Exception:
+            logger.debug("store-complete success check failed", exc_info=True)
+
+    usage_history = agent.token_cost_service.usage_history
+    llm_cost = carried["llm"] + cost.history_cost(usage_history)
+    capsolver_cost = carried["capsolver"] + sum(capsolver_costs)
+    total_cost = llm_cost + capsolver_cost
+    total_input = int(
+        carried["input_tokens"]
+        + sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
+    )
+    total_output = int(
+        carried["output_tokens"]
+        + sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
+    )
+
+    status_update = {"status": final_status} if final_status else {}
+    await crud.update_session(
+        session_id,
+        **status_update,
+        output=output,
+        is_task_successful=int(is_successful),
+        total_input_tokens=total_input,
+        total_output_tokens=total_output,
+        llm_cost_usd=llm_cost,
+        capsolver_cost_usd=capsolver_cost,
+        total_cost_usd=total_cost,
+    )
+
+    judgement = _last_judgement(history)
+    if judgement is not None and bool(judgement.verdict) != bool(is_successful):
+        judge_word = "PASS" if judgement.verdict else "FAIL"
+        own_word = "success" if is_successful else "failure"
+        reason = " ".join(
+            (judgement.failure_reason or judgement.reasoning or "").split()
+        )[:_REVIEW_REASON_CAP]
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            summary=(
+                reason
+                or f"review outcome {judge_word} differs from recorded {own_word}"
+            ),
+            data=json.dumps(
+                {
+                    "category": "judge",
+                    "action": "review",
+                    "verdict": judge_word,
+                    "recorded": own_word,
+                }
+            ),
+            count_step=False,
+        )
+
+    completion_summary = _completion_summary(
+        is_successful=is_successful,
+        is_done=history.is_done(),
+        raw_success=raw_success,
+        schema_valid=schema_valid,
+        stopped=bool(getattr(getattr(agent, "state", None), "stopped", False)),
+        done_text=done_output,
+        recovered_errors=recovered_errors,
+    )
+    # @nonobvious(means): the answer rides along on the completion row (the
+    # feed renders only the summary) so a later follow-up can be replayed with
+    # what was actually said, not just that a turn happened.
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="completion",
+        summary=completion_summary,
+        data=json.dumps({"output": (output or "")[:_TURN_OUTPUT_CAP]}),
+    )
+
+
+async def _wait_for_followup(entry: live.LiveSession, idle_timeout: int) -> str | None:
+    """Park until the next follow-up arrives, or until this session is released —
+    by a stop, by a new session claiming its display slot, or by sitting idle for
+    ``idle_timeout`` seconds (0 waits forever). None means: tear down.
+    """
+    inbox = asyncio.ensure_future(entry.inbox.get())
+    released = asyncio.ensure_future(entry.release.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {inbox, released},
+            timeout=idle_timeout or None,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        for pending in (inbox, released):
+            if not pending.done():
+                pending.cancel()
+    if inbox in done and released not in done:
+        return inbox.result()
+    if inbox in done:
+        # @nonobvious(must-hold): a follow-up that landed in the same moment as
+        # the release is put back, so the teardown can tell the user it never ran
+        # instead of dropping it silently.
+        entry.inbox.put_nowait(inbox.result())
+    return None
+
+
+async def _record_release(session_id: str, entry: live.LiveSession) -> None:
+    """Close out a keep-alive session: say why the browser went away and move the
+    row off 'idle', which is what offers a follow-up box for a parked browser.
+    """
+    if entry.release.is_set():
+        note = entry.release_reason or "Keep-alive session released"
+    else:
+        minutes = max(1, round(settings.keep_alive_idle_timeout / 60))
+        plural = "" if minutes == 1 else "s"
+        note = f"Expired: no follow-up for {minutes} idle minute{plural}"
+    if not entry.inbox.empty():
+        note += (
+            " — a follow-up arrived as it was closing and did not run; send it "
+            "again to continue in a fresh browser"
+        )
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="event",
+        data=json.dumps({"category": "system", "action": "keepAlive"}),
+        summary=note,
+        count_step=False,
+    )
+    await crud.update_session(session_id, status="stopped")
+
+
 async def run_agent_session(session_id: str) -> None:
-    """Execute a browser-use agent for the given session. Runs as a background task."""
+    """Execute a browser-use agent for the given session. Runs as a background task.
+
+    A keep-alive session does not end when its task does: the worker parks with
+    Chrome and the agent still alive and runs each follow-up on that same agent,
+    so the conversation, the open tabs and the running cost all continue. It lets
+    go when the session is stopped, when a new session claims its display slot, or
+    after ``KEEP_ALIVE_IDLE_TIMEOUT`` seconds without a follow-up.
+    """
     session = await crud.get_session(session_id)
     if not session:
         logger.error("Session %s not found", session_id)
@@ -1522,12 +1832,12 @@ async def run_agent_session(session_id: str) -> None:
         await crud.update_session(session_id, status="error")
         return
 
+    keep_alive = bool(session.get("keep_alive"))
     requested_model = session.get("model") or settings.default_model
     reasoning_effort = _canonical_stored_effort(session.get("reasoning_effort"))
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
-    max_cost = session.get("max_cost_usd")
 
     try:
         provider, model, llm = _build_llm(requested_model, reasoning_effort)
@@ -1544,18 +1854,12 @@ async def run_agent_session(session_id: str) -> None:
 
     llm._activity_session = session_id
 
-    north_star_task: asyncio.Task | None = None
-    try:
-        preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
-        _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
-        try:
-            preflight_llm.max_tokens = 300
-        except Exception:
-            pass
-        north_star_task = asyncio.create_task(_derive_north_star(preflight_llm, task))
-    except Exception:
-        logger.debug("North Star pre-flight setup failed", exc_info=True)
-        north_star_task = None
+    # @nonobvious(means): a keep-alive session outlives its browser — the idle
+    # timeout, an eviction or a restart all release Chrome while the conversation
+    # stays open — so a follow-up landing here cold carries the earlier turns in
+    # its prompt. Empty for a session that has not spoken yet.
+    replayed = await live.replay_preamble(session_id, task) if keep_alive else ""
+    north_star_task = _north_star_preflight(requested_model, replayed or task)
 
     # Load profile storage state path
     storage_state_path: str | None = None
@@ -1572,6 +1876,7 @@ async def run_agent_session(session_id: str) -> None:
 
     slot = None
     browser_session = None
+    entry: live.LiveSession | None = None
     try:
         slot = await display_manager.allocate()
         await wait_for_novnc(slot.novnc_port)
@@ -1583,7 +1888,9 @@ async def run_agent_session(session_id: str) -> None:
             status="running",
             display_num=slot.display_num,
             live_url=live_url,
-            title=(task[:80] if task else None),
+            # @nonobvious(must-hold): a follow-up run must not rename the
+            # session after the thing it happens to ask last.
+            title=(session.get("title") or (task[:80] if task else None)),
         )
         await crud.create_message(
             session_id=session_id,
@@ -1591,6 +1898,19 @@ async def run_agent_session(session_id: str) -> None:
             msg_type="planning",
             summary=f"Session started with model {model}",
         )
+        if replayed:
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                data=json.dumps({"category": "system", "action": "keepAlive"}),
+                summary=(
+                    "The browser from the earlier turns was already released, so "
+                    "this follow-up starts a fresh one with the conversation so "
+                    "far replayed into it"
+                ),
+                count_step=False,
+            )
         browser_session = BrowserSession(
             cdp_url=cdp_url,
             storage_state=storage_state_path,
@@ -1664,6 +1984,21 @@ async def run_agent_session(session_id: str) -> None:
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         capsolver_costs: list[float] = []
+        # @nonobvious(forced-by): the solver refuses to spend once its own sink
+        # passes CAPTCHA_MAX_COST_USD, and that sink is bound at registration —
+        # so each turn empties it and what it spent moves into "capsolver" here,
+        # where the session's running total still counts it.
+        # @nonobvious(must-hold): the row's existing totals are seeded in, not
+        # started from zero. A follow-up dispatched after this session's previous
+        # worker went away builds a fresh agent whose counters are empty, and
+        # without the carry the session's recorded spend would rewind and its
+        # budget would refill itself.
+        carried: dict[str, float] = {
+            "llm": float(session.get("llm_cost_usd") or 0.0),
+            "capsolver": float(session.get("capsolver_cost_usd") or 0.0),
+            "input_tokens": float(session.get("total_input_tokens") or 0),
+            "output_tokens": float(session.get("total_output_tokens") or 0),
+        }
         register_captcha_tools(tools, capsolver_costs, _captcha_progress)
         if not settings.capsolver_api_key:
             await _captcha_progress(
@@ -1706,47 +2041,17 @@ async def run_agent_session(session_id: str) -> None:
         except Exception:
             logger.debug("action param kind map build failed", exc_info=True)
 
-        north_star = ""
-        if north_star_task is not None:
-            try:
-                north_star = await north_star_task
-            except Exception:
-                logger.debug("North Star pre-flight await failed", exc_info=True)
-        if not north_star:
-            north_star = re.split(r"(?<=[.!?])\s", (task or "").strip(), maxsplit=1)[0][:400]
-        clipboard["northStar"] = north_star
-
-        full_task = task
-        if north_star:
-            full_task = f"{task}\n\nGOAL: {north_star}"
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                data=json.dumps({"category": "goal", "action": "goal"}),
-                summary=north_star,
-                count_step=False,
-            )
-        if output_schema and output_model is None:
-            schema_str = json.dumps(output_schema, indent=2)
-            full_task = (
-                f"{full_task}\n\n"
-                f"OUTPUT FORMAT: Return your result as JSON conforming to this schema:\n"
-                f"```json\n{schema_str}\n```"
-            )
-
-        start_match = re.search(r"https?://[^\s\"'<>)\]]+", task or "")
-        if start_match:
-            start_url = start_match.group(0).rstrip(".,;)")
-            clipboard["startUrl"] = start_url
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                data=json.dumps({"category": "memory", "action": "startUrl"}),
-                summary=f"startUrl: {start_url}",
-                count_step=False,
-            )
+        prompt = await _prepare_task(
+            session_id=session_id,
+            task=replayed or task,
+            url_text=task,
+            clipboard=clipboard,
+            review_state=review_state,
+            preflight=north_star_task,
+            output_schema=output_schema,
+            output_model=output_model,
+        )
+        north_star_task = None
 
         pressure_level, pressure_sample = system_metrics.mark_baseline()
         if pressure_level != "ok":
@@ -1821,6 +2126,7 @@ async def run_agent_session(session_id: str) -> None:
             logged_history_len["n"] = len(steps)
             step = steps[-1]
 
+            north_star = clipboard.get("northStar")
             if north_star and step_count % 10 == 0:
                 try:
                     # @nonobvious(deliberately-missing): not _inject_followup_task,
@@ -1950,24 +2256,37 @@ async def run_agent_session(session_id: str) -> None:
             set_activity(session_id, "Running actions")
 
             usage_history = agent_instance.token_cost_service.usage_history
-            llm_cost = cost.history_cost(usage_history)
-            capsolver_cost = sum(capsolver_costs)
+            llm_cost = carried["llm"] + cost.history_cost(usage_history)
+            capsolver_cost = carried["capsolver"] + sum(capsolver_costs)
             total_cost = llm_cost + capsolver_cost
-            await crud.update_session(
+            # @nonobvious(must-hold): the budget comes back off the row this
+            # write returns, never from a value read when the turn began. A
+            # follow-up's budget is written by its caller moments after the
+            # parked worker is woken, so anything captured earlier can be a
+            # pot behind, and a cap raised to rescue a running task would be
+            # ignored until it no longer mattered.
+            row = await crud.update_session(
                 session_id,
                 llm_cost_usd=llm_cost,
                 capsolver_cost_usd=capsolver_cost,
                 total_cost_usd=total_cost,
-                total_input_tokens=sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage),
-                total_output_tokens=sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage),
+                total_input_tokens=int(
+                    carried["input_tokens"]
+                    + sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
+                ),
+                total_output_tokens=int(
+                    carried["output_tokens"]
+                    + sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
+                ),
             )
-            if max_cost and total_cost >= max_cost:
+            budget = (row or {}).get("max_cost_usd")
+            if budget and total_cost >= budget:
                 raise BudgetExceededError(
-                    f"Cost ${total_cost:.4f} exceeded budget ${max_cost:.2f}"
+                    f"Cost ${total_cost:.4f} exceeded budget ${budget:.2f}"
                 )
 
         agent_kwargs: dict[str, Any] = {
-            "task": full_task,
+            "task": prompt,
             "llm": llm,
             "browser": browser_session,
             "tools": tools,
@@ -2032,137 +2351,94 @@ async def run_agent_session(session_id: str) -> None:
             agent_kwargs["sensitive_data"] = sensitive_data
 
         agent = Agent(**agent_kwargs)
-        _live_agents[session_id] = agent
+        entry = live.register(session_id, agent)
         if store is not None and agent.file_system is not None:
             try:
                 await agent.file_system.write_file("output.json", store.read_output())
             except Exception:
                 logger.debug("initial output.json mirror failed", exc_info=True)
-        history = await _run_with_review(
-            agent,
-            store,
-            session_id,
-            lambda: agent.run(on_step_start=on_step_start, on_step_end=on_step_end),
-            review_state,
-        )
-
-        file_output = ""
-        try:
-            result_file = agent.file_system.get_file("result.json") if agent.file_system else None
-            if result_file:
-                file_content = result_file.read()
-                if file_content and file_content.strip():
-                    file_output = file_content
-        except Exception:
-            logger.debug("result.json read from agent.file_system failed", exc_info=True)
-        done_output = _gated_done_output(history)
-        from_store = store is not None and not store.is_empty()
-        if from_store:
-            output = store.read_output()
-        else:
-            output = done_output or file_output
-
-        schema_valid = True
-        if output_model is not None and from_store:
-            schema_valid = _validate_only(output, output_model)
-        elif output_model is not None:
-            output, schema_valid = await _coerce_to_schema(output, output_model, llm)
-            if not schema_valid and done_output and file_output and file_output != done_output:
-                alt, alt_valid = await _coerce_to_schema(file_output, output_model, llm)
-                if alt_valid:
-                    output, schema_valid = alt, alt_valid
-        elif output_schema and output:
-            try:
-                parsed = json.loads(output) if isinstance(output, str) else output
-                output = json.dumps(parsed)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        recovered_errors = sum(1 for e in history.errors() if e)
-        raw_success = history.is_successful() is not False
-        is_successful = history.is_done() and raw_success and schema_valid
-        # @nonobvious(means): a run that died before done but left a complete,
-        # valid store has delivered the answer; the gate check is the arbiter.
-        if not is_successful and not history.is_done() and from_store and schema_valid:
-            try:
-                if store is not None and not _gate_empty_fields(store, clipboard):
-                    is_successful = True
-                    await crud.create_message(
-                        session_id=session_id,
-                        role="ai",
-                        msg_type="event",
-                        summary=(
-                            "Run ended without done, but the output store is "
-                            "complete and schema-valid — recorded as success"
-                        ),
-                        data=json.dumps({"category": "judge", "action": "storeComplete"}),
-                        count_step=False,
-                    )
-            except Exception:
-                logger.debug("store-complete success check failed", exc_info=True)
-
-        usage_history = agent.token_cost_service.usage_history
-        llm_cost = cost.history_cost(usage_history)
-        capsolver_cost = sum(capsolver_costs)
-        total_cost = llm_cost + capsolver_cost
-        total_input = sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
-        total_output = sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
-
-        final_status = "idle" if session.get("keep_alive") else "stopped"
-        await crud.update_session(
-            session_id,
-            status=final_status,
-            output=output,
-            is_task_successful=int(is_successful),
-            total_input_tokens=total_input,
-            total_output_tokens=total_output,
-            llm_cost_usd=llm_cost,
-            capsolver_cost_usd=capsolver_cost,
-            total_cost_usd=total_cost,
-        )
-
-        judgement = _last_judgement(history)
-        if judgement is not None and bool(judgement.verdict) != bool(is_successful):
-            judge_word = "PASS" if judgement.verdict else "FAIL"
-            own_word = "success" if is_successful else "failure"
-            reason = " ".join(
-                (judgement.failure_reason or judgement.reasoning or "").split()
-            )[:_REVIEW_REASON_CAP]
-            await crud.create_message(
-                session_id=session_id,
-                role="ai",
-                msg_type="event",
-                summary=(
-                    reason
-                    or f"review outcome {judge_word} differs from recorded {own_word}"
+        steps_before = 0
+        while True:
+            history = await _run_with_review(
+                agent,
+                store,
+                session_id,
+                lambda: agent.run(
+                    max_steps=_turn_step_cap(agent),
+                    on_step_start=on_step_start,
+                    on_step_end=on_step_end,
                 ),
-                data=json.dumps(
-                    {
-                        "category": "judge",
-                        "action": "review",
-                        "verdict": judge_word,
-                        "recorded": own_word,
-                    }
-                ),
-                count_step=False,
+                review_state,
             )
+            # @nonobvious(means): a stop with strategy "task" lands in the row
+            # while the turn is running, so whether this session parks or ends
+            # is decided by what the row says now, not by what it said when the
+            # worker started.
+            refreshed = await crud.get_session(session_id)
+            if refreshed:
+                keep_alive = bool(refreshed.get("keep_alive"))
+            await _finalise_task(
+                session_id=session_id,
+                agent=agent,
+                history=history,
+                llm=llm,
+                store=store,
+                output_model=output_model,
+                output_schema=output_schema,
+                clipboard=clipboard,
+                capsolver_costs=capsolver_costs,
+                carried=carried,
+                steps_before=steps_before,
+                final_status=None if keep_alive else "stopped",
+            )
+            if not keep_alive or entry.release.is_set():
+                break
 
-        completion_summary = _completion_summary(
-            is_successful=is_successful,
-            is_done=history.is_done(),
-            raw_success=raw_success,
-            schema_valid=schema_valid,
-            stopped=bool(getattr(agent.state, "stopped", False)),
-            done_text=done_output,
-            recovered_errors=recovered_errors,
-        )
-        await crud.create_message(
-            session_id=session_id,
-            role="ai",
-            msg_type="completion",
-            summary=completion_summary,
-        )
+            # @nonobvious(must-hold): the row only says 'idle' once the worker is
+            # parked, because 'idle' is what offers the user a follow-up box and
+            # a message arriving before the park would be refused as busy.
+            live.park(entry)
+            clear_activity(session_id)
+            await crud.update_session(session_id, status="idle")
+            follow_up = await _wait_for_followup(
+                entry, settings.keep_alive_idle_timeout
+            )
+            if follow_up is None:
+                break
 
+            await crud.update_session(session_id, task=follow_up, status="running")
+            steps_before = len(agent.history.history)
+            carried["capsolver"] += sum(capsolver_costs)
+            capsolver_costs.clear()
+            prompt = await _prepare_task(
+                session_id=session_id,
+                task=follow_up,
+                url_text=follow_up,
+                clipboard=clipboard,
+                review_state=review_state,
+                preflight=_north_star_preflight(
+                    requested_model,
+                    f"Earlier in this session they asked: {task}\nNow they ask: {follow_up}",
+                ),
+                output_schema=output_schema,
+                output_model=output_model,
+                preamble=_CONTINUATION_PREFIX,
+            )
+            task = follow_up
+            _inject_followup_task(agent, prompt)
+
+        if keep_alive:
+            await _record_release(session_id, entry)
+
+    except asyncio.CancelledError:
+        # @nonobvious(forced-by): a cancelled worker leaves the row saying 'idle',
+        # which offers follow-ups nothing is left to answer; shielded because the
+        # write itself would otherwise be cancelled at its first await.
+        try:
+            await asyncio.shield(crud.update_session(session_id, status="stopped"))
+        except Exception:
+            logger.debug("cancelled-session status write failed", exc_info=True)
+        raise
     except BudgetExceededError as e:
         logger.info("Session %s stopped: %s", session_id, e)
         output, is_successful = _budget_salvage(agent, store, clipboard, output_model)
@@ -2177,7 +2453,7 @@ async def run_agent_session(session_id: str) -> None:
             kept = "There was no output to keep."
         await crud.update_session(
             session_id,
-            status="idle" if session.get("keep_alive") else "stopped",
+            status="idle" if keep_alive else "stopped",
             output=output,
             is_task_successful=int(is_successful),
         )
@@ -2199,7 +2475,7 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         clear_activity(session_id)
-        _live_agents.pop(session_id, None)
+        live.unregister(entry)
         if north_star_task is not None and not north_star_task.done():
             north_star_task.cancel()
         if browser_session:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.agent import live
 from app.agent.runner import run_agent_session
 from app.config import settings
 
@@ -24,9 +25,27 @@ class SessionPool:
         return self._max - self._semaphore._value
 
     async def submit(self, session_id: str) -> None:
+        if self.active_count >= self._max:
+            # @nonobvious(forced-by): a keep-alive session parked between
+            # follow-ups still holds its display slot, and this call is awaited
+            # inside an HTTP handler — without reclaiming the slot, a one-slot
+            # host would leave the new session waiting on a browser nobody is
+            # using, forever.
+            await live.release_idle_slot(
+                "display slot handed to a newly started session"
+            )
         await self._semaphore.acquire()
         task = asyncio.create_task(self._run_and_release(session_id))
         self._tasks[session_id] = task
+
+    async def follow_up(self, session_id: str, text: str) -> str:
+        """Hand a follow-up to the session's parked worker, if it still has one.
+
+        ``live.DELIVERED`` means the running agent took it and no new run is
+        needed; ``live.BUSY`` means the session is mid-task; ``live.COLD`` means
+        its browser is gone and the caller must start a fresh run.
+        """
+        return live.deliver(session_id, text)
 
     async def _run_and_release(self, session_id: str) -> None:
         try:
@@ -49,6 +68,7 @@ class SessionPool:
         return False
 
     async def shutdown(self) -> None:
+        await live.release_all("server shutting down")
         for session_id in list(self._tasks):
             await self.cancel(session_id)
 

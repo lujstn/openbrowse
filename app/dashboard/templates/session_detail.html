@@ -245,6 +245,21 @@ OpenBrowse{% endblock %} {% block head %}
     gap: 6px;
     min-width: 0;
   }
+  .completion-card.collapsed .cc-out {
+    display: none;
+  }
+  .cc-caret {
+    flex: 0 0 auto;
+    font-size: 10px;
+    opacity: 0.75;
+    transition: transform 0.12s ease;
+  }
+  .completion-card.collapsed .cc-caret {
+    transform: rotate(-90deg);
+  }
+  .cc-head {
+    cursor: pointer;
+  }
   .cc-out {
     position: relative;
     margin-top: 10px;
@@ -386,6 +401,7 @@ OpenBrowse{% endblock %} {% block head %}
   .cat-schema { color: #fbbf24; background: rgba(251, 191, 36, 0.12); }
   .cat-goal { color: #fca5a5; background: rgba(248, 113, 113, 0.14); }
   .cat-judge { color: #a5b4fc; background: rgba(165, 180, 252, 0.12); }
+  .cat-system { color: #cbd5e1; background: rgba(203, 213, 225, 0.1); }
   .msg-summary {
     flex: 1;
     display: -webkit-box;
@@ -570,6 +586,7 @@ OpenBrowse{% endblock %} {% block head %}
     id="browser-panel"
     data-status="{{ session.status }}"
     data-live-url="{{ session.live_url or '' }}"
+    data-browser-live="{{ 1 if browser_live else 0 }}"
     data-max-concurrent="{{ max_concurrent }}"
     data-success="{{ session.is_task_successful if session.is_task_successful is not none else '' }}"
   >
@@ -608,15 +625,17 @@ OpenBrowse{% endblock %} {% block head %}
       </span>
     </div>
     <div class="panel-body" id="output-panel">
-      <div id="completion-card" class="completion-card hidden"></div>
+      <div id="completion-cards">
+        <div id="completion-card" class="completion-card hidden"></div>
+      </div>
       <div id="activity-bar" class="activity-bar hidden"></div>
       <div id="feed-rows"></div>
     </div>
     {% if session.keep_alive %}
-    <form id="followup-form" class="followup" {% if session.status != 'idle' %}style="display: none"{% endif %}>
+    <form id="followup-form" class="followup" {% if session.status in ('running', 'created') %}style="display: none"{% endif %}>
       <input
         id="followup-input"
-        placeholder="Send a follow-up task to this session…"
+        placeholder="{% if browser_live %}Browser parked and waiting — send a follow-up…{% else %}Send a follow-up (starts a fresh browser)…{% endif %}"
         autocomplete="off"
       />
       <button class="followup-send" type="submit">Send</button>
@@ -627,10 +646,12 @@ OpenBrowse{% endblock %} {% block head %}
 
 <script>
   const TERMINAL = ["stopped", "error", "idle", "expired"];
+  const BUSY = ["running", "created"];
   const SESSION_ID = "{{ session.id }}";
   const feedRows = document.getElementById("feed-rows");
   const outputPanel = document.getElementById("output-panel");
   const completionCard = document.getElementById("completion-card");
+  const completionCards = document.getElementById("completion-cards");
   const browserPanel = document.getElementById("browser-panel");
 
   let completionSummary = "";
@@ -639,6 +660,7 @@ OpenBrowse{% endblock %} {% block head %}
   let lastStatus = browserPanel.dataset.status;
   let lastIsSuccessful =
     browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
+  let browserLive = browserPanel.dataset.browserLive === "1";
   let activityIndicatorType = null;
   const activityBar = document.getElementById("activity-bar");
 
@@ -744,7 +766,14 @@ OpenBrowse{% endblock %} {% block head %}
 
   const followupForm = document.getElementById("followup-form");
   function syncFollowup(status) {
-    if (followupForm) followupForm.style.display = status === "idle" ? "flex" : "none";
+    if (!followupForm) return;
+    followupForm.style.display = BUSY.includes(status) ? "none" : "flex";
+    const input = document.getElementById("followup-input");
+    if (input) {
+      input.placeholder = browserLive
+        ? "Browser parked and waiting — send a follow-up…"
+        : "Send a follow-up (starts a fresh browser)…";
+    }
   }
   if (followupForm) {
     followupForm.addEventListener("submit", async function (e) {
@@ -775,7 +804,9 @@ OpenBrowse{% endblock %} {% block head %}
     '<line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/></svg>';
 
   function setBrowser(status, liveUrl) {
-    if (TERMINAL.includes(status)) {
+    // a keep-alive session parks with its tabs open: the stream only ends once
+    // the browser itself is gone
+    if (!browserLive && TERMINAL.includes(status)) {
       browserPanel.innerHTML = '<div class="no-live">' + ENDED_SVG + "<div>Stream ended</div></div>";
       return;
     }
@@ -830,34 +861,47 @@ OpenBrowse{% endblock %} {% block head %}
     return "failed";
   }
 
+  function paintCard(card, verdict, summary, output) {
+    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
+    card.className = "completion-card " + verdict;
+    card.dataset.output = output || "";
+    let html =
+      '<div class="cc-head"><span class="cc-title"><span class="cc-caret">▼</span>' +
+      glyph + " " + esc(summary || "Run ended") + "</span>" +
+      (output ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
+      "</div>";
+    if (output) {
+      let parsed = null;
+      try { parsed = JSON.parse(output); } catch (e) {}
+      const body =
+        parsed !== null && typeof parsed === "object"
+          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
+          : "<pre>" + esc(output) + "</pre>";
+      html += '<div class="cc-out">' + body + "</div>";
+    }
+    card.innerHTML = html;
+  }
+
   function renderCompletion() {
     if (!completionSummary && !currentOutput) {
       completionCard.classList.add("hidden");
       return;
     }
-    const verdict = completionVerdict();
-    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
-    completionCard.className = "completion-card " + verdict;
-    let html =
-      '<div class="cc-head"><span class="cc-title">' + glyph + " " +
-      esc(completionSummary || "Run ended") + "</span>" +
-      (currentOutput ? '<button class="cc-copy" title="Copy output">Copy</button>' : "") +
-      "</div>";
-    if (currentOutput) {
-      let parsed = null;
-      try { parsed = JSON.parse(currentOutput); } catch (e) {}
-      const body =
-        parsed !== null && typeof parsed === "object"
-          ? '<pre class="j-pre">' + highlightJson(parsed) + "</pre>"
-          : "<pre>" + esc(currentOutput) + "</pre>";
-      html += '<div class="cc-out">' + body + "</div>";
-    }
-    completionCard.innerHTML = html;
-    const btn = completionCard.querySelector(".cc-copy");
-    if (btn)
-      btn.onclick = function () {
-        copyText(prettyOutput(currentOutput)).then(function () { flash(btn, "Copied"); });
-      };
+    paintCard(completionCard, completionVerdict(), completionSummary, currentOutput);
+  }
+
+  // @nonobvious(means): each turn of a keep-alive session finishes, so the card
+  // is a stack rather than one slot. The turn that just ended is frozen exactly
+  // as it was last painted and folded away, and the live card starts again above
+  // it — the answer you are waiting on is always the one at the top, open.
+  function archiveCompletion() {
+    if (completionCard.classList.contains("hidden")) return;
+    if (!completionSummary && !currentOutput) return;
+    const kept = completionCard.cloneNode(true);
+    kept.removeAttribute("id");
+    kept.classList.add("collapsed");
+    completionCards.insertBefore(kept, completionCard.nextSibling);
+    currentOutput = "";
   }
 
   function handleRows(html) {
@@ -869,7 +913,11 @@ OpenBrowse{% endblock %} {% block head %}
       const sumEl = row.querySelector(".msg-summary");
       const summary = (sumEl ? sumEl.textContent : "").trim();
       if (type === "completion") {
-        completionSummary = summary || "Run ended";
+        const next = summary || "Run ended";
+        // a reload replays every turn's completion line, which rebuilds the
+        // stack; live, the archive above has usually already run
+        if (completionSummary && next !== completionSummary) archiveCompletion();
+        completionSummary = next;
         renderCompletion();
         return;
       }
@@ -878,6 +926,19 @@ OpenBrowse{% endblock %} {% block head %}
     detectOverflow(feedRows);
     outputPanel.scrollTop = 0;
   }
+
+  completionCards.addEventListener("click", function (e) {
+    const card = e.target.closest(".completion-card");
+    if (!card) return;
+    const copy = e.target.closest(".cc-copy");
+    if (copy) {
+      copyText(prettyOutput(card.dataset.output || "")).then(function () {
+        flash(copy, "Copied");
+      });
+      return;
+    }
+    if (e.target.closest(".cc-head")) card.classList.toggle("collapsed");
+  });
 
   feedRows.addEventListener("click", function (e) {
     const target = e.target.closest(".msg-caret");
@@ -888,6 +949,7 @@ OpenBrowse{% endblock %} {% block head %}
   });
 
   setBrowser(browserPanel.dataset.status, browserPanel.dataset.liveUrl);
+  syncFollowup(browserPanel.dataset.status);
   formatTimes();
   detectOverflow(feedRows);
 
@@ -911,7 +973,8 @@ OpenBrowse{% endblock %} {% block head %}
   const stopBtn = document.getElementById("stop-btn");
 
   function syncControls() {
-    stopBtn.style.display = TERMINAL.includes(lastStatus) ? "none" : "inline-block";
+    const stoppable = BUSY.includes(lastStatus) || browserLive;
+    stopBtn.style.display = stoppable ? "inline-block" : "none";
   }
 
   stopBtn.onclick = async function () {
@@ -946,10 +1009,21 @@ OpenBrowse{% endblock %} {% block head %}
         "$" + usdUp(data.capsolverCostUsd);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
       const dstat = displayStatus(data.status, data.isTaskSuccessful);
+      browserLive = !!data.browserLive;
       syncFollowup(data.status);
       document.getElementById("session-status").textContent = dstat;
       const wrap = document.querySelector(".session-header .status");
       if (wrap) wrap.className = "status status-d-" + dstat;
+      // @nonobvious(forced-by): fold the finished turn away as the next one
+      // starts, not when its completion line arrives. The session carries one
+      // output field, so a poll landing between the new turn's output and its
+      // completion row would otherwise freeze the old card around the new
+      // answer.
+      if (data.status === "running" && lastStatus !== "running") {
+        archiveCompletion();
+        completionSummary = "";
+        completionCard.classList.add("hidden");
+      }
       lastStatus = data.status;
       const nextIsSuccessful =
         data.isTaskSuccessful === true || data.isTaskSuccessful === 1

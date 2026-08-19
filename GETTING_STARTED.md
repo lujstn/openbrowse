@@ -62,7 +62,8 @@ To configure by hand instead, create `.env` in the repo root with:
 | `DASHBOARD_PASSWORD`      | _(Optional)_ Dashboard password for user `admin`; defaults to the `API_KEY`    |
 | `MAX_CONCURRENT_SESSIONS` | _(Optional)_ Concurrent sessions this device runs (default 1); budget ~2GB RAM and one CPU core per session |
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
-| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend per run. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; set `0` to remove the ceiling |
+| `KEEP_ALIVE_IDLE_TIMEOUT` | _(Optional)_ Seconds a keep-alive session waits, browser and history still open, for its next follow-up before closing itself. Default `600`; `0` waits indefinitely. A parked session is also closed early if a newly started session needs its display slot |
+| `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend for a single task. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's `maxCostUsd` for that task. Neither is a fixed total for a whole conversation, since both refresh on every follow-up. Set `0` to remove the ceiling |
 
 Generate a secure `API_KEY`:
 
@@ -94,7 +95,7 @@ Coverage follows Capsolver's published service list, and a test refuses any task
 
 The live acceptance suite proves reCAPTCHA v2 (checkbox, explicit and invisible), reCAPTCHA v3 with multiple page actions, Cloudflare Turnstile, MTCaptcha and Geetest v3 and v4. Other solved types are implemented and covered by local tests, and each will tell you plainly if it cannot clear a challenge rather than reporting a success it did not achieve. A challenge type marked as not solved creates no task, so it costs nothing to meet one.
 
-A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves a session. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
+A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves for a single task; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's cost budget for that task. Neither bounds a whole conversation: a session that takes ten follow-ups may spend the allowance ten times. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
 
 ---
 
@@ -246,6 +247,16 @@ const client = new BrowserUse({
 ```
 
 Everything else in your integration, such as retry logic, polling and profile ids, stays the same.
+
+### How `maxCostUsd` is spent
+
+`maxCostUsd` is a ceiling on the whole session, not on one task, exactly as it is in the v3 contract: `totalCostUsd` reports what the session has spent altogether, and the run stops as soon as that reaches the cap.
+
+That matters once a session is kept alive for follow-ups. If every follow-up drew from the same fixed pot, a conversation would slowly strangle itself, so each new dispatch tops the pot back up by the allowance the session was created with. Send a task to a session created with `maxCostUsd: 3` that has already spent $2.40, and it runs with a $5.40 ceiling: no single turn can run away, and the conversation is never cut short.
+
+Be clear about what that does and does not promise. The bound is per task: nothing limits how many follow-ups a session takes, so a conversation of ten may spend the allowance ten times. That is the same trade the v3 contract makes, and it is the one worth making, because the alternative is a session that quietly stops working part-way through. If you need a fixed total, spend it as one task, or start a fresh session per task and let each carry its own budget.
+
+Naming `maxCostUsd` on the follow-up itself overrides that for one dispatch, as an absolute ceiling on the session rather than an amount to add. A session created without a budget stays unbudgeted.
 
 ---
 
