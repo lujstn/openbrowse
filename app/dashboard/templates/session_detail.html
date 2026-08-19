@@ -231,6 +231,7 @@ OpenBrowse{% endblock %} {% block head %}
     color: #f87171;
   }
   .completion-card {
+    --cc-accent: 139, 139, 147;
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
@@ -239,6 +240,7 @@ OpenBrowse{% endblock %} {% block head %}
     display: none;
   }
   .completion-card.success {
+    --cc-accent: 34, 197, 94;
     background: rgba(34, 197, 94, 0.08);
     border: 1px solid rgba(34, 197, 94, 0.35);
   }
@@ -246,6 +248,7 @@ OpenBrowse{% endblock %} {% block head %}
     color: #22c55e;
   }
   .completion-card.failed {
+    --cc-accent: 248, 113, 113;
     background: rgba(248, 113, 113, 0.08);
     border: 1px solid rgba(248, 113, 113, 0.35);
   }
@@ -253,6 +256,7 @@ OpenBrowse{% endblock %} {% block head %}
     color: #f87171;
   }
   .completion-card.schema {
+    --cc-accent: 245, 158, 11;
     background: rgba(245, 158, 11, 0.08);
     border: 1px solid rgba(245, 158, 11, 0.35);
   }
@@ -270,24 +274,29 @@ OpenBrowse{% endblock %} {% block head %}
   .cc-title {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
+  }
+  .cc-glyph {
+    flex: 0 0 auto;
   }
   .completion-card.collapsed .cc-out {
     display: none;
   }
   .cc-caret {
     flex: 0 0 auto;
-    display: inline-block;
-    color: #8b8b93;
-    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    color: rgba(var(--cc-accent), 0.8);
     line-height: 1;
     cursor: pointer;
     user-select: none;
-    padding: 6px 9px;
     border-radius: 6px;
-    border: 1px solid #26262b;
-    background: #17171a;
+    border: 1px solid rgba(var(--cc-accent), 0.28);
+    background: rgba(var(--cc-accent), 0.1);
     transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   }
   .cc-caret::before {
@@ -297,16 +306,16 @@ OpenBrowse{% endblock %} {% block head %}
     height: 7px;
     border-right: 1.5px solid currentColor;
     border-bottom: 1.5px solid currentColor;
-    transform: rotate(45deg) translate(-1px, -1px);
+    transform: translateY(-1.5px) rotate(45deg);
     transition: transform 0.18s ease;
   }
   .completion-card:not(.collapsed) .cc-caret::before {
-    transform: rotate(225deg) translate(-2px, -1px);
+    transform: translateY(1.5px) rotate(225deg);
   }
   .cc-caret:hover {
-    color: #e5e5e5;
-    border-color: #3f3f46;
-    background: #1e1e22;
+    color: rgb(var(--cc-accent));
+    border-color: rgba(var(--cc-accent), 0.5);
+    background: rgba(var(--cc-accent), 0.18);
   }
   .cc-head {
     cursor: pointer;
@@ -936,7 +945,8 @@ document.addEventListener("DOMContentLoaded", function () {
     card.dataset.output = output || "";
     let html =
       '<div class="cc-head"><span class="cc-title">' +
-      glyph + " " + esc(summary || "Run ended") + "</span>" +
+      '<span class="cc-glyph">' + glyph + "</span>" +
+      esc(summary || "Run ended") + "</span>" +
       '<button class="cc-caret" type="button" aria-label="Expand result"></button>' +
       "</div>";
     if (output) {
