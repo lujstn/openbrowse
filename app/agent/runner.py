@@ -1619,16 +1619,18 @@ async def _finalise_task(
     output_schema: dict[str, Any] | None,
     clipboard: dict[str, Any],
     capsolver_costs: list[float],
-    captcha_spent_before: float,
+    carried: dict[str, float],
     steps_before: int,
     final_status: str | None,
 ) -> None:
     """Record one finished turn: its answer, whether it succeeded, the session's
     running cost, and the completion row. ``steps_before`` is where this turn
     started in the agent's history, so a follow-up is not blamed for the errors
-    of the turn before it. ``final_status`` is left None by a keep-alive session,
-    whose row only turns 'idle' once its worker is genuinely parked and able to
-    take the next follow-up.
+    of the turn before it. ``carried`` is the spend and token count the session
+    had already recorded before this worker began, so the totals written here are
+    the session's rather than this worker's. ``final_status`` is left None by a
+    keep-alive session, whose row only turns 'idle' once its worker is genuinely
+    parked and able to take the next follow-up.
     """
     file_output = ""
     try:
@@ -1686,11 +1688,17 @@ async def _finalise_task(
             logger.debug("store-complete success check failed", exc_info=True)
 
     usage_history = agent.token_cost_service.usage_history
-    llm_cost = cost.history_cost(usage_history)
-    capsolver_cost = captcha_spent_before + sum(capsolver_costs)
+    llm_cost = carried["llm"] + cost.history_cost(usage_history)
+    capsolver_cost = carried["capsolver"] + sum(capsolver_costs)
     total_cost = llm_cost + capsolver_cost
-    total_input = sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
-    total_output = sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
+    total_input = int(
+        carried["input_tokens"]
+        + sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
+    )
+    total_output = int(
+        carried["output_tokens"]
+        + sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
+    )
 
     status_update = {"status": final_status} if final_status else {}
     await crud.update_session(
@@ -1823,7 +1831,6 @@ async def run_agent_session(session_id: str) -> None:
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
     system_prompt_extension = session.get("system_prompt_extension")
-    max_cost = session.get("max_cost_usd")
 
     try:
         provider, model, llm = _build_llm(requested_model, reasoning_effort)
@@ -1972,9 +1979,19 @@ async def run_agent_session(session_id: str) -> None:
         capsolver_costs: list[float] = []
         # @nonobvious(forced-by): the solver refuses to spend once its own sink
         # passes CAPTCHA_MAX_COST_USD, and that sink is bound at registration —
-        # so each turn empties it and what it spent moves here, where the
-        # session's running total still counts it.
-        captcha_spent = {"earlier_turns": 0.0}
+        # so each turn empties it and what it spent moves into "capsolver" here,
+        # where the session's running total still counts it.
+        # @nonobvious(must-hold): the row's existing totals are seeded in, not
+        # started from zero. A follow-up dispatched after this session's previous
+        # worker went away builds a fresh agent whose counters are empty, and
+        # without the carry the session's recorded spend would rewind and its
+        # budget would refill itself.
+        carried: dict[str, float] = {
+            "llm": float(session.get("llm_cost_usd") or 0.0),
+            "capsolver": float(session.get("capsolver_cost_usd") or 0.0),
+            "input_tokens": float(session.get("total_input_tokens") or 0),
+            "output_tokens": float(session.get("total_output_tokens") or 0),
+        }
         register_captcha_tools(tools, capsolver_costs, _captcha_progress)
         if not settings.capsolver_api_key:
             await _captcha_progress(
@@ -2232,20 +2249,33 @@ async def run_agent_session(session_id: str) -> None:
             set_activity(session_id, "Running actions")
 
             usage_history = agent_instance.token_cost_service.usage_history
-            llm_cost = cost.history_cost(usage_history)
-            capsolver_cost = captcha_spent["earlier_turns"] + sum(capsolver_costs)
+            llm_cost = carried["llm"] + cost.history_cost(usage_history)
+            capsolver_cost = carried["capsolver"] + sum(capsolver_costs)
             total_cost = llm_cost + capsolver_cost
-            await crud.update_session(
+            # @nonobvious(must-hold): the budget comes back off the row this
+            # write returns, never from a value read when the turn began. A
+            # follow-up's budget is written by its caller moments after the
+            # parked worker is woken, so anything captured earlier can be a
+            # pot behind, and a cap raised to rescue a running task would be
+            # ignored until it no longer mattered.
+            row = await crud.update_session(
                 session_id,
                 llm_cost_usd=llm_cost,
                 capsolver_cost_usd=capsolver_cost,
                 total_cost_usd=total_cost,
-                total_input_tokens=sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage),
-                total_output_tokens=sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage),
+                total_input_tokens=int(
+                    carried["input_tokens"]
+                    + sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
+                ),
+                total_output_tokens=int(
+                    carried["output_tokens"]
+                    + sum((u.usage.completion_tokens or 0) for u in usage_history if u.usage)
+                ),
             )
-            if max_cost and total_cost >= max_cost:
+            budget = (row or {}).get("max_cost_usd")
+            if budget and total_cost >= budget:
                 raise BudgetExceededError(
-                    f"Cost ${total_cost:.4f} exceeded budget ${max_cost:.2f}"
+                    f"Cost ${total_cost:.4f} exceeded budget ${budget:.2f}"
                 )
 
         agent_kwargs: dict[str, Any] = {
@@ -2333,14 +2363,13 @@ async def run_agent_session(session_id: str) -> None:
                 ),
                 review_state,
             )
-            # @nonobvious(means): a stop with strategy "task", or a follow-up
-            # that changed the budget, lands in the row while the turn is
-            # running — both are read here, and the closure over max_cost is
-            # what the per-step budget check sees.
+            # @nonobvious(means): a stop with strategy "task" lands in the row
+            # while the turn is running, so whether this session parks or ends
+            # is decided by what the row says now, not by what it said when the
+            # worker started.
             refreshed = await crud.get_session(session_id)
             if refreshed:
                 keep_alive = bool(refreshed.get("keep_alive"))
-                max_cost = refreshed.get("max_cost_usd")
             await _finalise_task(
                 session_id=session_id,
                 agent=agent,
@@ -2351,7 +2380,7 @@ async def run_agent_session(session_id: str) -> None:
                 output_schema=output_schema,
                 clipboard=clipboard,
                 capsolver_costs=capsolver_costs,
-                captcha_spent_before=captcha_spent["earlier_turns"],
+                carried=carried,
                 steps_before=steps_before,
                 final_status=None if keep_alive else "stopped",
             )
@@ -2378,7 +2407,7 @@ async def run_agent_session(session_id: str) -> None:
                 count_step=False,
             )
             steps_before = len(agent.history.history)
-            captcha_spent["earlier_turns"] += sum(capsolver_costs)
+            carried["capsolver"] += sum(capsolver_costs)
             capsolver_costs.clear()
             prompt = await _prepare_task(
                 session_id=session_id,

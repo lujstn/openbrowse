@@ -293,8 +293,15 @@ async def create_session(
             )
         if "systemPromptExtension" in sent:
             updates["system_prompt_extension"] = body.systemPromptExtension
+        # @nonobvious(means): a named budget is the session's new absolute
+        # ceiling for this dispatch only — it does not become the allowance, so
+        # the turn after it tops up from what the session was created with.
         if "maxCostUsd" in sent:
             updates["max_cost_usd"] = _local_budget(body.maxCostUsd)
+        else:
+            topped_up = crud.topped_up_budget(existing)
+            if topped_up is not None:
+                updates["max_cost_usd"] = topped_up
         if "keepAlive" in sent:
             updates["keep_alive"] = int(body.keepAlive)
         if sent & {"model", "reasoningEffort"}:
@@ -330,6 +337,7 @@ async def create_session(
             await pool.submit(body.sessionId)
         return _to_session_response(session)
 
+    budget = _local_budget(body.maxCostUsd)
     session = await crud.create_session(
         task=body.task,
         model=body.model,
@@ -337,7 +345,8 @@ async def create_session(
         output_schema=body.outputSchema,
         sensitive_data=body.sensitiveData,
         system_prompt_extension=body.systemPromptExtension,
-        max_cost_usd=_local_budget(body.maxCostUsd),
+        max_cost_usd=budget,
+        default_max_cost_usd=budget,
         keep_alive=body.keepAlive,
         reasoning_effort=_resolved_effort(body.model, body.reasoningEffort),
     )

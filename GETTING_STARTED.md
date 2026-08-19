@@ -247,6 +247,14 @@ const client = new BrowserUse({
 
 Everything else in your integration, such as retry logic, polling and profile ids, stays the same.
 
+### How `maxCostUsd` is spent
+
+`maxCostUsd` is a ceiling on the whole session, not on one task, exactly as it is in the v3 contract: `totalCostUsd` reports what the session has spent altogether, and the run stops as soon as that reaches the cap.
+
+That matters once a session is kept alive for follow-ups. If every follow-up drew from the same fixed pot, a conversation would slowly strangle itself, so each new dispatch tops the pot back up by the allowance the session was created with. Send a task to a session created with `maxCostUsd: 3` that has already spent $2.40, and it runs with a $5.40 ceiling: no single turn can run away, and the conversation is never cut short.
+
+Naming `maxCostUsd` on the follow-up itself overrides that for one dispatch, as an absolute ceiling on the session rather than an amount to add. A session created without a budget stays unbudgeted.
+
 ---
 
 ## 9. Create Browser Profiles

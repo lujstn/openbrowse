@@ -37,6 +37,8 @@ class _FakeAgent:
 
     instances: list["_FakeAgent"] = []
     captcha_sink: list | None = None
+    # opt-in, because the real hook writes cost to the row and can end the turn
+    call_step_hook: bool = False
 
     def __init__(self, **kwargs) -> None:
         self.task = kwargs["task"]
@@ -67,9 +69,23 @@ class _FakeAgent:
             if self.runs == 1:
                 sink.append(0.01)
         self.history.history.append(
-            SimpleNamespace(result=[SimpleNamespace(judgement=None)])
+            SimpleNamespace(
+                result=[
+                    SimpleNamespace(
+                        judgement=None,
+                        error=None,
+                        extracted_content=None,
+                        long_term_memory=None,
+                        is_done=False,
+                        attachments=None,
+                    )
+                ],
+                model_output=None,
+            )
         )
         self.errors.append("boom" if self.runs == 1 else None)
+        if _FakeAgent.call_step_hook and on_step_end is not None:
+            await on_step_end(self)
         return _FakeHistory(self.history.history, f"answer {self.runs}", list(self.errors))
 
 
@@ -103,6 +119,7 @@ async def worker_env(tmp_path, monkeypatch):
 
     _FakeAgent.instances.clear()
     _FakeAgent.captcha_sink = None
+    _FakeAgent.call_step_hook = False
     slot = SimpleNamespace(display_num=10, novnc_port=6080, vnc_port=5910, cdp_port=9222)
 
     async def _allocate():
@@ -337,7 +354,7 @@ async def test_a_turn_that_never_finished_is_reported_as_a_failure():
         output_schema=None,
         clipboard={},
         capsolver_costs=[],
-        captcha_spent_before=0.0,
+        carried={"llm": 0.0, "capsolver": 0.0, "input_tokens": 0.0, "output_tokens": 0.0},
         steps_before=0,
         final_status="stopped",
     )
@@ -371,7 +388,7 @@ async def test_a_stopped_turn_says_it_was_stopped():
         output_schema=None,
         clipboard={},
         capsolver_costs=[],
-        captcha_spent_before=0.0,
+        carried={"llm": 0.0, "capsolver": 0.0, "input_tokens": 0.0, "output_tokens": 0.0},
         steps_before=0,
         final_status="stopped",
     )
@@ -404,3 +421,57 @@ async def test_captcha_spend_carries_over_but_each_turn_gets_its_own_allowance()
 
     await live.request_release(sid, "done")
     await asyncio.wait_for(worker, timeout=3)
+
+
+async def test_a_fresh_worker_continues_the_session_bill_instead_of_restarting_it():
+    """A follow-up dispatched after the previous worker went away builds a new
+    agent with empty counters, so the totals it writes have to include what the
+    session had already spent."""
+    session = await crud.create_session(task="Summarise the news", keep_alive=True)
+    agent = _FakeAgent(task="Summarise the news")
+    finished = _FakeHistory([SimpleNamespace(result=[])], "done", [])
+
+    await runner_mod._finalise_task(
+        session_id=session["id"],
+        agent=agent,
+        history=finished,
+        llm=SimpleNamespace(),
+        store=None,
+        output_model=None,
+        output_schema=None,
+        clipboard={},
+        capsolver_costs=[0.01],
+        carried={
+            "llm": 1.25,
+            "capsolver": 0.03,
+            "input_tokens": 100.0,
+            "output_tokens": 20.0,
+        },
+        steps_before=0,
+        final_status=None,
+    )
+
+    stored = await crud.get_session(session["id"])
+    assert stored["llm_cost_usd"] == 1.25
+    assert stored["capsolver_cost_usd"] == 0.04
+    assert stored["total_cost_usd"] == pytest.approx(1.29)
+    assert stored["total_input_tokens"] == 100
+    assert stored["total_output_tokens"] == 20
+
+
+async def test_a_budget_written_while_parked_binds_the_very_next_turn():
+    """The per-step check closes over the budget, so a pot topped up (or pinned)
+    while the worker waits has to be read as the turn is accepted, not a turn later."""
+    _FakeAgent.call_step_hook = True
+    session = await crud.create_session(task="Summarise the news", keep_alive=True)
+    sid = session["id"]
+    worker = asyncio.create_task(runner_mod.run_agent_session(sid))
+    assert await _wait_for(lambda: live.is_parked(sid))
+
+    await crud.update_session(sid, max_cost_usd=0.005)
+    live.deliver(sid, "and the second one?")
+
+    await asyncio.wait_for(worker, timeout=3)
+    stored = await crud.get_session(sid)
+    assert stored["status"] == "idle"
+    assert any("exceeded budget" in line for line in await _summaries(sid))

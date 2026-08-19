@@ -424,6 +424,7 @@ async def run_task(
         profile_id=(profile_id or None),
         output_schema=parsed_schema,
         max_cost_usd=max_cost_usd,
+        default_max_cost_usd=max_cost_usd,
         keep_alive=keep_alive,
         reasoning_effort=effort,
     )
@@ -582,10 +583,14 @@ async def session_followup(session_id: str, task: str = Form(...)):
         summary=text[:2000],
         count_step=False,
     )
+    budget = crud.topped_up_budget(session)
+    topped_up = {} if budget is None else {"max_cost_usd": budget}
     if outcome == live.DELIVERED:
-        await crud.update_session(session_id, task=text, status="running")
+        await crud.update_session(
+            session_id, task=text, status="running", **topped_up
+        )
         return JSONResponse({"ok": True, "continued": True})
-    await crud.update_session(session_id, task=text, status="created")
+    await crud.update_session(session_id, task=text, status="created", **topped_up)
     dispatched = asyncio.create_task(pool.submit(session_id))
     _dispatched_tasks.add(dispatched)
     dispatched.add_done_callback(_dispatched_tasks.discard)

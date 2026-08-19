@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -15,8 +16,9 @@ from app.db.models import get_db
 _SESSION_COLUMNS = {
     "status", "model", "task", "title", "output", "output_schema",
     "step_count", "last_step_summary", "is_task_successful", "live_url",
-    "profile_id", "sensitive_data", "max_cost_usd", "total_input_tokens",
-    "total_output_tokens", "llm_cost_usd", "total_cost_usd", "capsolver_cost_usd",
+    "profile_id", "sensitive_data", "max_cost_usd", "default_max_cost_usd",
+    "total_input_tokens", "total_output_tokens", "llm_cost_usd", "total_cost_usd",
+    "capsolver_cost_usd",
     "screenshot_path", "display_num", "system_prompt_extension",
     "keep_alive", "reasoning_effort", "updated_at",
 }
@@ -39,6 +41,22 @@ def _new_id() -> str:
 # ── Sessions ──────────────────────────────────────────────────────────
 
 
+def topped_up_budget(session: dict[str, Any]) -> float | None:
+    """The budget a follow-up runs under when its caller named no new one.
+
+    ``max_cost_usd`` caps the session's whole spend, so a conversation would
+    strangle itself if every follow-up drew from one fixed pot. Each dispatch
+    instead tops the pot back up by the allowance the session was created with,
+    which bounds any single turn without ever bounding the conversation. A
+    session created with no budget stays unbudgeted.
+    """
+    allowance = session.get("default_max_cost_usd")
+    if not allowance:
+        return None
+    spent = float(session.get("total_cost_usd") or 0.0)
+    return math.ceil((spent + float(allowance)) * 100 - 1e-9) / 100
+
+
 async def create_session(
     *,
     task: str | None = None,
@@ -48,6 +66,7 @@ async def create_session(
     sensitive_data: dict[str, str] | None = None,
     system_prompt_extension: str | None = None,
     max_cost_usd: float | None = None,
+    default_max_cost_usd: float | None = None,
     keep_alive: bool = False,
     reasoning_effort: str = "default",
 ) -> dict[str, Any]:
@@ -59,8 +78,9 @@ async def create_session(
             """INSERT INTO sessions
                (id, status, model, task, profile_id, output_schema,
                 sensitive_data, system_prompt_extension, max_cost_usd,
-                keep_alive, reasoning_effort, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                default_max_cost_usd, keep_alive, reasoning_effort,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 "created",
@@ -71,6 +91,7 @@ async def create_session(
                 json.dumps(sensitive_data) if sensitive_data else None,
                 system_prompt_extension,
                 max_cost_usd,
+                default_max_cost_usd,
                 int(keep_alive),
                 reasoning_effort,
                 now,

@@ -608,3 +608,47 @@ async def test_session_page_offers_a_follow_up_after_the_browser_is_gone(client)
     assert resp.status_code == 200
     assert 'id="followup-form"' in resp.text
     assert "starts a fresh browser" in resp.text
+
+
+async def test_followup_message_tops_the_session_budget_back_up(client, monkeypatch):
+    """The follow-up box is where keep-alive is actually used, so a conversation
+    started from the dashboard must not strangle itself as its pot drains."""
+    from unittest.mock import AsyncMock
+
+    from app.db import crud
+
+    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    session = await crud.create_session(
+        task="first task", keep_alive=True, max_cost_usd=1.5, default_max_cost_usd=1.5
+    )
+    await crud.update_session(session["id"], status="idle", total_cost_usd=1.2)
+
+    resp = await client.post(
+        f"/session/{session['id']}/message",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "now check the pricing page"},
+    )
+
+    assert resp.status_code == 200
+    assert (await crud.get_session(session["id"]))["max_cost_usd"] == 2.7
+
+
+@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, client):
+    """Without the allowance on the row there is nothing to top a follow-up up by."""
+    import asyncio
+
+    from app.dashboard import routes
+    from app.db import crud
+
+    resp = await client.post(
+        "/run",
+        headers=_basic("admin", "secret-key"),
+        data={"task": "go", "model": "claude-sonnet-5", "max_cost_usd": "2.25"},
+    )
+
+    assert resp.status_code == 303
+    if routes._dispatched_tasks:
+        await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
+    sessions, _ = await crud.list_sessions(page_size=1)
+    assert sessions[0]["default_max_cost_usd"] == 2.25

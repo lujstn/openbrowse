@@ -510,3 +510,77 @@ async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
     assert resp.status_code == 200
     mock_cancel.assert_called_once()
     assert (await crud.get_session(session["id"]))["status"] == "stopped"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
+    mock_submit, client, setup, monkeypatch
+):
+    """maxCostUsd bounds the session, not the turn, so a conversation would
+    strangle itself if every follow-up drew from the same fixed pot."""
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=2.40)
+
+    again = await client.post("/v3/sessions", json={"sessionId": sid, "task": "next"})
+
+    assert again.status_code == 200
+    assert again.json()["maxCostUsd"] == "5.4"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
+    mock_submit, client, setup, monkeypatch
+):
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=2.40)
+
+    again = await client.post(
+        "/v3/sessions", json={"sessionId": sid, "task": "next", "maxCostUsd": 4}
+    )
+
+    assert again.json()["maxCostUsd"] == "2.0"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_named_budget_does_not_become_the_session_allowance(
+    mock_submit, client, setup, monkeypatch
+):
+    """A one-off ceiling for a single dispatch must not resize every later top-up."""
+    from app.db import crud
+
+    monkeypatch.setattr(
+        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+    )
+    sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
+    await client.post(
+        "/v3/sessions", json={"sessionId": sid, "task": "next", "maxCostUsd": 4}
+    )
+    await crud.update_session(sid, status="idle", total_cost_usd=1.0)
+
+    third = await client.post("/v3/sessions", json={"sessionId": sid, "task": "third"})
+
+    assert third.json()["maxCostUsd"] == "4.0"
+
+
+@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+async def test_a_session_created_without_a_budget_stays_unbudgeted(
+    mock_submit, client
+):
+    from app.db import crud
+
+    sid = (await client.post("/v3/sessions", json={})).json()["id"]
+    await crud.update_session(sid, total_cost_usd=1.75)
+
+    again = await client.post("/v3/sessions", json={"sessionId": sid, "task": "next"})
+
+    assert again.json()["maxCostUsd"] is None
