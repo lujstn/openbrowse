@@ -39,6 +39,7 @@ from app.agent.captcha import install_captcha_bridge, register_captcha_tools
 from app.agent.tools import (
     TabManager,
     _eval_js,
+    _gate_empty_fields,
     action_param_kinds,
     register_clipboard_tools,
     register_code_tools,
@@ -1320,6 +1321,41 @@ def _gated_done_output(history: Any) -> str:
     return history.final_result() or ""
 
 
+def _budget_salvage(
+    agent: Any,
+    store: OutputStore | None,
+    clipboard: dict[str, Any],
+    output_model: type | None,
+) -> tuple[str, bool]:
+    """Output and success verdict for a run cut short by its cost cap.
+
+    A cap fires between steps, so the agent never reaches done, but the store may
+    already hold a complete answer; the same gate the normal finish trusts decides
+    whether it does.
+    """
+    # @nonobvious(must-hold): nothing here may call the LLM. The budget that
+    # ended the run is the budget schema coercion would spend, so output that
+    # does not already validate is kept as it stands and recorded as a failure.
+    output = ""
+    if store is not None and not store.is_empty():
+        output = store.read_output()
+    else:
+        try:
+            result_file = agent.file_system.get_file("result.json") if agent.file_system else None
+            if result_file:
+                text = result_file.read()
+                if text and text.strip():
+                    output = text
+        except Exception:
+            logger.debug("result.json read during budget salvage failed", exc_info=True)
+
+    if not output or store is None or output_model is None:
+        return output, False
+    if not _validate_only(output, output_model):
+        return output, False
+    return output, not _gate_empty_fields(store, clipboard)
+
+
 def _completion_summary(
     *,
     is_successful: bool,
@@ -1914,7 +1950,7 @@ async def run_agent_session(session_id: str) -> None:
             set_activity(session_id, "Running actions")
 
             usage_history = agent_instance.token_cost_service.usage_history
-            llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+            llm_cost = cost.history_cost(usage_history)
             capsolver_cost = sum(capsolver_costs)
             total_cost = llm_cost + capsolver_cost
             await crud.update_session(
@@ -2049,8 +2085,6 @@ async def run_agent_session(session_id: str) -> None:
         # valid store has delivered the answer; the gate check is the arbiter.
         if not is_successful and not history.is_done() and from_store and schema_valid:
             try:
-                from app.agent.tools import _gate_empty_fields
-
                 if store is not None and not _gate_empty_fields(store, clipboard):
                     is_successful = True
                     await crud.create_message(
@@ -2068,7 +2102,7 @@ async def run_agent_session(session_id: str) -> None:
                 logger.debug("store-complete success check failed", exc_info=True)
 
         usage_history = agent.token_cost_service.usage_history
-        llm_cost = cost.history_cost(usage_history, now=datetime.now(timezone.utc))
+        llm_cost = cost.history_cost(usage_history)
         capsolver_cost = sum(capsolver_costs)
         total_cost = llm_cost + capsolver_cost
         total_input = sum((u.usage.prompt_tokens or 0) for u in usage_history if u.usage)
@@ -2131,12 +2165,27 @@ async def run_agent_session(session_id: str) -> None:
 
     except BudgetExceededError as e:
         logger.info("Session %s stopped: %s", session_id, e)
-        await crud.update_session(session_id, status="stopped")
+        output, is_successful = _budget_salvage(agent, store, clipboard, output_model)
+        items = store.item_count() if store is not None else 0
+        if is_successful:
+            kept = "The output store was complete and valid, so it stands as the answer."
+        elif output and items:
+            kept = f"A partial output of {items} item{'' if items == 1 else 's'} is kept."
+        elif output:
+            kept = "A partial output is kept."
+        else:
+            kept = "There was no output to keep."
+        await crud.update_session(
+            session_id,
+            status="idle" if session.get("keep_alive") else "stopped",
+            output=output,
+            is_task_successful=int(is_successful),
+        )
         await crud.create_message(
             session_id=session_id,
             role="ai",
             msg_type="completion",
-            summary=f"Stopped: {e}",
+            summary=f"Stopped: {e}. {kept}",
         )
     except Exception as e:
         logger.exception("Agent session %s failed: %s", session_id, e)
