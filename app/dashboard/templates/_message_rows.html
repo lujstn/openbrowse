@@ -6,7 +6,7 @@
 <div class="msg-row{% if has_cards %} has-cards{% endif %}" data-type="{{ m.type }}" data-mid="{{ m.id }}">
   <span class="msg-left">
     <span class="msg-time" data-ts="{{ m.created_at }}"></span>
-    {% if d.duration_s %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
+    {% if d.duration_s and md.category != 'reasoning' %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
   </span>
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
   <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>

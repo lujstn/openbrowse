@@ -1321,17 +1321,17 @@ def _action_detail(actions: list) -> tuple[str, bool]:
     return detail, is_code
 
 
-def _reasoning_title(text: str) -> str:
-    """One plain-prose sentence for the reasoning row — markdown stripped, the
-    full formatted text lives in the expandable card.
+def _reasoned_title(seconds: float | None) -> str:
+    """The reasoning row is a headline, and half a sentence of thought is not
+    one; the whole thought is a caret away in the card.
     """
-    plain = re.sub(r"[*_`#>\[\]]+", "", text or "")
-    plain = " ".join(plain.split())
-    for stop in (". ", "? ", "! "):
-        cut = plain.find(stop)
-        if 0 < cut < 160:
-            return plain[: cut + 1] + "…"
-    return plain[:160] + ("…" if len(plain) > 160 else "")
+    if not seconds:
+        return "Reasoned"
+    if seconds >= 60:
+        return f"Reasoned for {int(seconds // 60)}m {round(seconds % 60)}s"
+    # @nonobvious(mirrors): one decimal, matching the duration badge the row
+    # already shows beside it, so the two do not disagree by a second.
+    return f"Reasoned for {round(seconds, 1)}s"
 
 
 def _friendly_error(error: str) -> str:
@@ -2284,7 +2284,7 @@ async def run_agent_session(session_id: str) -> None:
                     role="ai",
                     msg_type="event",
                     data=json.dumps(reasoning_data),
-                    summary=_reasoning_title(reasoning_text),
+                    summary=_reasoned_title(reasoning_seconds),
                     count_step=False,
                 )
             await crud.create_message(

@@ -853,12 +853,8 @@ document.addEventListener("DOMContentLoaded", function () {
       const node = row.cloneNode(true);
       feedRows.insertBefore(node, feedRows.firstChild);
       if (isReasoning) {
-        if (wasStreaming) {
-          agentActivity.hide();
-          OpenBrowseAgents.handoff.revealCards(node);
-        } else {
-          OpenBrowseAgents.handoff.fadeRowIn(node);
-        }
+        if (wasStreaming) agentActivity.hide();
+        OpenBrowseAgents.handoff.fadeRowIn(node);
       }
     });
     firstMessagesBatchDone = true;

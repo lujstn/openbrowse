@@ -271,30 +271,6 @@
   transition: transform 0.3s var(--ob-ease-out);
 }
 
-.msg-row.expanded .msg-cards.ob-handoff-grow {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.34s var(--ob-ease-in-out);
-}
-.msg-row.expanded .msg-cards.ob-handoff-grow > * {
-  overflow: hidden;
-  min-height: 0;
-}
-.msg-row.expanded .msg-cards.ob-handoff-grow .card {
-  opacity: 0;
-  transform: translateY(4px);
-  transition:
-    opacity 0.28s var(--ob-ease-out),
-    transform 0.28s var(--ob-ease-out);
-}
-.msg-row.expanded .msg-cards.ob-handoff-grow.ob-handoff-grow-open {
-  grid-template-rows: 1fr;
-}
-.msg-row.expanded .msg-cards.ob-handoff-grow.ob-handoff-grow-open .card {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 .ob-row-enter {
   opacity: 0;
   transform: translateY(4px);
@@ -314,8 +290,6 @@
   .ob-activity-viewport,
   .ob-activity-track,
   .ob-activity-chev,
-  .msg-row.expanded .msg-cards.ob-handoff-grow,
-  .msg-row.expanded .msg-cards.ob-handoff-grow .card,
   .ob-row-enter {
     transition: none !important;
   }

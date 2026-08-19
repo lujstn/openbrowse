@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -894,3 +895,76 @@ def test_activity_clock_survives_a_streaming_phase_and_resets_on_a_new_one():
     set_activity(sid, "Running actions")
     assert get_activity(sid)["startedAt"] != started, "a new phase starts a new clock"
     clear_activity(sid)
+
+
+async def test_a_reasoning_row_lands_collapsed_like_any_other_step(client):
+    """The live card already showed the thought; forcing the settled row open
+    makes reasoning the one step type that shouts.
+    """
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    body = resp.text
+
+    assert "OpenBrowseAgents.handoff.fadeRowIn(node)" in body
+    assert "revealCards" not in body, "the settled reasoning row must not auto-expand"
+    assert "ob-handoff-grow" not in body
+
+
+def test_the_reasoning_row_headline_is_a_duration_not_a_half_sentence():
+    from app.dashboard.routes import message_display
+
+    display = message_display({
+        "type": "event",
+        "summary": "Reasoned for 21.6s",
+        "data": json.dumps({
+            "category": "reasoning",
+            "action": "model_reasoning",
+            "reasoning": "Everything looks complete - the headlines are in place. I'll finalise now.",
+            "duration_s": 21.6,
+        }),
+    })
+
+    assert display["summary"] == "Reasoned for 21.6s"
+    assert "…" not in display["summary"]
+    # the whole thought still rides along for the expanded card
+    assert display["reasoning"].startswith("Everything looks complete")
+
+
+def _render_row(category, action, summary):
+    from app.dashboard.routes import message_display, templates
+
+    return templates.get_template("_message_rows.html").render(
+        messages=[{
+            "id": "m1",
+            "type": "event",
+            "created_at": "2026-08-18T22:22:00+00:00",
+            "summary": summary,
+            "data": json.dumps({
+                "category": category,
+                "action": action,
+                "duration_s": 21.6,
+                "reasoning": "a whole thought",
+            }),
+        }],
+        format_relative=lambda *a: "now",
+        message_display=message_display,
+    )
+
+
+def test_a_reasoning_row_states_its_duration_once():
+    """The headline already reads "Reasoned for 21.6s"; the badge beside it
+    would say the same number a second time.
+    """
+    reasoning = _render_row("reasoning", "model_reasoning", "Reasoned for 21.6s")
+    assert "Reasoned for 21.6s" in reasoning
+    assert "msg-dur" not in reasoning, "the duration is printed twice on one row"
+    assert "expanded" not in reasoning, "the row must render collapsed"
+
+    # every other step keeps the badge, since its headline says nothing about time
+    other = _render_row("read", "read_pages", "3 pages")
+    assert "msg-dur" in other

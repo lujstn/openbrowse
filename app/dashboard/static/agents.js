@@ -198,7 +198,7 @@
       var rest = Math.round(seconds % 60);
       return mins + "m " + rest + "s";
     }
-    return (seconds >= 10 ? Math.round(seconds) : seconds.toFixed(1)) + "s";
+    return seconds.toFixed(1) + "s";
   }
 
   function AgentActivity(container) {
@@ -386,29 +386,6 @@
     revealClose(this.container);
   };
 
-  function revealCardsForHandoff(rowEl) {
-    var cards = rowEl && rowEl.querySelector(".msg-cards");
-    if (!cards) return;
-    rowEl.classList.add("expanded");
-    if (REDUCED_MOTION) return;
-    cards.classList.add("ob-handoff-grow");
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        cards.classList.add("ob-handoff-grow-open");
-      });
-    });
-    var done = false;
-    var cleanup = function (e) {
-      if (e && e.propertyName !== "grid-template-rows") return;
-      if (done) return;
-      done = true;
-      cards.classList.remove("ob-handoff-grow", "ob-handoff-grow-open");
-      cards.removeEventListener("transitionend", cleanup);
-    };
-    cards.addEventListener("transitionend", cleanup);
-    setTimeout(cleanup, 500);
-  }
-
   function fadeRowIn(rowEl) {
     if (REDUCED_MOTION) return;
     rowEl.classList.add("ob-row-enter");
@@ -427,6 +404,6 @@
     reveal: { open: revealOpen, close: revealClose },
     Typewriter: Typewriter,
     AgentActivity: AgentActivity,
-    handoff: { revealCards: revealCardsForHandoff, fadeRowIn: fadeRowIn },
+    handoff: { fadeRowIn: fadeRowIn },
   };
 })(window);

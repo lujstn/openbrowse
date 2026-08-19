@@ -1116,14 +1116,20 @@ def test_friendly_error_clips_to_first_sentence():
     assert _friendly_error("tiny error") == "tiny error"
 
 
-def test_reasoning_title_strips_markdown_and_clips():
-    from app.agent.runner import _reasoning_title
+def test_reasoning_row_is_titled_by_how_long_it_took():
+    """Half a sentence of thought is not a headline; the whole thought is a
+    caret away in the card, so the row reports duration instead.
+    """
+    from app.agent.runner import _reasoned_title
 
-    t = _reasoning_title("**Finding links in iframes** I need to interact with an iframe. Then more.")
-    assert "**" not in t
-    assert t.endswith("…")
-    assert t.startswith("Finding links in iframes")
-    assert _reasoning_title("Short thought") == "Short thought"
+    assert _reasoned_title(4.23) == "Reasoned for 4.2s"
+    assert _reasoned_title(21.6) == "Reasoned for 21.6s"
+    assert _reasoned_title(34.7) == "Reasoned for 34.7s"
+    assert _reasoned_title(63) == "Reasoned for 1m 3s"
+    assert _reasoned_title(None) == "Reasoned"
+    assert _reasoned_title(0) == "Reasoned"
+    for value in (4.23, 63, None):
+        assert "…" not in _reasoned_title(value)
 
 
 def test_action_detail_humanises_bare_steps():
