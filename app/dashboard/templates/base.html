@@ -6,8 +6,10 @@
     <title>{% block title %}OpenBrowse{% endblock %}</title>
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="/static/openbrowse.ico" />
+    <link rel="stylesheet" href="/static/openbrowse.css" />
     <script defer src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script defer src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    <script defer src="/static/agents.js"></script>
     <style>
       * {
         margin: 0;
@@ -180,7 +182,7 @@
         color: #e5e5e5;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
       }
-      .cost-cell:hover .cost-tip {
+      .cost-cell.has-breakdown:hover .cost-tip {
         display: block;
       }
     </style>

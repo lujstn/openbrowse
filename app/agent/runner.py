@@ -63,6 +63,13 @@ ONE_M_BETA = "context-1m-2025-08-07"
 # keep importing it from the runner while the registry itself lives in live.
 get_live_agent = live.get_live_agent
 
+_REASONING_PUSH_INTERVAL_S = 0.15
+_REASONING_LABEL = "Thinking"
+# @nonobvious(mirrors): the live stream and the persisted reasoning row are the
+# same text rendered twice, so they clip at the same point — a longer live cap
+# would make the card visibly shrink when the settled row takes over.
+_REASONING_MAX_CHARS = 6000
+
 _CARDS_EXTENSION = (
     "Every step, before you act, fill three one-sentence fields: what_i_see (what is "
     "actually on the page now), plan_to_goal (how you get from here to the goal), and "
@@ -595,6 +602,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         loop = asyncio.get_running_loop()
         parts: list[str] = []
         last_push = 0.0
+        began_at: float | None = None
         async with self.get_client().responses.stream(**params) as stream:
             async for event in stream:
                 if not sid:
@@ -604,13 +612,21 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ):
                     parts.append(getattr(event, "delta", "") or "")
                     now = loop.time()
-                    text = " ".join("".join(parts).split())
-                    if now - last_push > 0.4:
+                    if began_at is None:
+                        began_at = now
+                    if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
-                        snippet = (
-                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
+                        text = " ".join("".join(parts).split())
+                        set_activity(
+                            sid,
+                            _REASONING_LABEL,
+                            spin=True,
+                            stream=text[:_REASONING_MAX_CHARS],
+                            kind="reasoning",
                         )
-                        set_activity(sid, snippet, spin=True)
+            self._reasoning_seconds = (
+                round(loop.time() - began_at, 1) if began_at is not None else None
+            )
             return await stream.get_final_response()
 
     async def _create(self, params: dict[str, Any]) -> Any:
@@ -679,7 +695,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         if sid:
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
-            set_activity(sid, label, spin=True)
+            set_activity(sid, label, spin=True, kind="reasoning")
         summary_box = {"text": ""}
 
         async def _once(msgs: Any) -> Any:
@@ -721,13 +737,19 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 ) from e
         finally:
             if sid:
-                set_activity(sid, "Running actions")
+                set_activity(sid, "Running actions", spin=True)
         summary = summary_box["text"]
         if summary:
             self._last_model_reasoning = summary
+            self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
             if sid:
-                snippet = summary[:140] + ("…" if len(summary) > 140 else "")
-                set_activity(sid, f"💭 {snippet}")
+                set_activity(
+                    sid,
+                    _REASONING_LABEL,
+                    stream=summary[:_REASONING_MAX_CHARS],
+                    seconds=self._last_reasoning_seconds,
+                    kind="reasoning",
+                )
         await _settle_code_stream(self, result, output_format)
         return result
 
@@ -856,6 +878,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
             )
             if thinking.strip():
                 self._last_model_reasoning = thinking
+                self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
         except Exception:
             logger.debug("thinking capture failed", exc_info=True)
         return response
@@ -876,34 +899,44 @@ class _RepairingChatAnthropic(ChatAnthropic):
         parts: list[str] = []
         think_parts: list[str] = []
         last_push = 0.0
+        began_at: float | None = None
         async for event in stream:
             etype = getattr(event, "type", "")
             if sid and etype == "content_block_start":
                 block = getattr(event, "content_block", None)
+                # @nonobvious(forced-by): adaptive thinking reasons privately and
+                # can open a block then stay silent for tens of seconds, so the
+                # label goes up on the block itself rather than the first delta.
                 if getattr(block, "type", None) == "thinking":
-                    set_activity(sid, "💭 Thinking…", spin=True)
+                    if began_at is None:
+                        began_at = loop.time()
+                    set_activity(sid, _REASONING_LABEL, spin=True, kind="reasoning")
             if sid and etype == "content_block_delta":
                 delta = getattr(event, "delta", None)
                 chunk = getattr(delta, "thinking", None)
                 if chunk:
                     think_parts.append(chunk)
                     now = loop.time()
-                    text = " ".join("".join(think_parts).split())
-                    if now - last_push > 0.4:
+                    if began_at is None:
+                        began_at = now
+                    if now - last_push > _REASONING_PUSH_INTERVAL_S:
                         last_push = now
-                        # @nonobvious(forced-by): adaptive thinking reasons
-                        # privately and can stream a lone fragment then go
-                        # silent for tens of seconds; a stuck "💭 I" reads as
-                        # broken, so short accumulations show as Thinking….
-                        snippet = (
-                            f"💭 {text[-140:]}" if len(text) >= 12 else "💭 Thinking…"
+                        text = " ".join("".join(think_parts).split())
+                        set_activity(
+                            sid,
+                            _REASONING_LABEL,
+                            spin=True,
+                            stream=text[:_REASONING_MAX_CHARS],
+                            kind="reasoning",
                         )
-                        set_activity(sid, snippet, spin=True)
             if observer is None:
                 continue
             if etype == "input_json" and getattr(event, "partial_json", ""):
                 parts.append(event.partial_json)
                 await observer.on_partial("".join(parts))
+        self._reasoning_seconds = (
+            round(loop.time() - began_at, 1) if began_at is not None else None
+        )
         return await stream.get_final_message()
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
@@ -912,10 +945,16 @@ class _RepairingChatAnthropic(ChatAnthropic):
         thinking_text = " ".join((getattr(result, "thinking", None) or "").split())
         if thinking_text:
             self._last_model_reasoning = thinking_text
+            self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
             sid = getattr(self, "_activity_session", None)
             if sid:
-                snippet = thinking_text[:140] + ("…" if len(thinking_text) > 140 else "")
-                set_activity(sid, f"💭 {snippet}")
+                set_activity(
+                    sid,
+                    _REASONING_LABEL,
+                    stream=thinking_text[:_REASONING_MAX_CHARS],
+                    seconds=self._last_reasoning_seconds,
+                    kind="reasoning",
+                )
         return result
 
     async def _ainvoke_inner(
@@ -925,7 +964,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
         if sid:
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
-            set_activity(sid, label, spin=True)
+            set_activity(sid, label, spin=True, kind="reasoning")
         async def _call(msgs: Any) -> Any:
             return await super(_RepairingChatAnthropic, self).ainvoke(
                 msgs, output_format, **kwargs
@@ -948,7 +987,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
                     self._force_stream = False
         finally:
             if sid:
-                set_activity(sid, "Running actions")
+                set_activity(sid, "Running actions", spin=True)
 
 
 _ANTHROPIC_MODELS: tuple[str, ...] = (
@@ -1282,17 +1321,17 @@ def _action_detail(actions: list) -> tuple[str, bool]:
     return detail, is_code
 
 
-def _reasoning_title(text: str) -> str:
-    """One plain-prose sentence for the reasoning row — markdown stripped, the
-    full formatted text lives in the expandable card.
+def _reasoned_title(seconds: float | None) -> str:
+    """The reasoning row is a headline, and half a sentence of thought is not
+    one; the whole thought is a caret away in the card.
     """
-    plain = re.sub(r"[*_`#>\[\]]+", "", text or "")
-    plain = " ".join(plain.split())
-    for stop in (". ", "? ", "! "):
-        cut = plain.find(stop)
-        if 0 < cut < 160:
-            return plain[: cut + 1] + "…"
-    return plain[:160] + ("…" if len(plain) > 160 else "")
+    if not seconds:
+        return "Reasoned"
+    if seconds >= 60:
+        return f"Reasoned for {int(seconds // 60)}m {round(seconds % 60)}s"
+    # @nonobvious(mirrors): one decimal, matching the duration badge the row
+    # already shows beside it, so the two do not disagree by a second.
+    return f"Reasoned for {round(seconds, 1)}s"
 
 
 def _friendly_error(error: str) -> str:
@@ -2079,7 +2118,7 @@ async def run_agent_session(session_id: str) -> None:
 
         async def on_step_start(agent_instance: Agent) -> None:
             step_started_at["t"] = datetime.now(timezone.utc)
-            set_activity(session_id, "Preparing next step")
+            set_activity(session_id, "Preparing next step", spin=True)
 
         async def on_step_end(agent_instance: Agent) -> None:
             nonlocal step_count
@@ -2230,19 +2269,22 @@ async def run_agent_session(session_id: str) -> None:
             native_reasoning = getattr(llm, "_last_model_reasoning", None)
             if native_reasoning:
                 llm._last_model_reasoning = None
+                reasoning_seconds = getattr(llm, "_last_reasoning_seconds", None)
+                llm._last_reasoning_seconds = None
                 reasoning_text = str(native_reasoning)
+                reasoning_data = {
+                    "category": "reasoning",
+                    "action": "model_reasoning",
+                    "reasoning": reasoning_text[:_REASONING_MAX_CHARS],
+                }
+                if reasoning_seconds:
+                    reasoning_data["duration_s"] = reasoning_seconds
                 await crud.create_message(
                     session_id=session_id,
                     role="ai",
                     msg_type="event",
-                    data=json.dumps(
-                        {
-                            "category": "reasoning",
-                            "action": "model_reasoning",
-                            "reasoning": reasoning_text[:6000],
-                        }
-                    ),
-                    summary=_reasoning_title(reasoning_text),
+                    data=json.dumps(reasoning_data),
+                    summary=_reasoned_title(reasoning_seconds),
                     count_step=False,
                 )
             await crud.create_message(
@@ -2253,7 +2295,7 @@ async def run_agent_session(session_id: str) -> None:
                 summary=summary or action_name or f"Step {step_count}",
             )
             llm._last_action = action_name
-            set_activity(session_id, "Running actions")
+            set_activity(session_id, "Running actions", spin=True)
 
             usage_history = agent_instance.token_cost_service.usage_history
             llm_cost = carried["llm"] + cost.history_cost(usage_history)

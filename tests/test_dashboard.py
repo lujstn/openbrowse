@@ -1,6 +1,8 @@
 """Tests for dashboard Basic auth, run form, and API fail-closed behaviour."""
 
+import asyncio
 import base64
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -667,3 +669,361 @@ async def test_session_detail_stacks_completions_rather_than_replacing_one(clien
     assert "function archiveCompletion()" in body
     assert ".completion-card.collapsed .cc-out" in body
     assert "cc-caret" in body
+
+
+async def test_session_detail_wires_one_live_activity_surface(client):
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    assert 'id="stream-bar"' in resp.text
+    assert "OpenBrowseAgents.AgentActivity" in resp.text
+    assert '<link rel="stylesheet" href="/static/openbrowse.css" />' in resp.text
+    assert '<script defer src="/static/agents.js"></script>' in resp.text
+    # the hand-rolled strip it replaced, so a second live surface cannot creep back
+    for gone in ('id="activity-bar"', "act-spin", "act-label", "act-timer", "buildSpinBars"):
+        assert gone not in resp.text, f"{gone} survived the swap"
+
+
+def test_mdlite_bold_and_code():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("**bold** and `code`")) == "<strong>bold</strong> and <code>code</code>"
+
+
+def test_mdlite_bold_spans_a_line_break():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("**foo\nbar** baz")) == "<strong>foo<br>bar</strong> baz"
+
+
+def test_mdlite_unterminated_bold_stays_literal():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("checking the **access token with no closer"))
+    assert out == "checking the **access token with no closer"
+    assert "<strong>" not in out
+
+
+def test_mdlite_unterminated_backtick_stays_literal():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("run `find_elements with no closer"))
+    assert out == "run `find_elements with no closer"
+    assert "<code>" not in out
+
+
+def test_mdlite_closed_fence_renders_bounded_code_block():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("before\n```python\nprint(1)\n```\nafter"))
+    assert out == "before<br><pre><code>print(1)\n</code></pre>after"
+
+
+def test_mdlite_unclosed_fence_runs_to_end_as_code():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("before\n```python\nprint(1)\nstill going"))
+    assert out == "before<br><pre><code>print(1)\nstill going</code></pre>"
+
+
+def test_mdlite_bullet_list():
+    from app.dashboard.routes import _mdlite
+
+    out = str(_mdlite("- one\n- **two**\nplain after"))
+    assert out == "<ul><li>one</li><li><strong>two</strong></li></ul><br>plain after"
+
+
+def test_mdlite_escapes_html():
+    from app.dashboard.routes import _mdlite
+
+    assert str(_mdlite("<script>alert(1)</script>")) == "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_activity_payload_carries_a_growing_stream_never_a_slice():
+    from app.agent.activity import clear_activity, get_activity, set_activity
+
+    sid = "activity-shape-test"
+    clear_activity(sid)
+    set_activity(sid, "Thinking", spin=True, stream="checking the")
+    first = get_activity(sid)
+    assert first["stream"] == "checking the"
+    assert first["spin"] is True
+    assert first["label"] == "Thinking"
+
+    set_activity(sid, "Thinking", spin=True, stream="checking the accessibility tree")
+    second = get_activity(sid)
+    assert second["stream"] == "checking the accessibility tree"
+    assert second["stream"].startswith(first["stream"])
+
+    set_activity(sid, "Running actions")
+    third = get_activity(sid)
+    assert third["stream"] is None
+    assert third["label"] == "Running actions"
+    clear_activity(sid)
+
+
+class _StubRequest:
+    """Enough Request for the SSE generator: resume header plus a liveness check."""
+
+    def __init__(self, last_event_id=None):
+        self.headers = {"last-event-id": last_event_id} if last_event_id else {}
+
+    async def is_disconnected(self):
+        return False
+
+
+async def _drain_feed(session_id, *, last_event_id=None, want=1, timeout=3.0):
+    """Pull frames off the feed generator directly — the ASGI transport never
+    reports a disconnect, so an end-to-end stream would never terminate.
+    """
+    from app.dashboard.routes import sse_session_messages
+
+    resp = await sse_session_messages(_StubRequest(last_event_id), session_id)
+    gen = resp.body_iterator
+    frames = []
+    try:
+        async with asyncio.timeout(timeout):
+            async for ev in gen:
+                frames.append(ev)
+                if sum(1 for f in frames if f.get("event") == "messages") >= want:
+                    break
+    except (TimeoutError, asyncio.TimeoutError):
+        pass
+    finally:
+        await gen.aclose()
+    return frames
+
+
+async def _seed_session_with_messages(n=3):
+    from app.db import crud
+
+    session = await crud.create_session(task="t", model="claude-sonnet-5")
+    ids = []
+    for i in range(n):
+        m = await crud.create_message(
+            session_id=session["id"], msg_type="event", summary=f"step {i}"
+        )
+        ids.append(m["id"])
+    return session["id"], ids
+
+
+def _message_frames(frames):
+    return [f for f in frames if f.get("event") == "messages"]
+
+
+async def test_sse_feed_replays_history_to_a_fresh_listener():
+    sid, ids = await _seed_session_with_messages()
+
+    rows = _message_frames(await _drain_feed(sid))
+    assert rows, "a fresh listener must receive the backlog"
+    for mid in ids:
+        assert mid in rows[0]["data"]
+    assert rows[0]["id"] == ids[-1], "the batch must carry a resumable id"
+
+
+async def test_sse_feed_resumes_after_last_event_id_instead_of_replaying():
+    sid, ids = await _seed_session_with_messages()
+
+    rows = _message_frames(await _drain_feed(sid, last_event_id=ids[-1], timeout=2.0))
+    assert rows == [], f"a reconnect must not replay delivered rows, got {rows}"
+
+
+async def test_sse_feed_resumes_and_delivers_only_what_is_new():
+    from app.db import crud
+
+    sid, ids = await _seed_session_with_messages()
+    fresh = await crud.create_message(session_id=sid, msg_type="event", summary="brand new")
+
+    rows = _message_frames(await _drain_feed(sid, last_event_id=ids[-1]))
+    assert len(rows) == 1
+    assert fresh["id"] in rows[0]["data"]
+    for mid in ids:
+        assert mid not in rows[0]["data"]
+
+
+def test_message_rows_carry_an_id_the_client_can_dedupe_on():
+    from app.dashboard.routes import templates
+
+    html = templates.get_template("_message_rows.html").render(
+        messages=[{
+            "id": "msg-abc-123",
+            "type": "event",
+            "data": "",
+            "summary": "did a thing",
+            "created_at": "2026-08-17T12:00:00+00:00",
+        }],
+        format_relative=lambda *_: "now",
+    )
+    assert 'data-mid="msg-abc-123"' in html
+
+
+def test_agent_activity_states_and_handoff_behaviour():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the agent-activity harness needs it")
+    harness = Path(__file__).parent / "fixtures" / "agent_activity_harness.mjs"
+    proc = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_activity_clock_survives_a_streaming_phase_and_resets_on_a_new_one():
+    """A streaming phase re-pushes several times a second; if the clock restarted
+    on each push no phase could ever report how long it took.
+    """
+    from app.agent.activity import clear_activity, get_activity, set_activity
+
+    sid = "activity-clock-test"
+    clear_activity(sid)
+
+    set_activity(sid, "Thinking", spin=True, stream="a")
+    started = get_activity(sid)["startedAt"]
+    for text in ("a b", "a b c", "a b c d"):
+        set_activity(sid, "Thinking", spin=True, stream=text)
+        assert get_activity(sid)["startedAt"] == started, "the clock restarted mid-phase"
+
+    set_activity(sid, "Thinking", stream="a b c d")
+    assert get_activity(sid)["startedAt"] == started, "settling is the same phase"
+
+    set_activity(sid, "Running actions")
+    assert get_activity(sid)["startedAt"] != started, "a new phase starts a new clock"
+    clear_activity(sid)
+
+
+async def test_a_reasoning_row_lands_collapsed_like_any_other_step(client):
+    """The live card already showed the thought; forcing the settled row open
+    makes reasoning the one step type that shouts.
+    """
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 200
+    body = resp.text
+
+    assert "OpenBrowseAgents.handoff.fadeRowIn(node)" in body
+    assert "revealCards" not in body, "the settled reasoning row must not auto-expand"
+    assert "ob-handoff-grow" not in body
+
+
+def test_the_reasoning_row_headline_is_a_duration_not_a_half_sentence():
+    from app.dashboard.routes import message_display
+
+    display = message_display({
+        "type": "event",
+        "summary": "Reasoned for 21.6s",
+        "data": json.dumps({
+            "category": "reasoning",
+            "action": "model_reasoning",
+            "reasoning": "Everything looks complete - the headlines are in place. I'll finalise now.",
+            "duration_s": 21.6,
+        }),
+    })
+
+    assert display["summary"] == "Reasoned for 21.6s"
+    assert "…" not in display["summary"]
+    # the whole thought still rides along for the expanded card
+    assert display["reasoning"].startswith("Everything looks complete")
+
+
+def _render_row(category, action, summary):
+    from app.dashboard.routes import message_display, templates
+
+    return templates.get_template("_message_rows.html").render(
+        messages=[{
+            "id": "m1",
+            "type": "event",
+            "created_at": "2026-08-18T22:22:00+00:00",
+            "summary": summary,
+            "data": json.dumps({
+                "category": category,
+                "action": action,
+                "duration_s": 21.6,
+                "reasoning": "a whole thought",
+            }),
+        }],
+        format_relative=lambda *a: "now",
+        message_display=message_display,
+    )
+
+
+def test_a_reasoning_row_states_its_duration_once():
+    """The headline already reads "Reasoned for 21.6s"; the badge beside it
+    would say the same number a second time.
+    """
+    reasoning = _render_row("reasoning", "model_reasoning", "Reasoned for 21.6s")
+    assert "Reasoned for 21.6s" in reasoning
+    assert "msg-dur" not in reasoning, "the duration is printed twice on one row"
+    assert "expanded" not in reasoning, "the row must render collapsed"
+
+    # every other step keeps the badge, since its headline says nothing about time
+    other = _render_row("read", "read_pages", "3 pages")
+    assert "msg-dur" in other
+
+
+def test_the_cost_breakdown_only_offers_itself_when_capsolver_charged():
+    """A popover that always says CapSolver $0.0000 is a popover that never had
+    anything to add.
+    """
+    from app.dashboard.routes import _format_duration, _format_relative_time, model_provider, templates
+
+    def render(capsolver):
+        return templates.get_template("_session_rows.html").render(
+            sessions=[{
+                "id": "s1", "task": "t", "status": "idle", "model": "claude-sonnet-5",
+                "created_at": "2026-08-19T22:00:00+00:00",
+                "updated_at": "2026-08-19T22:05:00+00:00",
+                "total_cost_usd": 0.12, "llm_cost_usd": 0.1187,
+                "capsolver_cost_usd": capsolver, "step_count": 3,
+                "total_input_tokens": 1, "total_output_tokens": 2,
+                "is_task_successful": True, "live_url": None, "keep_alive": False,
+            }],
+            model_provider=model_provider,
+            format_relative=_format_relative_time,
+            format_duration=_format_duration,
+        )
+
+    assert "has-breakdown" not in render(0)
+    assert "has-breakdown" not in render(None)
+    assert "has-breakdown" in render(0.0025)
+
+
+def test_money_reads_in_cents_but_the_breakdown_reads_as_billed():
+    from app.dashboard.routes import _usd, _usd4
+
+    assert _usd(0.1187) == "0.12"
+    assert _usd4(0.1187) == "0.1187"
+    assert _usd(0.0032) == "0.01", "a real charge must never round down to nothing"
+    assert _usd4(0.0032) == "0.0032"
+    assert _usd4(None) == "0.0000"
+
+
+async def test_a_finished_run_hides_its_copy_button_until_it_is_opened(client):
+    """The copy control belongs to the output, so a collapsed card should not
+    offer to copy something it is not showing.
+    """
+    from app.db import crud
+
+    session = await crud.create_session(task="check the pricing page")
+    resp = await client.get(
+        f"/session/{session['id']}", headers=_basic("admin", "secret-key")
+    )
+    body = resp.text
+
+    # the disclosure is a button at the end of the head, styled like a feed row's
+    assert '<button class="cc-caret" type="button" aria-label="Expand result">' in body
+    assert '<span class="cc-caret">' not in body, "the caret is no longer a glyph in the title"
+
+    # copy lives inside the output block, which is what a collapsed card hides
+    assert '<div class="cc-out"><button class="cc-copy"' in body
+    assert ".completion-card.collapsed .cc-out" in body
+    assert "COPY_ICON" in body and "COPIED_ICON" in body

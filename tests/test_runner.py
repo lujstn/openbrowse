@@ -1,7 +1,9 @@
 """Agent runner tests — model registry, provider routing, reasoning, LLM builder."""
 
+import asyncio
 import json
 import types
+from pathlib import Path
 
 import pytest
 
@@ -768,9 +770,13 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-1"
-    pushes: list[str] = []
+    pushes: list[dict] = []
     monkeypatch.setattr(
-        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
     )
 
     final = _fake_response(reasoning_summary="thinking about the page layout")
@@ -815,7 +821,8 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
     result = await llm.ainvoke(_messages())
     assert result.completion == "ok"
     assert llm._last_model_reasoning == "thinking about the page layout"
-    assert any(p.startswith("💭 thinking about") for p in pushes)
+    assert any((p["stream"] or "").startswith("thinking about") for p in pushes)
+    assert all(p["label"] == "Thinking" for p in pushes if p["stream"])
 
 
 async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
@@ -824,9 +831,13 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
 
     llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
     llm._activity_session = "sess-2"
-    pushes: list[str] = []
+    pushes: list[dict] = []
     monkeypatch.setattr(
-        runner_mod, "set_activity", lambda sid, label, spin=False: pushes.append(label)
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
     )
 
     events = [
@@ -855,7 +866,70 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
             return "final"
 
     assert await llm._drain_stream(FakeStream()) == "final"
-    assert any(p.startswith("💭 checking the") for p in pushes)
+    assert any((p["stream"] or "").startswith("checking the") for p in pushes)
+    assert all(p["label"] == "Thinking" for p in pushes if p["stream"])
+
+
+async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced(
+    monkeypatch,
+):
+    import app.agent.runner as runner_mod
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-3"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
+            pushes.append(stream) if stream is not None else None
+        ),
+    )
+
+    chunk = "checking the accessibility tree for interactive elements and scoring candidates "
+    chunks = [chunk] * 6
+    final = _fake_response(reasoning_summary="".join(chunks))
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.2)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeResponses:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    fake_client = types.SimpleNamespace(responses=FakeResponses())
+    monkeypatch.setattr(type(llm), "get_client", lambda self: fake_client)
+
+    await llm.ainvoke(_messages())
+
+    assert len(pushes) >= 3
+    for earlier, later in zip(pushes, pushes[1:]):
+        assert later.startswith(earlier)
+        assert len(later) >= len(earlier)
+    assert len(pushes[-2]) > 140
+    assert pushes[-2].startswith("checking the accessibility")
+    assert pushes[-1] == "".join(chunks).strip()
 
 
 def _review_history(done: bool, verdict, reason: str = "needs work", steps: int = 1):
@@ -1042,14 +1116,20 @@ def test_friendly_error_clips_to_first_sentence():
     assert _friendly_error("tiny error") == "tiny error"
 
 
-def test_reasoning_title_strips_markdown_and_clips():
-    from app.agent.runner import _reasoning_title
+def test_reasoning_row_is_titled_by_how_long_it_took():
+    """Half a sentence of thought is not a headline; the whole thought is a
+    caret away in the card, so the row reports duration instead.
+    """
+    from app.agent.runner import _reasoned_title
 
-    t = _reasoning_title("**Finding links in iframes** I need to interact with an iframe. Then more.")
-    assert "**" not in t
-    assert t.endswith("…")
-    assert t.startswith("Finding links in iframes")
-    assert _reasoning_title("Short thought") == "Short thought"
+    assert _reasoned_title(4.23) == "Reasoned for 4.2s"
+    assert _reasoned_title(21.6) == "Reasoned for 21.6s"
+    assert _reasoned_title(34.7) == "Reasoned for 34.7s"
+    assert _reasoned_title(63) == "Reasoned for 1m 3s"
+    assert _reasoned_title(None) == "Reasoned"
+    assert _reasoned_title(0) == "Reasoned"
+    for value in (4.23, 63, None):
+        assert "…" not in _reasoned_title(value)
 
 
 def test_action_detail_humanises_bare_steps():
@@ -1424,3 +1504,252 @@ def test_budget_salvage_never_claims_success_without_a_schema():
 
     assert output == "some prose"
     assert is_successful is False
+
+
+async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeypatch):
+    """A live card longer than the row that replaces it would visibly shrink at
+    handoff, so both clip at the same character.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_MAX_CHARS
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-cap"
+    pushes: list[str] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
+            pushes.append(stream) if stream is not None else None
+        ),
+    )
+
+    chunk = "reasoning about the page " * 40
+    chunks = [chunk] * 16
+    whole = "".join(chunks)
+    assert len(whole) > _REASONING_MAX_CHARS * 2, "the fixture must outgrow the cap"
+    final = _fake_response(reasoning_summary=whole)
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.2)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeStreamHost:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(
+        type(llm),
+        "get_client",
+        lambda self: types.SimpleNamespace(responses=FakeStreamHost()),
+    )
+
+    await llm.ainvoke(_messages())
+
+    settled = " ".join(whole.split())[:_REASONING_MAX_CHARS]
+    assert pushes, "reasoning must reach the feed"
+    for push in pushes:
+        assert len(push) <= _REASONING_MAX_CHARS, "a live push outgrew the persisted row"
+        assert settled.startswith(push), "the live card must be a head slice, never a tail"
+    assert pushes[-1] == settled, "the last live card must match the row that replaces it"
+
+
+async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypatch):
+    """Adaptive thinking can open a block then stay silent, so the feed has to
+    say it is thinking on the block, not on the first token.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    llm._activity_session = "sess-silent"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
+            {"label": label, "spin": spin, "stream": stream}
+        ),
+    )
+
+    events = [
+        types.SimpleNamespace(
+            type="content_block_start",
+            content_block=types.SimpleNamespace(type="thinking"),
+        )
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            self._it = iter(events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_message(self):
+            return "final"
+
+    assert await llm._drain_stream(FakeStream()) == "final"
+    assert pushes == [{"label": _REASONING_LABEL, "spin": True, "stream": None}]
+
+
+def test_the_live_reasoning_label_carries_no_emoji():
+    """The live surface shows a shimmering label and a timer; an emoji standing
+    in for a spinner is what that surface replaced.
+    """
+    from app.agent.runner import _REASONING_LABEL
+
+    assert _REASONING_LABEL == "Thinking"
+    assert not any(ord(c) > 0x2000 for c in _REASONING_LABEL)
+
+
+async def test_reasoning_row_records_how_long_the_thought_took(monkeypatch):
+    """The live surface says "Thought for 4.2s"; reopening the session later
+    should say the same thing, so the elapsed time rides on the stored row.
+    """
+    import app.agent.runner as runner_mod
+
+    llm = _responses_llm(monkeypatch, "high")
+    llm._activity_session = "sess-duration"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: pushes.append(
+            {"label": label, "stream": stream, "seconds": seconds}
+        ),
+    )
+
+    chunks = ["weighing the ", "options on this page "] * 3
+    final = _fake_response(reasoning_summary="".join(chunks))
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            self._it = iter(chunks)
+            return self
+
+        async def __anext__(self):
+            try:
+                delta = next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+            await asyncio.sleep(0.05)
+            return types.SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta=delta
+            )
+
+        async def get_final_response(self):
+            return final
+
+    class FakeResponses:
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(
+        type(llm), "get_client", lambda self: types.SimpleNamespace(responses=FakeResponses())
+    )
+
+    await llm.ainvoke(_messages())
+
+    assert llm._last_reasoning_seconds is not None, "the thought was never timed"
+    assert llm._last_reasoning_seconds > 0
+    settle = [p for p in pushes if p["seconds"] is not None]
+    assert settle, "the settle push must carry the measured elapsed time"
+    assert settle[-1]["seconds"] == llm._last_reasoning_seconds
+
+
+async def test_thinking_declares_itself_so_only_thought_shimmers(monkeypatch):
+    """The dashboard spins a phase that acts and shimmers a phase that thinks, so
+    every push has to say which it is.
+    """
+    import app.agent.runner as runner_mod
+    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+
+    llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
+    llm._activity_session = "sess-kind"
+    pushes: list[dict] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "set_activity",
+        lambda sid, label, step=None, spin=False, stream=None, seconds=None, kind=None: (
+            pushes.append({"label": label, "spin": spin, "kind": kind})
+        ),
+    )
+
+    events = [
+        types.SimpleNamespace(
+            type="content_block_start",
+            content_block=types.SimpleNamespace(type="thinking"),
+        ),
+        types.SimpleNamespace(
+            type="content_block_delta",
+            delta=types.SimpleNamespace(type="thinking_delta", thinking="weighing it up"),
+        ),
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            self._it = iter(events)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def get_final_message(self):
+            return "final"
+
+    await llm._drain_stream(FakeStream())
+
+    assert pushes, "thinking must reach the feed"
+    for push in pushes:
+        assert push["label"] == _REASONING_LABEL
+        assert push["kind"] == "reasoning", f"an unmarked thought would spin: {push}"
+
+
+def test_every_acting_phase_says_it_is_working():
+    """A phase that acts without spin renders as a still label, which reads as a
+    stalled agent rather than a busy one.
+    """
+    import re
+
+    from app.agent import runner
+
+    src = Path(runner.__file__).read_text()
+    for label in ("Running actions", "Preparing next step"):
+        calls = re.findall(r"set_activity\([^)]*" + re.escape(label) + r"[^)]*\)", src)
+        assert calls, f"expected {label} to still be pushed"
+        for call in calls:
+            assert "spin=True" in call, f"{label} would render as a stalled agent: {call}"

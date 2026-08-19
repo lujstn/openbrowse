@@ -1,0 +1,308 @@
+.hidden {
+  display: none;
+}
+
+:root {
+  --ob-bg: #0a0a0a;
+  --ob-surface: #111;
+  --ob-surface-raised: #1a1a1a;
+  --ob-border: #222;
+  --ob-border-strong: #333;
+  --ob-text: #e5e5e5;
+  --ob-text-dim: #888;
+  --ob-text-faint: #666;
+  --ob-text-muted: #9ca3af;
+  --ob-accent: #60a5fa;
+  --ob-danger: #f87171;
+  --ob-danger-strong: #ef4444;
+  --ob-success: #34d399;
+
+  --ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ob-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ob-radius-sm: 6px;
+  --ob-radius-md: 8px;
+}
+
+/* @nonobvious(means): tweening grid-template-rows from 0fr to 1fr animates
+   height without a scrollHeight read; overflow:hidden on the inner element
+   clips the grow. */
+.ob-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s var(--ob-ease-in-out);
+}
+.ob-reveal.is-open {
+  grid-template-rows: 1fr;
+}
+.ob-reveal > .ob-reveal-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.ob-activity {
+  margin-bottom: 8px;
+}
+.ob-activity-card {
+  padding: 11px 13px 12px;
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-radius-md);
+  background: var(--ob-surface);
+  opacity: 0;
+  clip-path: inset(0 0 100% 0);
+  transform: translateY(4px);
+  transition:
+    opacity 0.28s var(--ob-ease-out),
+    clip-path 0.28s var(--ob-ease-out),
+    transform 0.28s var(--ob-ease-out);
+}
+.ob-activity.is-open .ob-activity-card {
+  opacity: 1;
+  clip-path: inset(0 0 0% 0);
+  transform: translateY(0);
+}
+
+.ob-activity-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ob-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ob-activity-text strong {
+  color: var(--ob-text);
+  font-weight: 600;
+}
+.ob-activity-text code {
+  background: var(--ob-surface-raised);
+  border: 1px solid var(--ob-border-strong);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--ob-text);
+}
+.ob-activity-text pre {
+  background: var(--ob-surface-raised);
+  border: 1px solid var(--ob-border-strong);
+  border-radius: var(--ob-radius-sm);
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 4px 0;
+}
+.ob-activity-text pre code {
+  border: none;
+  padding: 0;
+  background: none;
+}
+.ob-activity-text ul {
+  margin: 2px 0 2px 18px;
+  padding: 0;
+}
+.ob-caret {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  background: var(--ob-accent);
+  vertical-align: -0.15em;
+  margin-left: 1px;
+  animation: ob-caret-blink 1s step-end infinite;
+}
+@keyframes ob-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* @nonobvious(forced-by): background-clip:text needs a transparent fill to let
+   the gradient through, and Safari still wants the -webkit- pair. */
+.ob-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  color: var(--ob-text-dim);
+}
+.ob-activity.is-working.is-reasoning .ob-activity-label {
+  background-image: linear-gradient(
+    90deg,
+    var(--ob-text-dim) 35%,
+    var(--ob-text) 50%,
+    var(--ob-text-dim) 65%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: ob-shimmer 2.4s linear infinite;
+}
+@keyframes ob-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+.ob-activity-indicator {
+  display: flex;
+  flex: none;
+}
+/* a thinking phase has no spinner, and an empty box would still hold the gap,
+   indenting the label away from the prose underneath it */
+.ob-activity-indicator:empty {
+  display: none;
+}
+.ob-spin {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  opacity: 0.75;
+}
+.ob-spin i {
+  position: absolute;
+  top: 0;
+  left: 43.75%;
+  width: 12.5%;
+  height: 30%;
+  border-radius: 999px;
+  background: var(--ob-accent);
+  transform-origin: 50% 166.7%;
+  animation: ob-spin-fade 0.8s linear infinite;
+}
+@keyframes ob-spin-fade {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
+
+/* @nonobvious(forced-by): nothing in this row may stretch. A flexible label
+   pushes the timer to the far edge, which on a wide panel leaves a gulf of dead
+   space between a phase and its own clock. */
+.ob-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ob-activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.ob-activity.is-complete .ob-activity-toggle {
+  cursor: pointer;
+}
+.ob-activity-timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ob-text-faint);
+  flex: none;
+}
+.ob-activity-chev {
+  display: none;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--ob-text-faint);
+  transition: transform 0.24s var(--ob-ease-out);
+}
+.ob-activity-chev svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.ob-activity.is-complete .ob-activity-chev {
+  display: block;
+}
+.ob-activity.is-complete .ob-activity-toggle:hover .ob-activity-chev {
+  color: var(--ob-text-muted);
+}
+.ob-activity.is-complete.is-expanded .ob-activity-chev {
+  transform: rotate(180deg);
+}
+
+/* @nonobvious(forced-by): the fade has to live on a wrapper, because a mask on
+   the scrolling element itself travels with the scroll instead of pinning to
+   the visible edges. */
+.ob-activity.has-prose .ob-activity-viewport {
+  margin-top: 7px;
+}
+.ob-activity-viewport {
+  overflow: hidden;
+  max-height: var(--ob-activity-max);
+  transition: max-height 0.3s var(--ob-ease-in-out);
+}
+/* @nonobvious(deliberately-missing): only the top edge fades. The bottom is the
+   live edge carrying the newest words and the caret, and fading it hides the one
+   line the reader is actually waiting for. */
+.ob-activity-viewport.is-masked {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
+}
+.ob-activity.is-complete .ob-activity-viewport.is-masked {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.ob-activity.is-complete .ob-activity-viewport {
+  overflow-y: auto;
+}
+.ob-activity.is-complete:not(.is-expanded) .ob-activity-viewport {
+  max-height: 0;
+  margin-top: 0;
+}
+.ob-activity-track {
+  transition: transform 0.3s var(--ob-ease-out);
+}
+
+.ob-row-enter {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.3s var(--ob-ease-out),
+    transform 0.3s var(--ob-ease-out);
+}
+.ob-row-enter-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-reveal,
+  .ob-reveal > .ob-reveal-inner,
+  .ob-activity-card,
+  .ob-activity-viewport,
+  .ob-activity-track,
+  .ob-activity-chev,
+  .ob-row-enter {
+    transition: none !important;
+  }
+  .ob-activity.is-working.is-reasoning .ob-activity-label {
+    animation: none;
+    -webkit-text-fill-color: var(--ob-text-dim);
+    color: var(--ob-text-dim);
+  }
+  .ob-caret {
+    animation: none;
+  }
+  .ob-spin i {
+    animation: none;
+    opacity: 0.55;
+  }
+}
