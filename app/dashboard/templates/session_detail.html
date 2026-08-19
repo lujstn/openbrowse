@@ -59,11 +59,42 @@ OpenBrowse{% endblock %} {% block head %}
     font-size: 14px;
   }
   .msg-row {
-    padding: 6px 0;
-    border-bottom: 1px solid #1a1a1a;
+    /* @nonobvious(mirrors): the gutter centres against this band, not against the
+       whole entry, which grows when the step is expanded. Both read the same
+       value so the timestamp cannot drift off the row it belongs to. */
+    --msg-band: 26px;
+    --msg-pad-y: 4px;
     font-size: 13px;
     display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .msg-body {
+    flex: 1;
+    min-width: 0;
+    padding: var(--msg-pad-y) 8px;
+    border-radius: 6px;
+    transition: background 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .msg-row:hover .msg-body {
+    background: #0f0f12;
+  }
+  .msg-headline {
+    display: flex;
+    align-items: center;
     gap: 8px;
+    min-height: var(--msg-band);
+  }
+  .msg-row,
+  .msg-time,
+  .msg-dur,
+  .msg-cat,
+  .msg-step {
+    cursor: default;
+  }
+  .msg-summary,
+  .msg-cards .card-text {
+    cursor: text;
   }
   .msg-time {
     color: #555;
@@ -91,9 +122,6 @@ OpenBrowse{% endblock %} {% block head %}
   }
   .msg-type.result {
     color: #a78bfa;
-  }
-  .msg-summary {
-    flex: 1;
   }
   .result-box {
     background: #0a0a0a;
@@ -295,9 +323,15 @@ OpenBrowse{% endblock %} {% block head %}
   .msg-left {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 0;
     flex: 0 0 auto;
-    align-self: flex-start;
+    min-height: calc(var(--msg-band) + var(--msg-pad-y) * 2);
+  }
+  .msg-time,
+  .msg-dur {
+    line-height: 1.2;
   }
   .msg-dur {
     color: #64748b;
@@ -312,7 +346,7 @@ OpenBrowse{% endblock %} {% block head %}
     font-size: 11px;
     white-space: nowrap;
     flex: 0 0 auto;
-    align-self: flex-start;
+    align-self: center;
   }
   .msg-cat {
     display: inline-flex;
@@ -328,7 +362,7 @@ OpenBrowse{% endblock %} {% block head %}
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 0 0 auto;
-    align-self: flex-start;
+    align-self: center;
   }
   .cat-ico {
     font-size: 10px;
@@ -350,8 +384,9 @@ OpenBrowse{% endblock %} {% block head %}
   .cat-goal { color: #fca5a5; background: rgba(248, 113, 113, 0.14); }
   .cat-judge { color: #a5b4fc; background: rgba(165, 180, 252, 0.12); }
   .cat-system { color: #cbd5e1; background: rgba(203, 213, 225, 0.1); }
+  .cat-reasoning { color: #a1a1aa; background: rgba(161, 161, 170, 0.09); }
   .msg-summary {
-    flex: 1;
+    flex: 0 1 auto;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -368,7 +403,8 @@ OpenBrowse{% endblock %} {% block head %}
   .msg-caret {
     display: none;
     flex: 0 0 auto;
-    align-self: flex-start;
+    margin-left: auto;
+    align-self: center;
     color: #8b8b93;
     font-size: 10px;
     line-height: 1;
@@ -444,40 +480,63 @@ OpenBrowse{% endblock %} {% block head %}
     padding: 0 5px;
     border-radius: 4px;
   }
-  .msg-row { flex-wrap: wrap; }
   .msg-row.has-cards .msg-caret { display: inline-block; }
   .msg-cards {
-    flex-basis: 100%;
     display: none;
-    margin: 8px 0 4px 0;
-    padding: 2px 0 2px 14px;
-    border-left: 2px solid #26262b;
+    margin: 0 0 2px 0;
+    padding: 9px 44px 2px 10px;
+  }
+  .msg-cards .card {
+    width: fit-content;
+    max-width: 100%;
+  }
+  .msg-row.expanded .msg-cards .w {
+    animation: msg-word 0.26s ease-out both;
+  }
+  @keyframes msg-word {
+    from {
+      opacity: 0;
+      filter: blur(1.5px);
+    }
+    to {
+      opacity: 1;
+      filter: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .msg-row.expanded .msg-cards .w {
+      animation: none;
+    }
   }
   .msg-row.expanded .msg-cards { display: block; }
-  .msg-cards .card { display: block; padding: 8px 0; }
-  .msg-cards .card + .card { border-top: 1px solid #1c1c20; }
+  .msg-cards .card { display: block; padding: 5px 0; }
+  .msg-cards .card:first-child { padding-top: 0; }
+  .msg-cards .card:last-child { padding-bottom: 0; }
   .msg-cards .card-head {
     display: flex;
     align-items: center;
-    gap: 6px;
-    color: #71717a;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
-    margin-bottom: 4px;
+    gap: 9px;
+    color: #e8e8ea;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    margin-bottom: 3px;
   }
   .msg-cards .card-text {
     white-space: pre-wrap;
     word-break: break-word;
-    color: #d4d4d8;
+    color: #a1a1aa;
+    font-style: italic;
     font-size: 12.5px;
     line-height: 1.55;
     user-select: text;
   }
-  .msg-cards .card-think .card-text { color: #71717a; font-style: italic; }
-  .msg-cards .card-model-reason .card-text { color: #a1a1aa; font-style: italic; }
-  .msg-cards .card-error .card-text { color: #b91c1c; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .msg-cards .card-error .card-text {
+    color: #b91c1c;
+    font-style: normal;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
   .feed-btn.stop { color: #f87171; border-color: #402020; }
   .feed-btn.stop:hover { border-color: #f87171; }
   .followup { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #222; background: #0d0d0d; }
@@ -630,6 +689,46 @@ document.addEventListener("DOMContentLoaded", function () {
       const hh = String(d.getHours()).padStart(2, "0");
       const mm = String(d.getMinutes()).padStart(2, "0");
       el.textContent = hh + ":" + mm;
+    });
+  }
+
+  const WORD_STEP = 0.024;
+  const WORD_SWEEP_MAX = 0.2;
+  const WORD_STEP_MIN = 0.005;
+
+  // @nonobvious(forced-by): the whole passage has to land inside one budget, so a
+  // long thought shortens its own step rather than crawling word by word at the
+  // pace that suits a one-line field.
+  function prepareWords(row) {
+    if (!row || row.dataset.worded === "1") return;
+    row.dataset.worded = "1";
+    row.querySelectorAll(".msg-cards .card-text").forEach(function (el) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(function (node) {
+        const frag = document.createDocumentFragment();
+        node.nodeValue.split(/(\s+)/).forEach(function (token) {
+          if (!token) return;
+          if (/^\s+$/.test(token)) {
+            frag.appendChild(document.createTextNode(token));
+            return;
+          }
+          const span = document.createElement("span");
+          span.className = "w";
+          span.textContent = token;
+          frag.appendChild(span);
+        });
+        node.parentNode.replaceChild(frag, node);
+      });
+      const words = el.querySelectorAll(".w");
+      const step = Math.max(
+        WORD_STEP_MIN,
+        Math.min(WORD_STEP, WORD_SWEEP_MAX / Math.max(1, words.length - 1))
+      );
+      words.forEach(function (w, i) {
+        w.style.animationDelay = (i * step).toFixed(4) + "s";
+      });
     });
   }
 
@@ -880,6 +979,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!target) return;
     const row = target.closest(".msg-row");
     if (!row) return;
+    prepareWords(row);
     row.classList.toggle("expanded");
   });
 

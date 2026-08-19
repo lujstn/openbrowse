@@ -8,20 +8,24 @@
     <span class="msg-time" data-ts="{{ m.created_at }}"></span>
     {% if d.duration_s and md.category != 'reasoning' %}<span class="msg-dur">{{ d.duration_s }}s</span>{% endif %}
   </span>
+  <div class="msg-body">
+  <div class="msg-headline">
   <span class="msg-cat cat-{{ md.category }}"><span class="cat-ico">{{ CAT_ICON.get(md.category, '•') }}</span>{{ md.label }}</span>
   <span class="msg-summary{% if md.code %} msg-code{% endif %}">{{ md.summary }}</span>
   <button class="msg-caret" type="button" aria-label="Expand step details"></button>
+  </div>
   {% if has_cards %}
   <div class="msg-cards">
     {% if md.see %}<div class="card card-see"><div class="card-head">🖼️ What I'm seeing</div><div class="card-text">{{ md.see }}</div></div>{% endif %}
     {% if md.thinking %}<div class="card card-think"><div class="card-head">🧠 What I'm thinking</div><div class="card-text">{{ md.thinking }}</div></div>{% endif %}
     {% if md.plan %}<div class="card card-plan"><div class="card-head">🛝 How I see things going</div><div class="card-text">{{ md.plan }}</div></div>{% endif %}
     {% if md.next %}<div class="card card-next"><div class="card-head">➡️ My next step</div><div class="card-text">{{ md.next }}</div></div>{% endif %}
-    {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.model_reasoning | mdlite }}</div></div>{% endif %}
+    {% if md.model_reasoning %}<div class="card card-model-reason"><div class="card-text">{{ md.model_reasoning | mdlite }}</div></div>{% endif %}
     {% if md.result_snippet %}<div class="card card-result"><div class="card-head">🧾 What happened</div><div class="card-text">{{ md.result_snippet }}</div></div>{% endif %}
-    {% if md.reasoning %}<div class="card card-model-reason"><div class="card-head">💭 Reasoning</div><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
+    {% if md.reasoning %}<div class="card card-model-reason"><div class="card-text">{{ md.reasoning | mdlite }}</div></div>{% endif %}
     {% if md.error_full %}<div class="card card-error"><div class="card-head">⚠️ Full error</div><div class="card-text">{{ md.error_full }}</div></div>{% endif %}
   </div>
   {% endif %}
+  </div>
 </div>
 {% endfor %}
