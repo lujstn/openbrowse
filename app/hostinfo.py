@@ -27,6 +27,8 @@ SHARE_PRESETS: dict[str, float] = {"all": 0.9, "most": 0.7, "shared": 0.4}
 _SESSION_RAM_KB = 2 * 1024 * 1024
 _HARD_MAX_CEILING = 8
 _BUSY_LOAD_PER_CORE = 0.5
+_LIGHT_FLAGS_MAX_CORES = 4
+_LIGHT_FLAGS_MAX_MEM_KB = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,20 @@ def recommend(info: HostInfo, share: str) -> int:
 
 def recommendations(info: HostInfo) -> dict[str, int]:
     return {share: recommend(info, share) for share in SHARE_PRESETS}
+
+
+def light_flags_recommended(info: HostInfo) -> bool:
+    """True where the lighter browser profile is worth pre-selecting: small
+    boards and small hosts, where Chromium's GPU process and per-site renderer
+    fan-out cost more under a virtual display than they give back.
+    """
+    if not info.complete:
+        return False
+    return (
+        info.is_raspberry_pi
+        or info.cores <= _LIGHT_FLAGS_MAX_CORES
+        or info.mem_total_kb <= _LIGHT_FLAGS_MAX_MEM_KB
+    )
 
 
 def summary(info: HostInfo) -> str:

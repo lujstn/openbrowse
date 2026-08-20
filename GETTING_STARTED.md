@@ -64,7 +64,7 @@ To configure by hand instead, create `.env` in the repo root with:
 | `CLOUD_MAX_COST_FACTOR`   | _(Optional)_ Scales an incoming API `maxCostUsd` to local cost, for callers whose budgets are priced for a hosted service. Greater than 0 and at most 1; `0.5` turns a `$6` cap into `$3`. Default `1.0` (unscaled) |
 | `KEEP_ALIVE_IDLE_TIMEOUT` | _(Optional)_ Seconds a keep-alive session waits, browser and history still open, for its next follow-up before closing itself. Default `600`; `0` waits indefinitely. A parked session is also closed early if a newly started session needs its display slot |
 | `CAPTCHA_MAX_COST_USD`    | _(Optional)_ Ceiling on CAPTCHA spend for a single task. Default `0.03`, which buys about ten solves at Capsolver's most expensive tier; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's `maxCostUsd` for that task. Neither is a fixed total for a whole conversation, since both refresh on every follow-up. Set `0` to remove the ceiling |
-| `CHROME_LIGHT_FLAGS`      | _(Optional)_ `1` launches Chromium with lighter flags for constrained hosts (no GPU probe, capped helper processes and JS heap); default `0` |
+| `CHROME_LIGHT_FLAGS`      | _(Optional)_ `1` launches each browser with a lighter profile suited to small or GPU-less hosts; default `0`. The `/setup` screen pre-selects it on hardware where it helps; see "The lighter browser profile" below |
 
 Generate a secure `API_KEY`:
 
@@ -97,6 +97,16 @@ Coverage follows Capsolver's published service list, and a test refuses any task
 The live acceptance suite proves reCAPTCHA v2 (checkbox, explicit and invisible), reCAPTCHA v3 with multiple page actions, Cloudflare Turnstile, MTCaptcha and Geetest v3 and v4. Other solved types are implemented and covered by local tests, and each will tell you plainly if it cannot clear a challenge rather than reporting a success it did not achieve. A challenge type marked as not solved creates no task, so it costs nothing to meet one.
 
 A solved challenge is written straight into the page, so its checkbox does not visibly tick. Success is judged only by the page moving on, never by the widget's appearance, and a challenge that will not clear is reported as a failure rather than dressed up as one. Each solve is billed by Capsolver, typically well under a cent, is shown against the session, and stops at the `CAPTCHA_MAX_COST_USD` ceiling, which defaults to about ten solves for a single task; a keep-alive session gets that allowance again for each follow-up, and each task's solving counts against the session's cost budget for that task. Neither bounds a whole conversation: a session that takes ten follow-ups may spend the allowance ten times. After two solves that do not clear the same host, further spending on that host is refused for the rest of the session.
+
+### The lighter browser profile
+
+`CHROME_LIGHT_FLAGS=1` starts every browser session with a slimmer Chromium configuration: no GPU process (under a virtual display there is no GPU acceleration to lose), at most four renderer processes shared between tabs, a 256MB JavaScript heap per renderer, Chromium's own low-end device mode, and no background update traffic.
+
+On small machines this is usually a straight win. Each session starts with a lower memory floor, and page-load bursts contend less with everything else, which matters most when more than one session runs at once. On a Raspberry Pi 5 it measured faster and lighter than the default in both solo and concurrent runs, with identical output quality.
+
+The trade-off is the JavaScript heap cap: an unusually heavy web application could run slower against it, or in rare cases fail. If one specific site misbehaves with the profile on, turn it off and restart; that is the first thing to try.
+
+The `/setup` screen pre-selects the profile on hardware where it earns its keep (a Raspberry Pi, four cores or fewer, or 8GB of memory or less) and leaves it unticked elsewhere; either way the choice is yours. Change it any time from the dashboard under **Settings**, where the Capacity card notes whether it is enabled or recommended for the machine: set `CHROME_LIGHT_FLAGS` to `1` (or clear it to turn the profile off) and save, which restarts the server.
 
 ---
 
