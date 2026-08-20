@@ -17,11 +17,11 @@ def test_version_flag_exits_zero():
     assert excinfo.value.code == 0
 
 
-def test_no_command_serves(monkeypatch):
-    served: list[tuple] = []
-    monkeypatch.setattr(cli, "_cmd_serve", lambda args: served.append((args.host, args.port)) or 0)
+def test_no_command_prints_help(capsys):
     assert cli.main([]) == 0
-    assert served == [(None, None)]
+    out = capsys.readouterr().out
+    assert "openbrowse start" in out
+    assert "runs now and on every boot" in out
 
 
 def test_serve_passes_host_and_port(monkeypatch):

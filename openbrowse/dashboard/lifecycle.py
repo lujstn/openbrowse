@@ -27,9 +27,9 @@ def schedule_restart() -> None:
         except Exception:
             logger.warning("display cleanup before restart failed", exc_info=True)
         try:
-            subprocess.Popen(
-                ["sudo", "-n", "systemctl", "restart", "browser-use.service"]
-            )
+            from openbrowse.service import unit_name
+
+            subprocess.Popen(["sudo", "-n", "systemctl", "restart", unit_name()])
         except Exception:
             logger.warning("systemctl restart failed", exc_info=True)
         # @nonobvious(forced-by): under systemd a non-zero exit revives the

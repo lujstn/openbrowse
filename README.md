@@ -96,8 +96,10 @@ OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install openbrowse
-openbrowse
+openbrowse start
 ```
+
+`openbrowse start` registers OpenBrowse as a systemd service, so it is running now **and starts automatically on every boot from here on** (`openbrowse stop --disable` undoes that). On a machine without systemd it falls back to running in the foreground, as does `openbrowse serve` anywhere.
 
 To run from source instead, clone the repo and use uv directly:
 
@@ -105,7 +107,7 @@ To run from source instead, clone the repo and use uv directly:
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse
 uv sync
-uv run openbrowse
+uv run openbrowse serve
 ```
 
 Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.

@@ -117,10 +117,10 @@ The `/setup` screen pre-selects the profile on hardware where it earns its keep 
 
 ## 5. Verify the Setup
 
-Start the server:
+Start the server in the foreground for a first look (the next sections make it a proper service):
 
 ```bash
-openbrowse
+openbrowse serve
 ```
 
 Expected output:
@@ -186,13 +186,30 @@ sudo tailscale funnel --bg off
 
 ## 7. Run as a Systemd Service
 
-Create the unit file:
+One command does it:
 
 ```bash
-sudo nano /etc/systemd/system/browser-use.service
+openbrowse start
 ```
 
-Paste the following (adjust `User` and `WorkingDirectory` if your username differs):
+This registers OpenBrowse as a systemd service (reusing an existing `openbrowse.service` or legacy `browser-use.service` unit if one is already there), starts it immediately, and enables it **so it starts automatically on every boot from now on**. It says so when it succeeds. Manage it afterwards with:
+
+```bash
+openbrowse status
+openbrowse restart
+openbrowse stop             # stops now; still starts on the next boot
+openbrowse stop --disable   # stops now and stays off at boot
+```
+
+### Manual unit (optional — needed for the Tailscale Funnel hooks)
+
+The generated unit is deliberately minimal. If you want the funnel to follow the service up and down, or want to see exactly what runs, write the unit yourself instead:
+
+```bash
+sudo nano /etc/systemd/system/openbrowse.service
+```
+
+Paste the following (adjust `User` and the paths if your username differs):
 
 ```ini
 [Unit]
@@ -205,7 +222,7 @@ Type=simple
 User=<user>
 WorkingDirectory=/home/<user>
 EnvironmentFile=-/home/<user>/.openbrowse/.env
-ExecStart=/home/<user>/.local/bin/openbrowse
+ExecStart=/home/<user>/.local/bin/openbrowse serve
 ExecStartPost=+/usr/bin/tailscale funnel --bg 8420
 ExecStopPost=-+/usr/bin/tailscale funnel --bg off
 Restart=on-failure
@@ -243,14 +260,14 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable browser-use
-sudo systemctl start browser-use
+sudo systemctl enable openbrowse
+sudo systemctl start openbrowse
 ```
 
 Check status:
 
 ```bash
-sudo systemctl status browser-use
+sudo systemctl status openbrowse
 ```
 
 Verify the funnel is active:
@@ -262,7 +279,7 @@ tailscale funnel status
 View live logs:
 
 ```bash
-journalctl -u browser-use -f
+journalctl -u openbrowse -f
 ```
 
 ---
@@ -278,7 +295,7 @@ openbrowse check-update
 openbrowse update
 ```
 
-After a shell update, restart the service (`sudo systemctl restart browser-use.service`) — the dashboard button does this for you.
+After a shell update, restart the service (`openbrowse restart`) — the dashboard button does this for you.
 
 ---
 
@@ -428,7 +445,7 @@ sudo apt install -y xvfb x11vnc novnc websockify
 Also check that the display processes started cleanly in the server logs:
 
 ```bash
-journalctl -u browser-use -n 50
+journalctl -u openbrowse -n 50
 ```
 
 ---

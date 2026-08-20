@@ -25,6 +25,52 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_start(args: argparse.Namespace) -> int:
+    from openbrowse import service
+
+    if not service.systemd_available():
+        print(
+            "systemd is not available on this machine, so OpenBrowse cannot be "
+            "registered to start automatically on boot. Running in the "
+            "foreground instead (Ctrl+C stops it)."
+        )
+        return _cmd_serve(args)
+    ok, message = service.start()
+    print(message)
+    return 0 if ok else 1
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    from openbrowse import service
+
+    if not service.systemd_available():
+        print("systemd is not available; stop the foreground process with Ctrl+C.")
+        return 1
+    ok, message = service.stop(disable=args.disable)
+    print(message)
+    return 0 if ok else 1
+
+
+def _cmd_restart(_: argparse.Namespace) -> int:
+    from openbrowse import service
+
+    if not service.systemd_available():
+        print("systemd is not available; restart the foreground process by hand.")
+        return 1
+    ok, message = service.restart()
+    print(message)
+    return 0 if ok else 1
+
+
+def _cmd_status(_: argparse.Namespace) -> int:
+    from openbrowse import service
+
+    if not service.systemd_available():
+        print("systemd is not available; there is no managed service to inspect.")
+        return 1
+    return service.status()
+
+
 def _cmd_version(_: argparse.Namespace) -> int:
     print(f"openbrowse {__version__}")
     return 0
@@ -82,7 +128,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
-    serve = sub.add_parser("serve", help="run the server (the default)")
+    start = sub.add_parser(
+        "start",
+        help="run as a service that starts automatically on boot (systemd)",
+    )
+    start.add_argument("--host", default=None, help=argparse.SUPPRESS)
+    start.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
+    start.set_defaults(func=_cmd_start)
+
+    stop = sub.add_parser("stop", help="stop the service")
+    stop.add_argument(
+        "--disable", action="store_true", help="also stop it starting on boot"
+    )
+    stop.set_defaults(func=_cmd_stop)
+
+    restart = sub.add_parser("restart", help="restart the service")
+    restart.set_defaults(func=_cmd_restart)
+
+    status = sub.add_parser("status", help="show the service status")
+    status.set_defaults(func=_cmd_status)
+
+    serve = sub.add_parser("serve", help="run the server in the foreground")
     serve.add_argument("--host", default=None, help="bind address (default 0.0.0.0)")
     serve.add_argument("--port", type=int, default=None, help="port (default 8420)")
     serve.set_defaults(func=_cmd_serve)
@@ -103,9 +169,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
-        args.host = None
-        args.port = None
-        return _cmd_serve(args)
+        parser.print_help()
+        print(
+            "\nMost people want: openbrowse start"
+            "  (runs now and on every boot)"
+        )
+        return 0
     return args.func(args)
 
 
