@@ -20,7 +20,13 @@ _DEVICE_TREE_MODEL = "/proc/device-tree/model"
 _CGROUP_CONTROLLERS = "/sys/fs/cgroup/cgroup.controllers"
 _MOUNTS_PATH = "/proc/mounts"
 _SYSTEMD_DIR = "/run/systemd/system"
-_CAPACITY_OVERRIDE = "/etc/systemd/system/browser-use.service.d/50-capacity.conf"
+# @nonobvious(must-hold) the systemd unit name is not only what a restart targets: the
+# capacity drop-in lives in a directory named after it, so a reader holding a different
+# spelling reports host tuning as still to do on a machine that has already been tuned.
+# Both readers take it from here, and scripts/host_tune.sh mirrors it.
+UNIT_NAME = "openbrowse.service"
+
+_CAPACITY_OVERRIDE = f"/etc/systemd/system/{UNIT_NAME}.d/50-capacity.conf"
 
 SHARE_PRESETS: dict[str, float] = {"all": 0.9, "most": 0.7, "shared": 0.4}
 

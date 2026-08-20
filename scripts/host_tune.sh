@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SHARE="most"
-SERVICE="browser-use.service"
+SERVICE="openbrowse.service"
 DRY_RUN=0
 SERVICE_USER="${SUDO_USER:-$(id -un)}"
 

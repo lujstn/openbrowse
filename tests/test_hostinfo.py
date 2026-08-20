@@ -177,3 +177,13 @@ def test_light_flags_recommended_for_constrained_hosts():
     assert hostinfo.light_flags_recommended(small_ram) is True
 
     assert hostinfo.light_flags_recommended(_pi5_info(cores=0)) is False
+
+
+def test_capacity_override_path_is_derived_from_the_unit_name():
+    """The drop-in directory is named after the systemd unit, so the two must not be
+    able to disagree: a rename that missed this would report tuning as still to do."""
+    assert hostinfo.UNIT_NAME == "openbrowse.service"
+    assert (
+        hostinfo._CAPACITY_OVERRIDE
+        == f"/etc/systemd/system/{hostinfo.UNIT_NAME}.d/50-capacity.conf"
+    )
