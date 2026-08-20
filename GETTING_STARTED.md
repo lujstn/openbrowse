@@ -1,12 +1,11 @@
 # Getting started with OpenBrowse
 
-The full documentation lives at **<https://openbrowse.co/docs>**. Every page there
-is also available as plain Markdown by adding `.md` to its address, so
-<https://openbrowse.co/docs/installation.md> works if you would rather read it in a
-terminal.
+Our full documentation lives at **<https://openbrowse.co/docs>**. If you're using
+a coding agent, you can give them the URL <https://openbrowse.co/llms.txt> or
+<https://openbrowse.co/llms-full.txt> to allow them to navigate our docs.
 
-This file is the short version. It exists so that someone who has just cloned the
-repository can get a browser agent running without leaving the checkout.
+If you're keeping things focused, you can add `.md` to the end of any page, e.g.
+<https://openbrowse.co/docs/installation.md>.
 
 ## What you need
 
@@ -28,42 +27,26 @@ sudo apt install -y xvfb x11vnc novnc websockify \
   libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libgtk-3-0
 ```
 
-Then install OpenBrowse whichever way you already install Python applications.
-All three are equally supported.
-
-[pipx](https://pipx.pypa.io/) comes from Debian's own repositories, so it needs
-no third-party installer:
+You can install OpenBrowse however you normally install Python applications:
 
 ```bash
-sudo apt install pipx
-pipx install openbrowse
-openbrowse start
-```
-
-[uv](https://docs.astral.sh/uv/), if you would rather:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv
 uv tool install openbrowse
 openbrowse start
+
+# pipx
+pipx install openbrowse
+openbrowse start
+
+# venv
+source <path-to-venv>/bin/activate
+pip install openbrowse
+openbrowse start
 ```
 
-Or pip, into a virtual environment. An existing one is fine:
-
-```bash
-python3 -m venv ~/.venvs/openbrowse
-~/.venvs/openbrowse/bin/pip install openbrowse
-~/.venvs/openbrowse/bin/openbrowse start
-```
-
-None is preferred. OpenBrowse works out which one installed it and upgrades
-itself with that same tool, so the installer that owns the app stays the one
-that changes it.
-
-pip needs the virtual environment because Raspberry Pi OS marks its system
-Python as externally managed and pip refuses to install into it. pipx and uv
-each make an isolated environment for you; that is the only real difference
-between them and pip here.
+> [!NOTE]
+> `pipx` and `uv` each make an isolated environment for you; you **must** create
+> or use an existing virtual environment (`venv`) to use plain `pip`.
 
 `openbrowse start` registers OpenBrowse as a systemd service, so it is running
 now and starts again on every boot. `openbrowse stop --disable` undoes that, and

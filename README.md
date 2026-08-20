@@ -95,7 +95,6 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 <summary>See all supported models</summary>
 
-
 > - OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
 > - Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
 > - Google: ⚠️ Coming soon
@@ -104,37 +103,24 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 ## Quick start
 
-Install it whichever way you already install Python applications. All three are equally supported.
-
-With [pipx](https://pipx.pypa.io/), which Debian and Raspberry Pi OS package for you:
+Install OpenBrowse with your favorite package manager:
 
 ```bash
-sudo apt install pipx
-pipx install openbrowse
-openbrowse start
-```
-
-With [uv](https://docs.astral.sh/uv/):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv
 uv tool install openbrowse
 openbrowse start
+
+# pipx
+pipx install openbrowse
+openbrowse start
+
+# venv
+source <path-to-venv>/bin/activate
+pip install openbrowse
+openbrowse start
 ```
 
-With pip, into a virtual environment. An existing one is fine:
-
-```bash
-python3 -m venv ~/.venvs/openbrowse
-~/.venvs/openbrowse/bin/pip install openbrowse
-~/.venvs/openbrowse/bin/openbrowse start
-```
-
-OpenBrowse works out which of the three installed it and upgrades itself with that same tool, so `openbrowse update` and the dashboard's one-click update behave identically whichever you picked.
-
-pip needs the virtual environment because Debian and Raspberry Pi OS mark their system Python as externally managed, and pip refuses to install into it. pipx and uv both make an isolated environment for you, which is the only real difference between them and pip here.
-
-To run from source instead, clone the repo and use uv directly:
+To install from source, clone the repo and use uv directly:
 
 ```bash
 git clone git@github.com:lujstn/openbrowse.git
