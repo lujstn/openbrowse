@@ -153,6 +153,7 @@ def _uninstall_env(monkeypatch, tmp_path, method="pipx"):
 
     monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(cache_dir))
     monkeypatch.setenv("HT_CMDLINE", str(cmdline))
+    monkeypatch.setenv("HT_SUDOERS_DIR", str(tmp_path / "sudoers.d"))
     monkeypatch.setattr(
         "openbrowse.config.settings", replace(settings, home_dir=data_dir)
     )
@@ -213,3 +214,27 @@ def test_uninstall_uses_uv_for_uv_tools(monkeypatch, tmp_path):
     _, _, _, ran = _uninstall_env(monkeypatch, tmp_path, method="uv-tool")
     assert cli.main(["uninstall", "--yes"]) == 0
     assert ["/fake/uv", "tool", "uninstall", "openbrowse"] in ran
+
+
+def test_uninstall_handles_unreadable_privileged_dirs(monkeypatch, tmp_path):
+    """/etc/sudoers.d is 0750 root-only on Linux: probing a child raises
+    PermissionError for a normal user, and uninstall must shrug, not crash."""
+    _, _, _, ran = _uninstall_env(monkeypatch, tmp_path)
+    locked = tmp_path / "locked-sudoers"
+    monkeypatch.setenv("HT_SUDOERS_DIR", str(locked))
+
+    real_exists = os.path.exists
+
+    import pathlib
+
+    original = pathlib.Path.exists
+
+    def guarded(self, **kw):
+        if str(self).startswith(str(locked)):
+            raise PermissionError(13, "Permission denied", str(self))
+        return original(self, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "exists", guarded)
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert ["sudo", "rm", "-f", str(locked / "openbrowse-hosttune")] in ran
+    del real_exists

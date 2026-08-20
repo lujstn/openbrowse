@@ -122,7 +122,9 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
 
     unit_path = Path("/etc/systemd/system") / UNIT_NAME
     dropin_dir = Path(f"/etc/systemd/system/{UNIT_NAME}.d")
-    sudoers_file = Path("/etc/sudoers.d/openbrowse-hosttune")
+    sudoers_file = (
+        Path(os.environ.get("HT_SUDOERS_DIR", "/etc/sudoers.d")) / "openbrowse-hosttune"
+    )
     cmdline_path = Path(os.environ.get("HT_CMDLINE", "/boot/firmware/cmdline.txt"))
     data_dir = settings.home_dir
     cache_dir = Path(os.environ.get("CLOAKBROWSER_CACHE_DIR", "") or (Path.home() / ".cloakbrowser"))
@@ -133,10 +135,22 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
     else:
         package_line = f"the installed package (via {method})"
 
+    # @nonobvious(forced-by): /etc/sudoers.d is 0750 root-only, so for a normal
+    # user even asking whether the grant file exists raises PermissionError.
+    # None means "cannot tell"; removal handles it with an unconditional rm -f.
+    unit_present = _maybe_exists(unit_path)
+    dropin_present = _maybe_exists(dropin_dir)
+    sudoers_present = _maybe_exists(sudoers_file)
+
+    def _planned(present: bool | None, label: str) -> str | None:
+        if present is False:
+            return None
+        return label + (" (if present)" if present is None else "")
+
     plan = [
-        f"systemd service and unit ({unit_path})" if unit_path.exists() else None,
-        f"capacity drop-in ({dropin_dir})" if dropin_dir.exists() else None,
-        f"tuning sudoers grant ({sudoers_file})" if sudoers_file.exists() else None,
+        _planned(unit_present, f"systemd service and unit ({unit_path})"),
+        _planned(dropin_present, f"capacity drop-in ({dropin_dir})"),
+        _planned(sudoers_present, f"tuning sudoers grant ({sudoers_file})"),
         "psi=1 boot flag" if _cmdline_has_psi(cmdline_path) else None,
         None if args.keep_data else f"all data including .env and profiles ({data_dir})",
         None if args.keep_browser else f"the downloaded browser ({cache_dir})",
@@ -164,13 +178,15 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
         return True
 
     failures = 0
-    if unit_path.exists() or dropin_dir.exists() or sudoers_file.exists():
+    if unit_present is not False or dropin_present is not False or sudoers_present is not False:
         print("Removing the service (sudo may prompt for your password)...")
-        run(["sudo", "systemctl", "disable", "--now", UNIT_NAME])
-        for target in (unit_path, sudoers_file):
-            if target.exists() and not run(["sudo", "rm", "-f", str(target)]):
+        if unit_present is not False:
+            run(["sudo", "systemctl", "disable", "--now", UNIT_NAME])
+            if not run(["sudo", "rm", "-f", str(unit_path)]):
                 failures += 1
-        if dropin_dir.exists() and not run(["sudo", "rm", "-rf", str(dropin_dir)]):
+        if sudoers_present is not False and not run(["sudo", "rm", "-f", str(sudoers_file)]):
+            failures += 1
+        if dropin_present is not False and not run(["sudo", "rm", "-rf", str(dropin_dir)]):
             failures += 1
         run(["sudo", "systemctl", "daemon-reload"])
     if _cmdline_has_psi(cmdline_path):
@@ -207,6 +223,13 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
         return 1
     print("OpenBrowse is fully uninstalled.")
     return 0
+
+
+def _maybe_exists(path: Path) -> bool | None:
+    try:
+        return path.exists()
+    except OSError:
+        return None
 
 
 def _cmdline_has_psi(cmdline_path: Path) -> bool:
