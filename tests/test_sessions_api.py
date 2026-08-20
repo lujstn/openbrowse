@@ -251,11 +251,31 @@ async def test_get_session(client):
     resp = await client.get(f"/v3/sessions/{sid}")
     assert resp.status_code == 200
     assert resp.json()["id"] == sid
+    assert resp.json()["failureKind"] is None
+    assert resp.json()["failureStatusCode"] is None
 
 
 async def test_get_nonexistent_session(client):
     resp = await client.get("/v3/sessions/nonexistent")
     assert resp.status_code == 404
+
+
+async def test_session_response_surfaces_failure_fields(client):
+    from app.db import crud
+
+    create_resp = await client.post("/v3/sessions", json={})
+    sid = create_resp.json()["id"]
+    await crud.update_session(
+        sid,
+        status="error",
+        failure_kind="provider_rate_limit",
+        failure_status_code=429,
+    )
+
+    resp = await client.get(f"/v3/sessions/{sid}")
+    assert resp.status_code == 200
+    assert resp.json()["failureKind"] == "provider_rate_limit"
+    assert resp.json()["failureStatusCode"] == 429
 
 
 async def test_list_messages_empty(client):
