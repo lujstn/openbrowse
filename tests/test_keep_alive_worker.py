@@ -191,6 +191,19 @@ async def _wait_for(predicate, timeout: float = 3.0):
     return False
 
 
+async def _wait_for_status(session_id: str, want: str, timeout: float = 3.0) -> bool:
+    """The row only turns 'idle' once the worker has parked, so waiting on the
+    parked flag and reading the row in the same breath is a race a loaded runner
+    loses. Wait for the thing actually being asserted."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        row = await crud.get_session(session_id)
+        if row and row["status"] == want:
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
 async def _summaries(session_id: str) -> list[str]:
     messages, _ = await crud.list_messages(session_id, limit=200)
     return [m["summary"] for m in messages]
@@ -207,8 +220,8 @@ async def test_follow_up_continues_the_same_agent_and_browser():
     worker = asyncio.create_task(runner_mod.run_agent_session(sid))
 
     assert await _wait_for(lambda: live.is_parked(sid))
+    assert await _wait_for_status(sid, "idle")
     first = await crud.get_session(sid)
-    assert first["status"] == "idle"
     assert first["output"] == "answer 1"
     assert (await _types(sid)).count("planning") == 1
 
@@ -226,8 +239,8 @@ async def test_follow_up_continues_the_same_agent_and_browser():
     assert agent.step_caps == [runner_mod._TURN_STEP_BUDGET, runner_mod._TURN_STEP_BUDGET + 1]
     assert (await _types(sid)).count("planning") == 1
 
+    assert await _wait_for_status(sid, "idle")
     second = await crud.get_session(sid)
-    assert second["status"] == "idle"
     assert second["output"] == "answer 2"
     assert second["title"] == "Summarise the news"
 
