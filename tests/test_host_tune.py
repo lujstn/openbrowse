@@ -58,7 +58,7 @@ def test_dry_run_writes_nothing(tmp_path):
 def test_applies_and_is_idempotent(tmp_path):
     proc, systemd_dir, cmdline, sudoers_dir = _run(tmp_path, "--share", "shared")
     assert proc.returncode == 0, proc.stderr
-    override = systemd_dir / "browser-use.service.d" / "50-capacity.conf"
+    override = systemd_dir / "openbrowse.service.d" / "50-capacity.conf"
     content = override.read_text()
     assert "CPUWeight=300" in content
     assert "MemoryHigh=6553M" in content
@@ -81,8 +81,14 @@ def test_share_changes_rewrite_override(tmp_path):
     _run(tmp_path, "--share", "shared")
     proc, systemd_dir, _, _ = _run(tmp_path, "--share", "all")
     assert proc.returncode == 0
-    content = (systemd_dir / "browser-use.service.d" / "50-capacity.conf").read_text()
+    content = (systemd_dir / "openbrowse.service.d" / "50-capacity.conf").read_text()
     assert "MemoryHigh=14745M" in content
+
+
+def test_service_flag_overrides_override_dir(tmp_path):
+    proc, systemd_dir, _, _ = _run(tmp_path, "--service", "custom.service")
+    assert proc.returncode == 0
+    assert (systemd_dir / "custom.service.d" / "50-capacity.conf").exists()
 
 
 def test_psi_skipped_when_present(tmp_path):

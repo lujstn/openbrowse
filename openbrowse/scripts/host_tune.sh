@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SHARE="most"
-SERVICE="browser-use.service"
+SERVICE="openbrowse.service"
 DRY_RUN=0
 SERVICE_USER="${SUDO_USER:-$(id -un)}"
 
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # @nonobvious(mirrors): percentages must stay in sync with SHARE_PRESETS in
-# app/hostinfo.py — the dashboard shows recommendations computed from those.
+# openbrowse/hostinfo.py — the dashboard shows recommendations computed from those.
 case "$SHARE" in
   all) SHARE_PCT=90 ;;
   most) SHARE_PCT=70 ;;

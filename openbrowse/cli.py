@@ -109,8 +109,10 @@ def _cmd_update(_: argparse.Namespace) -> int:
 
 
 def _cmd_tune(args: argparse.Namespace) -> int:
+    from openbrowse import service
+
     script = Path(__file__).resolve().parent / "scripts" / "host_tune.sh"
-    command = ["bash", str(script), "--share", args.share]
+    command = ["bash", str(script), "--share", args.share, "--service", service.UNIT_BASENAME]
     if args.dry_run:
         command.append("--dry-run")
     if os.geteuid() != 0:

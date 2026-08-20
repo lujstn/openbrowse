@@ -192,7 +192,7 @@ One command does it:
 openbrowse start
 ```
 
-This registers OpenBrowse as a systemd service (reusing an existing `openbrowse.service` or legacy `browser-use.service` unit if one is already there), starts it immediately, and enables it **so it starts automatically on every boot from now on**. It says so when it succeeds. Manage it afterwards with:
+This registers OpenBrowse as a systemd service (reusing an existing `openbrowse.service` unit if one is already there), starts it immediately, and enables it **so it starts automatically on every boot from now on**. It says so when it succeeds. Manage it afterwards with:
 
 ```bash
 openbrowse status

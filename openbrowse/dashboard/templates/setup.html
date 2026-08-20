@@ -19,7 +19,7 @@
   </ul>
   {% if actions %}
   <p>Apply the recommended items with one command on this machine:</p>
-  <pre>sudo bash scripts/host_tune.sh --share {{ share }}</pre>
+  <pre>openbrowse tune --share {{ share }}</pre>
   <p>It is safe to re-run, and it also enables the dashboard to apply future tuning changes at the click of a button.</p>
   {% endif %}
   {% endif %}
@@ -30,8 +30,8 @@
   </form>
   {% else %}
   <p>Restart the server to apply the configuration:</p>
-  <pre>sudo systemctl restart browser-use.service
-# or, if you run it manually, stop and re-run uvicorn</pre>
+  <pre>sudo systemctl restart openbrowse.service
+# or, if you run it manually, stop and re-run openbrowse serve</pre>
   {% endif %}
   <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>
   <h2>Reach it from anywhere (optional)</h2>

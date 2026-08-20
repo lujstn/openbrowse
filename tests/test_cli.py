@@ -31,6 +31,19 @@ def test_serve_passes_host_and_port(monkeypatch):
     assert served == [("127.0.0.1", 9000)]
 
 
+def test_tune_targets_the_openbrowse_unit(monkeypatch):
+    execs: list[list[str]] = []
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli.os, "execvp", lambda file, argv: execs.append(list(argv)))
+    cli.main(["tune", "--share", "shared", "--dry-run"])
+    (argv,) = execs
+    assert argv[0] == "bash"
+    assert argv[1].endswith("host_tune.sh")
+    assert ["--share", "shared"] == argv[2:4]
+    assert ["--service", "openbrowse.service"] == argv[4:6]
+    assert argv[6] == "--dry-run"
+
+
 def test_check_update_reports_available(monkeypatch, capsys):
     async def fake_check():
         return UpdateState(current="1.0.0", latest="2.0.0", available=True)

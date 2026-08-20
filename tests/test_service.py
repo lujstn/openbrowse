@@ -9,21 +9,6 @@ from openbrowse import cli, service
 from openbrowse.config import settings
 
 
-def test_unit_name_defaults_to_openbrowse(tmp_path):
-    assert service.unit_name(tmp_path) == "openbrowse.service"
-
-
-def test_unit_name_keeps_legacy_unit(tmp_path):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
-    assert service.unit_name(tmp_path) == "browser-use.service"
-
-
-def test_unit_name_prefers_new_unit_over_legacy(tmp_path):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
-    (tmp_path / "openbrowse.service").write_text("[Unit]\n")
-    assert service.unit_name(tmp_path) == "openbrowse.service"
-
-
 def test_unit_content_shape(monkeypatch):
     monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/home/pi/.local/bin/openbrowse")
     content = service.unit_content()
@@ -63,13 +48,13 @@ def test_start_installs_enables_and_says_boot(tmp_path, sudo_calls, monkeypatch)
 
 
 def test_start_reuses_existing_unit(tmp_path, sudo_calls):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
+    (tmp_path / "openbrowse.service").write_text("[Unit]\n")
 
     ok, message = service.start(tmp_path)
 
     assert ok is True
     commands = [c for c, _ in sudo_calls]
-    assert commands == [["systemctl", "enable", "--now", "browser-use.service"]]
+    assert commands == [["systemctl", "enable", "--now", "openbrowse.service"]]
     assert "start automatically every time this machine boots" in message
 
 
@@ -83,16 +68,16 @@ def test_start_reports_enable_failure(tmp_path, monkeypatch):
     assert ok is False
 
 
-def test_stop_keeps_boot_start_by_default(tmp_path, sudo_calls):
-    ok, message = service.stop(disable=False, systemd_dir=tmp_path)
+def test_stop_keeps_boot_start_by_default(sudo_calls):
+    ok, message = service.stop(disable=False)
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [["systemctl", "stop", "openbrowse.service"]]
     assert "still start automatically on the next boot" in message
 
 
-def test_stop_disable_removes_boot_start(tmp_path, sudo_calls):
-    ok, message = service.stop(disable=True, systemd_dir=tmp_path)
+def test_stop_disable_removes_boot_start(sudo_calls):
+    ok, message = service.stop(disable=True)
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [
@@ -101,8 +86,8 @@ def test_stop_disable_removes_boot_start(tmp_path, sudo_calls):
     assert "no longer start on boot" in message
 
 
-def test_restart(tmp_path, sudo_calls):
-    ok, _ = service.restart(tmp_path)
+def test_restart(sudo_calls):
+    ok, _ = service.restart()
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [["systemctl", "restart", "openbrowse.service"]]

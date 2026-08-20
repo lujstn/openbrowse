@@ -1160,6 +1160,7 @@ async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypat
     assert "Host tuning applied" in resp.text
     assert "wrote override" in resp.text
     assert any("--share" in c and "shared" in c for c in calls)
+    assert any("--service" in c and "openbrowse.service" in c for c in calls)
 
 
 async def test_settings_host_tune_rejects_bad_share(client, monkeypatch):

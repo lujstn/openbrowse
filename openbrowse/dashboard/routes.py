@@ -40,6 +40,7 @@ from openbrowse.config import settings
 from openbrowse.dashboard.lifecycle import schedule_restart
 from openbrowse.db import crud
 from openbrowse.profiles.storage import cookie_domains, read_state_file
+from openbrowse.service import UNIT_BASENAME
 
 logger = logging.getLogger(__name__)
 
@@ -819,7 +820,10 @@ async def settings_host_tune(request: Request, share: str = Form("most")):
         share = "most"
     try:
         result = subprocess.run(
-            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--share", share],
+            [
+                "sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT),
+                "--share", share, "--service", UNIT_BASENAME,
+            ],
             capture_output=True,
             text=True,
             timeout=30,

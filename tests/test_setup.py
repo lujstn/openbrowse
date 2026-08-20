@@ -137,7 +137,7 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert "MAX_CONCURRENT_SESSIONS=4" in (tmp_path / ".env").read_text()
-    assert "host_tune.sh --share all" in resp.text
+    assert "openbrowse tune --share all" in resp.text
     assert "Restart now" in resp.text
 
 

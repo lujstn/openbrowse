@@ -18,22 +18,10 @@ from openbrowse.config import settings
 
 SYSTEMD_DIR = Path("/etc/systemd/system")
 UNIT_BASENAME = "openbrowse.service"
-# @nonobvious(mirrors): pre-package installs documented this unit name; a host
-# that already runs one keeps it so start/stop/update manage the live service
-# instead of racing a duplicate on the same port.
-LEGACY_UNIT_BASENAME = "browser-use.service"
 
 
 def systemd_available() -> bool:
     return bool(shutil.which("systemctl")) and Path("/run/systemd/system").exists()
-
-
-def unit_name(systemd_dir: Path = SYSTEMD_DIR) -> str:
-    if (systemd_dir / UNIT_BASENAME).exists():
-        return UNIT_BASENAME
-    if (systemd_dir / LEGACY_UNIT_BASENAME).exists():
-        return LEGACY_UNIT_BASENAME
-    return UNIT_BASENAME
 
 
 def _openbrowse_binary() -> str:
@@ -77,8 +65,7 @@ def start(systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
     Returns (ok, message). The message says plainly whether OpenBrowse will
     now start automatically on boot.
     """
-    name = unit_name(systemd_dir)
-    unit_path = systemd_dir / name
+    unit_path = systemd_dir / UNIT_BASENAME
     created = False
     if not unit_path.exists():
         result = _sudo(["tee", str(unit_path)], input_text=unit_content())
@@ -86,9 +73,11 @@ def start(systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
             return False, f"Could not write {unit_path}; is sudo available?"
         _sudo(["systemctl", "daemon-reload"])
         created = True
-    result = _sudo(["systemctl", "enable", "--now", name])
+    result = _sudo(["systemctl", "enable", "--now", UNIT_BASENAME])
     if result.returncode != 0:
-        return False, f"systemctl enable --now {name} failed with exit code {result.returncode}."
+        return False, (
+            f"systemctl enable --now {UNIT_BASENAME} failed with exit code {result.returncode}."
+        )
     lines = []
     if created:
         lines.append(f"Registered OpenBrowse as a systemd service ({unit_path}).")
@@ -104,12 +93,11 @@ def start(systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
     return True, "\n".join(lines)
 
 
-def stop(disable: bool, systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
-    name = unit_name(systemd_dir)
+def stop(disable: bool) -> tuple[bool, str]:
     if disable:
-        result = _sudo(["systemctl", "disable", "--now", name])
+        result = _sudo(["systemctl", "disable", "--now", UNIT_BASENAME])
     else:
-        result = _sudo(["systemctl", "stop", name])
+        result = _sudo(["systemctl", "stop", UNIT_BASENAME])
     if result.returncode != 0:
         return False, f"systemctl failed with exit code {result.returncode}."
     if disable:
@@ -120,15 +108,14 @@ def stop(disable: bool, systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
     )
 
 
-def restart(systemd_dir: Path = SYSTEMD_DIR) -> tuple[bool, str]:
-    name = unit_name(systemd_dir)
-    result = _sudo(["systemctl", "restart", name])
+def restart() -> tuple[bool, str]:
+    result = _sudo(["systemctl", "restart", UNIT_BASENAME])
     if result.returncode != 0:
-        return False, f"systemctl restart {name} failed with exit code {result.returncode}."
+        return False, f"systemctl restart {UNIT_BASENAME} failed with exit code {result.returncode}."
     return True, "OpenBrowse restarted."
 
 
-def status(systemd_dir: Path = SYSTEMD_DIR) -> int:
+def status() -> int:
     return subprocess.run(
-        ["systemctl", "status", "--no-pager", unit_name(systemd_dir)]
+        ["systemctl", "status", "--no-pager", UNIT_BASENAME]
     ).returncode

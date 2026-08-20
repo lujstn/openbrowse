@@ -20,7 +20,7 @@ _DEVICE_TREE_MODEL = "/proc/device-tree/model"
 _CGROUP_CONTROLLERS = "/sys/fs/cgroup/cgroup.controllers"
 _MOUNTS_PATH = "/proc/mounts"
 _SYSTEMD_DIR = "/run/systemd/system"
-_CAPACITY_OVERRIDE = "/etc/systemd/system/browser-use.service.d/50-capacity.conf"
+_CAPACITY_OVERRIDE = "/etc/systemd/system/openbrowse.service.d/50-capacity.conf"
 
 SHARE_PRESETS: dict[str, float] = {"all": 0.9, "most": 0.7, "shared": 0.4}
 
