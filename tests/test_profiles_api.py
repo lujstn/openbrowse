@@ -6,9 +6,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from fastapi import FastAPI
 
-from app.api.profiles import router
-from app.config import settings
-from app.db.models import init_db
+from openbrowse.api.profiles import router
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
 
 
 @pytest.fixture(autouse=True)
@@ -21,10 +21,10 @@ async def setup(tmp_path, monkeypatch):
         api_key="",
         allow_insecure_no_auth=True,
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.auth.settings", test_settings)
-    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.auth.settings", test_settings)
+    monkeypatch.setattr("openbrowse.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
 

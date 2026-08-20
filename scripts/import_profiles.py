@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db.models import init_db  # noqa: E402
-from app.profiles.importer import ProfileImportError, import_bundle  # noqa: E402
+from openbrowse.db.models import init_db  # noqa: E402
+from openbrowse.profiles.importer import ProfileImportError, import_bundle  # noqa: E402
 
 _KNOWN_ID = {
     "personal_profile": "0bee43b4-d8c4-4741-8f1e-6576749a81b0",

@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import settings
-from app.db.models import init_db
-from app.main import app
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
+from openbrowse.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -27,12 +27,12 @@ async def setup(tmp_path, monkeypatch):
         allow_insecure_no_auth=False,
         cloud_max_cost_factor=1.0,
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.auth.settings", test_settings)
-    monkeypatch.setattr("app.api.sessions.settings", test_settings)
-    monkeypatch.setattr("app.dashboard.routes.settings", test_settings)
-    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.auth.settings", test_settings)
+    monkeypatch.setattr("openbrowse.api.sessions.settings", test_settings)
+    monkeypatch.setattr("openbrowse.dashboard.routes.settings", test_settings)
+    monkeypatch.setattr("openbrowse.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
     return test_settings
@@ -77,11 +77,11 @@ async def test_sessions_page_still_serves(client):
     assert resp.status_code == 200
 
 
-@patch("app.dashboard.routes.pool.submit_nowait")
+@patch("openbrowse.dashboard.routes.pool.submit_nowait")
 async def test_run_creates_and_dispatches(mock_submit, client):
     import asyncio
 
-    from app.dashboard import routes
+    from openbrowse.dashboard import routes
 
     resp = await client.post(
         "/run",
@@ -107,13 +107,13 @@ async def test_dashboard_sse_requires_auth(client):
 
 async def test_api_fails_closed_without_key(client, monkeypatch):
     closed = replace(settings, api_key="", allow_insecure_no_auth=False)
-    monkeypatch.setattr("app.auth.settings", closed)
+    monkeypatch.setattr("openbrowse.auth.settings", closed)
     resp = await client.post("/v3/sessions", json={"task": "x"})
     assert resp.status_code == 401
 
 
 async def test_profiles_page_shows_domains_not_user_id(client):
-    from app.profiles.importer import import_profile
+    from openbrowse.profiles.importer import import_profile
 
     await import_profile(
         "pid-1",
@@ -132,7 +132,7 @@ async def test_profiles_page_shows_domains_not_user_id(client):
 
 
 async def test_profile_create_makes_row_and_file(client, tmp_path):
-    from app.db import crud
+    from openbrowse.db import crud
 
     resp = await client.post(
         "/profiles/create",
@@ -148,7 +148,7 @@ async def test_profile_create_makes_row_and_file(client, tmp_path):
 
 
 async def test_profile_edit_name(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     profile = await crud.create_profile(name="Old")
     resp = await client.post(
@@ -162,7 +162,7 @@ async def test_profile_edit_name(client):
 
 
 async def test_profile_rename_uuid_repoints_session_and_renames_file(client, tmp_path):
-    from app.db import crud
+    from openbrowse.db import crud
 
     await client.post(
         "/profiles/create", data={"name": "P"}, headers=_basic("admin", "secret-key")
@@ -186,7 +186,7 @@ async def test_profile_rename_uuid_repoints_session_and_renames_file(client, tmp
 
 
 async def test_profile_rename_rejects_path_escape(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     profile = await crud.create_profile(name="P")
     resp = await client.post(
@@ -199,7 +199,7 @@ async def test_profile_rename_rejects_path_escape(client):
 
 
 async def test_profile_delete_cascade_nulls_session(client, tmp_path):
-    from app.db import crud
+    from openbrowse.db import crud
 
     await client.post(
         "/profiles/create", data={"name": "D"}, headers=_basic("admin", "secret-key")
@@ -220,7 +220,7 @@ async def test_profile_delete_cascade_nulls_session(client, tmp_path):
 async def test_session_log_export_scopes(client):
     import json
 
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="scrape listings")
     sid = session["id"]
@@ -253,7 +253,7 @@ async def test_session_log_export_scopes(client):
 
 
 async def test_stop_endpoint_records_stop_event_in_feed(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="scrape listings")
     sid = session["id"]
@@ -272,7 +272,7 @@ async def test_stop_endpoint_records_stop_event_in_feed(client):
 
 
 async def test_session_detail_renders_failed_pill_not_warning(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="scrape listings")
     sid = session["id"]
@@ -287,7 +287,7 @@ async def test_session_detail_renders_failed_pill_not_warning(client):
 
 
 async def test_sessions_list_renders_failed_pill_not_warning(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="scrape listings")
     sid = session["id"]
@@ -305,7 +305,7 @@ async def test_settings_page_hides_secrets_behind_password_inputs(
 ):
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("openbrowse.dashboard.routes._ENV_PATH", env)
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
     assert 'type="password"' in resp.text
@@ -322,10 +322,10 @@ async def test_settings_page_hides_secrets_behind_password_inputs(
 async def test_settings_save_updates_and_removes_values(client, tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\nMAX_CONCURRENT_SESSIONS=3\nOLD_VAR=x\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("openbrowse.dashboard.routes._ENV_PATH", env)
     restarts = []
     monkeypatch.setattr(
-        "app.dashboard.routes._schedule_restart", lambda: restarts.append(1)
+        "openbrowse.dashboard.routes._schedule_restart", lambda: restarts.append(1)
     )
     resp = await client.post(
         "/settings",
@@ -348,13 +348,13 @@ async def test_settings_save_updates_and_removes_values(client, tmp_path, monkey
 async def test_settings_save_refused_while_sessions_running(client, tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("openbrowse.dashboard.routes._ENV_PATH", env)
     restarts = []
     monkeypatch.setattr(
-        "app.dashboard.routes._schedule_restart", lambda: restarts.append(1)
+        "openbrowse.dashboard.routes._schedule_restart", lambda: restarts.append(1)
     )
     monkeypatch.setattr(
-        "app.dashboard.routes.pool", type("P", (), {"active_count": 1})()
+        "openbrowse.dashboard.routes.pool", type("P", (), {"active_count": 1})()
     )
     resp = await client.post(
         "/settings",
@@ -385,8 +385,8 @@ async def test_settings_save_refused_while_sessions_running(client, tmp_path, mo
 async def test_settings_save_atomic_leaves_no_tmp(client, tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("API_KEY=supersecret\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
-    monkeypatch.setattr("app.dashboard.routes._schedule_restart", lambda: None)
+    monkeypatch.setattr("openbrowse.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("openbrowse.dashboard.routes._schedule_restart", lambda: None)
     resp = await client.post(
         "/settings",
         headers=_basic("admin", "secret-key"),
@@ -414,9 +414,9 @@ async def test_settings_restart_outcome_banners(client, tmp_path, monkeypatch):
 
     env = tmp_path / ".env"
     env.write_text("API_KEY=k\n")
-    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("openbrowse.dashboard.routes._ENV_PATH", env)
     now = _time.time()
-    monkeypatch.setattr("app.dashboard.routes._STARTED_AT", now)
+    monkeypatch.setattr("openbrowse.dashboard.routes._STARTED_AT", now)
 
     resp = await client.get(
         f"/settings?restarted={int(now) - 60}", headers=_basic("admin", "secret-key")
@@ -435,10 +435,10 @@ async def test_followup_message_redispatches_idle_keepalive_session(
 ):
     from unittest.mock import AsyncMock
 
-    from app.db import crud
+    from openbrowse.db import crud
 
     submit = MagicMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
 
@@ -462,9 +462,9 @@ async def test_followup_message_redispatches_idle_keepalive_session(
 async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
     from unittest.mock import AsyncMock
 
-    from app.db import crud
+    from openbrowse.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", MagicMock())
     plain = await crud.create_session(task="t", keep_alive=False)
     await crud.update_session(plain["id"], status="idle")
     resp = await client.post(
@@ -484,15 +484,15 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
     assert resp.status_code == 409
 
 
-@patch("app.dashboard.routes.pool.submit_nowait")
+@patch("openbrowse.dashboard.routes.pool.submit_nowait")
 async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monkeypatch):
     import asyncio
 
-    from app.dashboard import routes
-    from app.db import crud
+    from openbrowse.dashboard import routes
+    from openbrowse.db import crud
 
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     resp = await client.post(
         "/run",
@@ -522,7 +522,7 @@ async def test_settings_page_offers_every_captcha_setting(client):
 
 @pytest.fixture(autouse=True)
 def _clear_live_sessions():
-    from app.agent import live
+    from openbrowse.agent import live
 
     live._live.clear()
     yield
@@ -532,9 +532,9 @@ def _clear_live_sessions():
 async def test_run_records_what_the_user_asked(client, monkeypatch):
     from unittest.mock import MagicMock
 
-    from app.db import crud
+    from openbrowse.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", MagicMock())
     resp = await client.post(
         "/run",
         headers=_basic("admin", "secret-key"),
@@ -554,11 +554,11 @@ async def test_followup_continues_a_parked_session_without_a_new_run(client, mon
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     submit = MagicMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
     entry = live.register(session["id"], SimpleNamespace())
@@ -582,10 +582,10 @@ async def test_followup_continues_a_parked_session_without_a_new_run(client, mon
 async def test_followup_starts_a_fresh_run_once_the_browser_is_gone(client, monkeypatch):
     from unittest.mock import MagicMock
 
-    from app.db import crud
+    from openbrowse.db import crud
 
     submit = MagicMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="stopped")
 
@@ -605,11 +605,11 @@ async def test_followup_rejected_while_the_agent_is_mid_task(client, monkeypatch
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     submit = MagicMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
     live.register(session["id"], SimpleNamespace())
@@ -628,11 +628,11 @@ async def test_stop_releases_a_parked_session(client, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     cancel = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.cancel", cancel)
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.cancel", cancel)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
     stopped: list[bool] = []
@@ -650,7 +650,7 @@ async def test_stop_releases_a_parked_session(client, monkeypatch):
 
 
 async def test_session_page_offers_a_follow_up_after_the_browser_is_gone(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="stopped")
@@ -669,9 +669,9 @@ async def test_followup_message_tops_the_session_budget_back_up(client, monkeypa
     started from the dashboard must not strangle itself as its pot drains."""
     from unittest.mock import AsyncMock
 
-    from app.db import crud
+    from openbrowse.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
+    monkeypatch.setattr("openbrowse.dashboard.routes.pool.submit_nowait", MagicMock())
     session = await crud.create_session(
         task="first task", keep_alive=True, max_cost_usd=1.5, default_max_cost_usd=1.5
     )
@@ -687,13 +687,13 @@ async def test_followup_message_tops_the_session_budget_back_up(client, monkeypa
     assert (await crud.get_session(session["id"]))["max_cost_usd"] == 2.7
 
 
-@patch("app.dashboard.routes.pool.submit_nowait")
+@patch("openbrowse.dashboard.routes.pool.submit_nowait")
 async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, client):
     """Without the allowance on the row there is nothing to top a follow-up up by."""
     import asyncio
 
-    from app.dashboard import routes
-    from app.db import crud
+    from openbrowse.dashboard import routes
+    from openbrowse.db import crud
 
     resp = await client.post(
         "/run",
@@ -711,7 +711,7 @@ async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, c
 async def test_session_detail_stacks_completions_rather_than_replacing_one(client):
     """Every turn of a keep-alive session finishes, so the page needs somewhere to
     keep the turns that already have, not a single slot the next one overwrites."""
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="scrape listings", keep_alive=True)
 
@@ -724,7 +724,7 @@ async def test_session_detail_stacks_completions_rather_than_replacing_one(clien
 
 
 async def test_session_detail_wires_one_live_activity_surface(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="check the pricing page")
     resp = await client.get(
@@ -741,19 +741,19 @@ async def test_session_detail_wires_one_live_activity_surface(client):
 
 
 def test_mdlite_bold_and_code():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     assert str(_mdlite("**bold** and `code`")) == "<strong>bold</strong> and <code>code</code>"
 
 
 def test_mdlite_bold_spans_a_line_break():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     assert str(_mdlite("**foo\nbar** baz")) == "<strong>foo<br>bar</strong> baz"
 
 
 def test_mdlite_unterminated_bold_stays_literal():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("checking the **access token with no closer"))
     assert out == "checking the **access token with no closer"
@@ -761,7 +761,7 @@ def test_mdlite_unterminated_bold_stays_literal():
 
 
 def test_mdlite_unterminated_backtick_stays_literal():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("run `find_elements with no closer"))
     assert out == "run `find_elements with no closer"
@@ -769,34 +769,34 @@ def test_mdlite_unterminated_backtick_stays_literal():
 
 
 def test_mdlite_closed_fence_renders_bounded_code_block():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("before\n```python\nprint(1)\n```\nafter"))
     assert out == "before<br><pre><code>print(1)\n</code></pre>after"
 
 
 def test_mdlite_unclosed_fence_runs_to_end_as_code():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("before\n```python\nprint(1)\nstill going"))
     assert out == "before<br><pre><code>print(1)\nstill going</code></pre>"
 
 
 def test_mdlite_bullet_list():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("- one\n- **two**\nplain after"))
     assert out == "<ul><li>one</li><li><strong>two</strong></li></ul><br>plain after"
 
 
 def test_mdlite_escapes_html():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     assert str(_mdlite("<script>alert(1)</script>")) == "&lt;script&gt;alert(1)&lt;/script&gt;"
 
 
 def test_activity_payload_carries_a_growing_stream_never_a_slice():
-    from app.agent.activity import clear_activity, get_activity, set_activity
+    from openbrowse.agent.activity import clear_activity, get_activity, set_activity
 
     sid = "activity-shape-test"
     clear_activity(sid)
@@ -832,7 +832,7 @@ async def _drain_feed(session_id, *, last_event_id=None, want=1, timeout=3.0):
     """Pull frames off the feed generator directly — the ASGI transport never
     reports a disconnect, so an end-to-end stream would never terminate.
     """
-    from app.dashboard.routes import sse_session_messages
+    from openbrowse.dashboard.routes import sse_session_messages
 
     resp = await sse_session_messages(_StubRequest(last_event_id), session_id)
     gen = resp.body_iterator
@@ -851,7 +851,7 @@ async def _drain_feed(session_id, *, last_event_id=None, want=1, timeout=3.0):
 
 
 async def _seed_session_with_messages(n=3):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="t", model="claude-sonnet-5")
     ids = []
@@ -885,7 +885,7 @@ async def test_sse_feed_resumes_after_last_event_id_instead_of_replaying():
 
 
 async def test_sse_feed_resumes_and_delivers_only_what_is_new():
-    from app.db import crud
+    from openbrowse.db import crud
 
     sid, ids = await _seed_session_with_messages()
     fresh = await crud.create_message(session_id=sid, msg_type="event", summary="brand new")
@@ -898,7 +898,7 @@ async def test_sse_feed_resumes_and_delivers_only_what_is_new():
 
 
 def test_message_rows_carry_an_id_the_client_can_dedupe_on():
-    from app.dashboard.routes import templates
+    from openbrowse.dashboard.routes import templates
 
     html = templates.get_template("_message_rows.html").render(
         messages=[{
@@ -930,7 +930,7 @@ def test_activity_clock_survives_a_streaming_phase_and_resets_on_a_new_one():
     """A streaming phase re-pushes several times a second; if the clock restarted
     on each push no phase could ever report how long it took.
     """
-    from app.agent.activity import clear_activity, get_activity, set_activity
+    from openbrowse.agent.activity import clear_activity, get_activity, set_activity
 
     sid = "activity-clock-test"
     clear_activity(sid)
@@ -953,7 +953,7 @@ async def test_a_reasoning_row_lands_collapsed_like_any_other_step(client):
     """The live card already showed the thought; forcing the settled row open
     makes reasoning the one step type that shouts.
     """
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="check the pricing page")
     resp = await client.get(
@@ -968,7 +968,7 @@ async def test_a_reasoning_row_lands_collapsed_like_any_other_step(client):
 
 
 def test_the_reasoning_row_headline_is_a_duration_not_a_half_sentence():
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     display = message_display({
         "type": "event",
@@ -988,7 +988,7 @@ def test_the_reasoning_row_headline_is_a_duration_not_a_half_sentence():
 
 
 def _render_row(category, action, summary):
-    from app.dashboard.routes import message_display, templates
+    from openbrowse.dashboard.routes import message_display, templates
 
     return templates.get_template("_message_rows.html").render(
         messages=[{
@@ -1026,7 +1026,7 @@ def test_the_cost_breakdown_only_offers_itself_when_capsolver_charged():
     """A popover that always says CapSolver $0.0000 is a popover that never had
     anything to add.
     """
-    from app.dashboard.routes import _format_duration, _format_relative_time, model_provider, templates
+    from openbrowse.dashboard.routes import _format_duration, _format_relative_time, model_provider, templates
 
     def render(capsolver):
         return templates.get_template("_session_rows.html").render(
@@ -1050,7 +1050,7 @@ def test_the_cost_breakdown_only_offers_itself_when_capsolver_charged():
 
 
 def test_money_reads_in_cents_but_the_breakdown_reads_as_billed():
-    from app.dashboard.routes import _usd, _usd4
+    from openbrowse.dashboard.routes import _usd, _usd4
 
     assert _usd(0.1187) == "0.12"
     assert _usd4(0.1187) == "0.1187"
@@ -1063,7 +1063,7 @@ async def test_a_finished_run_hides_its_copy_button_until_it_is_opened(client):
     """The copy control belongs to the output, so a collapsed card should not
     offer to copy something it is not showing.
     """
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="check the pricing page")
     resp = await client.get(
@@ -1084,7 +1084,7 @@ async def test_a_finished_run_hides_its_copy_button_until_it_is_opened(client):
 def _capacity_info(**over):
     from dataclasses import replace as _replace
 
-    from app.hostinfo import HostInfo
+    from openbrowse.hostinfo import HostInfo
 
     base = HostInfo(
         cores=4, mem_total_kb=16 * 1024 * 1024, mem_available_kb=13 * 1024 * 1024,
@@ -1096,26 +1096,26 @@ def _capacity_info(**over):
 
 
 async def test_settings_capacity_card_renders(client, monkeypatch):
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
     assert "Capacity" in resp.text
     assert 'max="4"' in resp.text
-    assert "host_tune.sh --share most" in resp.text
+    assert "openbrowse tune --share most" in resp.text
     assert "Apply recommended tuning" not in resp.text
 
 
 async def test_settings_capacity_button_when_sudo_granted(client, monkeypatch):
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: True)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: True)
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
     assert "Apply recommended tuning" in resp.text
 
 
 async def test_settings_light_browser_recommended_hint(client, monkeypatch):
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
     assert "Lighter browser" in resp.text
@@ -1124,12 +1124,12 @@ async def test_settings_light_browser_recommended_hint(client, monkeypatch):
 
 
 async def test_settings_light_browser_marked_enabled_when_on(client, monkeypatch):
-    from app.dashboard import routes as routes_mod
+    from openbrowse.dashboard import routes as routes_mod
 
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
     monkeypatch.setattr(
-        "app.dashboard.routes.settings",
+        "openbrowse.dashboard.routes.settings",
         replace(routes_mod.settings, chrome_light_flags=True),
     )
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
@@ -1142,15 +1142,15 @@ async def test_settings_light_browser_marked_enabled_when_on(client, monkeypatch
 async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypatch):
     import subprocess as _subprocess
 
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: True)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: True)
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return _subprocess.CompletedProcess(cmd, 0, stdout="doing: wrote override\ndone\n", stderr="")
 
-    monkeypatch.setattr("app.dashboard.routes.subprocess.run", fake_run)
+    monkeypatch.setattr("openbrowse.dashboard.routes.subprocess.run", fake_run)
     resp = await client.post(
         "/settings/host-tune",
         headers=_basic("admin", "secret-key"),
@@ -1165,15 +1165,15 @@ async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypat
 async def test_settings_host_tune_rejects_bad_share(client, monkeypatch):
     import subprocess as _subprocess
 
-    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
     seen = []
 
     def fake_run(cmd, **kwargs):
         seen.append(cmd)
         return _subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
 
-    monkeypatch.setattr("app.dashboard.routes.subprocess.run", fake_run)
+    monkeypatch.setattr("openbrowse.dashboard.routes.subprocess.run", fake_run)
     resp = await client.post(
         "/settings/host-tune",
         headers=_basic("admin", "secret-key"),

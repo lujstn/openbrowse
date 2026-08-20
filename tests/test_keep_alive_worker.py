@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent import live
-from app.agent import runner as runner_mod
-from app.config import settings
-from app.db import crud
-from app.db.models import init_db
+from openbrowse.agent import live
+from openbrowse.agent import runner as runner_mod
+from openbrowse.config import settings
+from openbrowse.db import crud
+from openbrowse.db.models import init_db
 
 
 class _FakeHistory:
@@ -111,8 +111,8 @@ async def worker_env(tmp_path, monkeypatch):
         data_dir=tmp_path / "data",
         profiles_dir=tmp_path / "data" / "profiles",
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
     monkeypatch.setattr(runner_mod, "settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()

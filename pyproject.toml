@@ -1,7 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "openbrowse"
 version = "1.8.0"
+description = "Self-hosted AI browser automation server with a live dashboard, built for small machines like the Raspberry Pi"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Lucas Johnston Kurilov" }]
 requires-python = ">=3.11"
+keywords = ["browser-use", "automation", "raspberry-pi", "self-hosted", "ai-agent"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+]
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
@@ -17,11 +37,22 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[project.urls]
+Homepage = "https://openbrowse.co"
+Repository = "https://github.com/lujstn/openbrowse"
+Issues = "https://github.com/lujstn/openbrowse/issues"
+
+[project.scripts]
+openbrowse = "openbrowse.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "httpx"]
 
-[tool.setuptools.packages.find]
-include = ["app*"]
+[tool.hatch.build.targets.wheel]
+packages = ["openbrowse"]
+
+[tool.hatch.build.targets.sdist]
+include = ["openbrowse", "tests", "scripts", "README.md", "LICENSE", "CITATION.cff"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

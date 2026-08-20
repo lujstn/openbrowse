@@ -6,16 +6,16 @@ from dataclasses import replace
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app import auth_throttle
-from app.auth_throttle import (
+from openbrowse import auth_throttle
+from openbrowse.auth_throttle import (
     BASE_LOCKOUT_SECONDS,
     FREE_ATTEMPTS,
     MAX_LOCKOUT_SECONDS,
     AuthThrottle,
 )
-from app.config import settings
-from app.db.models import init_db
-from app.main import app
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
+from openbrowse.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -30,9 +30,9 @@ async def setup(tmp_path, monkeypatch):
         dashboard_password="",
         allow_insecure_no_auth=False,
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.auth.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.auth.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
 

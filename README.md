@@ -94,10 +94,18 @@ OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of 
 ## Quick start
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install openbrowse
+openbrowse
+```
+
+To run from source instead, clone the repo and use uv directly:
+
+```bash
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse
 uv sync
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8420
+uv run openbrowse
 ```
 
 Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
@@ -120,6 +128,10 @@ const task = await client.tasks.create({
 ```
 
 Full installation (Raspberry Pi system packages, Xvfb + VNC live view, systemd service): see [GETTING_STARTED.md](GETTING_STARTED.md).
+
+## Updating
+
+The server checks PyPI for new releases in the background and shows an **Update available** badge in the dashboard when one exists; installing it is one click on the Settings page (the server restarts itself afterwards). From a shell, `openbrowse check-update` and `openbrowse update` do the same. Set `UPDATE_CHECK_HOURS=0` in `.env` to disable the background check.
 
 ## Exposing it to the web
 

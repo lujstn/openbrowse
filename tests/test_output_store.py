@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from app.agent.output_store import OutputStore
-from app.agent.schema import json_schema_to_pydantic
+from openbrowse.agent.output_store import OutputStore
+from openbrowse.agent.schema import json_schema_to_pydantic
 
 SCHEMA = {
     "type": "object",

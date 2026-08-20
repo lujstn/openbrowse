@@ -32,17 +32,22 @@ sudo apt install -y \
 
 ---
 
-## 3. Clone and Set Up Python Environment
+## 3. Install OpenBrowse
+
+Install [uv](https://docs.astral.sh/uv/) once, then install OpenBrowse as a tool. This gives you the `openbrowse` command on your PATH and clean, one-command upgrades later:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install openbrowse
+```
+
+To hack on the source instead, clone the repo and let uv manage the environment; every `openbrowse` command below then becomes `uv run openbrowse` from the repo root:
 
 ```bash
 cd ~
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -e ".[dev]"
+uv sync
 ```
 
 ---
@@ -51,7 +56,7 @@ pip install -e ".[dev]"
 
 The easiest way: start the server once (next section) and open it in a browser. An unconfigured instance serves a one-time **setup screen** at `/setup` that generates your API bearer key, collects your provider keys, dashboard password and concurrency limit, and writes `.env` for you.
 
-To configure by hand instead, create `.env` in the repo root with:
+To configure by hand instead, create `.env` in OpenBrowse's home directory — `~/.openbrowse/` for a tool install, the repo root for a source checkout (`OPENBROWSE_HOME` overrides both) — with:
 
 | Variable                  | Description                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------ |
@@ -115,8 +120,7 @@ The `/setup` screen pre-selects the profile on hardware where it earns its keep 
 Start the server:
 
 ```bash
-source .venv/bin/activate
-python -m app.main
+openbrowse
 ```
 
 Expected output:
@@ -199,9 +203,9 @@ Wants=tailscaled.service
 [Service]
 Type=simple
 User=<user>
-WorkingDirectory=/home/<user>/openbrowse
-EnvironmentFile=/home/<user>/openbrowse/.env
-ExecStart=/home/<user>/openbrowse/.venv/bin/python -m app.main
+WorkingDirectory=/home/<user>
+EnvironmentFile=-/home/<user>/.openbrowse/.env
+ExecStart=/home/<user>/.local/bin/openbrowse
 ExecStartPost=+/usr/bin/tailscale funnel --bg 8420
 ExecStopPost=-+/usr/bin/tailscale funnel --bg off
 Restart=on-failure
@@ -223,7 +227,7 @@ The `ExecStartPost` line automatically enables Tailscale Funnel when the service
 You do not need to add these by hand: run the bundled tuning script once and it writes a systemd override sized from how much of the machine you want OpenBrowse to use, enables PSI on a Raspberry Pi, and lets the dashboard's Settings page apply future tuning changes with a button:
 
 ```bash
-sudo bash scripts/host_tune.sh --share most   # all | most | shared
+openbrowse tune --share most   # all | most | shared
 ```
 
 **Optional, recommended for concurrent sessions — enable CPU pressure metrics (PSI).** `host_tune.sh` above does this for you on a Raspberry Pi; the manual steps follow for other setups. The server prefers the kernel's pressure stall information over load average when judging whether the host is struggling; PSI measures time tasks actually spent waiting for CPU, so a busy-but-healthy box is not misread as overloaded. Raspberry Pi OS compiles PSI in but ships it disabled. To enable it, append `psi=1` to the single line in `/boot/firmware/cmdline.txt` and reboot:
@@ -263,7 +267,22 @@ journalctl -u browser-use -f
 
 ---
 
-## 8. Point Your App at OpenBrowse
+## 8. Updating
+
+The server checks PyPI for new releases in the background (every 6 hours by default; set `UPDATE_CHECK_HOURS` in `.env` to change it, `0` to disable). When one exists, the dashboard shows an **Update available** badge in the navigation bar; the Settings page then offers a one-click **Install and restart** button, which upgrades whichever way this copy was installed (uv tool, pip, or a git checkout) and restarts the service.
+
+From a shell, the same is available as:
+
+```bash
+openbrowse check-update
+openbrowse update
+```
+
+After a shell update, restart the service (`sudo systemctl restart browser-use.service`) — the dashboard button does this for you.
+
+---
+
+## 9. Point Your App at OpenBrowse
 
 Any client of the official `browser-use-sdk` works unchanged: pass your OpenBrowse base URL and API key when constructing the client.
 
@@ -290,7 +309,7 @@ Naming `maxCostUsd` on the follow-up itself overrides that for one dispatch, as 
 
 ---
 
-## 9. Create Browser Profiles
+## 10. Create Browser Profiles
 
 Profiles persist browser cookies across sessions, so the agent stays logged in to sites.
 
@@ -319,15 +338,15 @@ Cloud Browser Use profiles are cookie/localStorage jars. Export a profile's stor
 **Recommended — the import CLI.** It creates the profile if it does not exist, normalises the cookies, and backs up any existing jar to `.import-bak`:
 
 ```bash
-# on the Pi, from the repo root, under the venv
-.venv/bin/python -m scripts.import_profiles personal_profile.storage_state.json \
+# on the Pi, from a source checkout of the repo
+uv run python -m scripts.import_profiles personal_profile.storage_state.json \
   --profile-id <cloud-profile-id> --name "Personal Profile"
 ```
 
 A bundle (a JSON list, or `{"profiles": [...]}`) carries an id per entry, so a single command imports many:
 
 ```bash
-.venv/bin/python -m scripts.import_profiles bundle.json
+uv run python -m scripts.import_profiles bundle.json
 ```
 
 **Or the API** (this is what the in-app importer calls):
@@ -364,7 +383,7 @@ The storage state file uses the format:
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### CloakBrowser won't start
 

@@ -1,6 +1,6 @@
 """Unit tests for dashboard run helpers — port formula and model option list."""
 
-from app.dashboard.routes import (
+from openbrowse.dashboard.routes import (
     MODEL_OPTIONS,
     reasoning_options_map,
     _live_sessions,
@@ -35,7 +35,7 @@ def test_model_options_curated_list():
         "claude-sonnet-4-6",
         "claude-sonnet-4-6[1m]",
     ]
-    from app.agent.runner import _resolve_model
+    from openbrowse.agent.runner import _resolve_model
 
     for value in values:
         assert _resolve_model(value)[1]
@@ -88,8 +88,8 @@ def test_model_provider_labels():
 def test_live_sessions_filters_running_with_url_and_caps(monkeypatch):
     from dataclasses import replace
 
-    from app.config import settings
-    from app.dashboard import routes as routes_mod
+    from openbrowse.config import settings
+    from openbrowse.dashboard import routes as routes_mod
 
     monkeypatch.setattr(
         routes_mod, "settings", replace(settings, max_concurrent_sessions=5)
@@ -108,7 +108,7 @@ def test_live_sessions_filters_running_with_url_and_caps(monkeypatch):
 def test_message_display_includes_model_reasoning_card():
     import json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "result",
@@ -125,7 +125,7 @@ def test_message_display_includes_model_reasoning_card():
 def test_strip_thinking_removes_reasoning_keys_including_legacy():
     import json
 
-    from app.dashboard.routes import _strip_thinking
+    from openbrowse.dashboard.routes import _strip_thinking
 
     data = json.dumps(
         {"see": "a", "thinking": "b", "model_reasoning": "c", "model_thinking": "d"}
@@ -138,7 +138,7 @@ def test_strip_thinking_removes_reasoning_keys_including_legacy():
 
 
 def test_mdlite_escapes_then_formats():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("**Plan** use `run_code_file`\n<script>x</script>"))
     assert "<strong>Plan</strong>" in out
@@ -150,7 +150,7 @@ def test_mdlite_escapes_then_formats():
 def test_message_display_reasoning_event_row():
     import json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "event",
@@ -167,7 +167,7 @@ def test_message_display_reasoning_event_row():
 def test_message_display_error_full_card():
     import json as _json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "browser_action_error",
@@ -189,7 +189,7 @@ def test_message_display_error_full_card():
 
 
 def test_usd_filter_rounds_up_to_cent():
-    from app.dashboard.routes import _usd
+    from openbrowse.dashboard.routes import _usd
 
     assert _usd(0.399) == "0.40"
     assert _usd(0.2358) == "0.24"
@@ -202,7 +202,7 @@ def test_usd_filter_rounds_up_to_cent():
 def test_message_display_result_snippet_card():
     import json as _json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "result",

@@ -6,7 +6,7 @@ from browser_use import Tools
 
 def test_register_fetch_tool() -> None:
     tools = Tools()
-    from app.agent.tools import register_fetch_tool
+    from openbrowse.agent.tools import register_fetch_tool
 
     register_fetch_tool(tools)
     assert "http_fetch" in tools.registry.registry.actions
@@ -14,7 +14,7 @@ def test_register_fetch_tool() -> None:
 
 def test_register_code_tools() -> None:
     tools = Tools()
-    from app.agent.tools import register_code_tools
+    from openbrowse.agent.tools import register_code_tools
 
     register_code_tools(tools)
     actions = tools.registry.registry.actions
@@ -24,7 +24,7 @@ def test_register_code_tools() -> None:
 
 
 def test_normalise_py_name() -> None:
-    from app.agent.tools import _normalise_py_name
+    from openbrowse.agent.tools import _normalise_py_name
 
     assert _normalise_py_name("extract") == "extract.py"
     assert _normalise_py_name("extract.py") == "extract.py"
@@ -34,9 +34,9 @@ def test_normalise_py_name() -> None:
 
 
 def test_item_url_field_prefers_detail_over_company() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _item_url_field
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _item_url_field
 
     schema = {
         "type": "object",
@@ -59,9 +59,9 @@ def test_item_url_field_prefers_detail_over_company() -> None:
 
 
 def test_item_url_field_falls_back_to_bare_url() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _item_url_field
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _item_url_field
 
     schema = {
         "type": "object",
@@ -83,7 +83,7 @@ def test_item_url_field_falls_back_to_bare_url() -> None:
 
 
 def test_norm_url() -> None:
-    from app.agent.tools import _norm_url
+    from openbrowse.agent.tools import _norm_url
 
     a = _norm_url("https://www.example.com/listings?embed_id=ABC#section")
     b = _norm_url("https://www.example.com/listings?embed_id=ABC/")
@@ -93,7 +93,7 @@ def test_norm_url() -> None:
 
 
 def test_bare_stub_count_counts_unopened_contentless_items() -> None:
-    from app.agent.tools import _norm_url, _bare_stub_count
+    from openbrowse.agent.tools import _norm_url, _bare_stub_count
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x/a"})
@@ -106,7 +106,7 @@ def test_bare_stub_count_counts_unopened_contentless_items() -> None:
 
 
 def test_item_with_description_is_not_a_stub() -> None:
-    from app.agent.tools import _bare_stub_count, _is_bare_stub
+    from openbrowse.agent.tools import _bare_stub_count, _is_bare_stub
 
     store = _items_store()
     long_desc = "We are hiring. " * 20
@@ -120,9 +120,9 @@ def test_item_with_description_is_not_a_stub() -> None:
 
 
 def test_bare_stub_count_no_url_field() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _bare_stub_count
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _bare_stub_count
 
     schema = {
         "type": "object",
@@ -168,8 +168,8 @@ class _FakeFileSystem:
 
 
 def _items_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
@@ -192,7 +192,7 @@ def _items_store():
 
 
 def test_register_output_store_tools_actions() -> None:
-    from app.agent.tools import register_output_store_tools
+    from openbrowse.agent.tools import register_output_store_tools
 
     tools = Tools()
     register_output_store_tools(tools, _items_store(), {})
@@ -212,7 +212,7 @@ def test_register_output_store_tools_actions() -> None:
 
 
 def test_register_tab_tools_includes_read_pages() -> None:
-    from app.agent.tools import TabManager, register_tab_tools
+    from openbrowse.agent.tools import TabManager, register_tab_tools
 
     tools = Tools()
     register_tab_tools(tools, TabManager(session=None), {})
@@ -224,7 +224,7 @@ def test_register_tab_tools_includes_read_pages() -> None:
 def test_parse_jsonld_blobs() -> None:
     import json as _json
 
-    from app.agent.tools import _parse_jsonld_blobs
+    from openbrowse.agent.tools import _parse_jsonld_blobs
 
     assert _parse_jsonld_blobs(None) is None
     assert _parse_jsonld_blobs([]) is None
@@ -241,7 +241,7 @@ def test_parse_jsonld_blobs() -> None:
 
 
 def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
-    from app.agent.tools import _MAX_UNVISITED_STUBS, _stub_block_msg
+    from openbrowse.agent.tools import _MAX_UNVISITED_STUBS, _stub_block_msg
 
     store = _items_store()
     clipboard: dict = {}
@@ -267,7 +267,7 @@ def test_stub_block_msg_throttles_unvisited_listing_items() -> None:
 async def test_store_bridge_writes_and_mirrors() -> None:
     import asyncio
 
-    from app.agent.tools import _store_bridge
+    from openbrowse.agent.tools import _store_bridge
 
     store = _items_store()
     fs = _FakeFileSystem()
@@ -297,7 +297,7 @@ async def test_store_bridge_writes_and_mirrors() -> None:
 
 
 async def test_store_bridge_respects_stub_limit() -> None:
-    from app.agent.tools import _MAX_UNVISITED_STUBS, _store_bridge
+    from openbrowse.agent.tools import _MAX_UNVISITED_STUBS, _store_bridge
 
     store = _items_store()
     fs = _FakeFileSystem()
@@ -310,7 +310,7 @@ async def test_store_bridge_respects_stub_limit() -> None:
 
 
 async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     spawned: list[str] = []
     closed: list[str] = []
@@ -366,7 +366,7 @@ async def test_read_pages_impl_waves_retry_and_visited(monkeypatch) -> None:
 async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     reads: list[str] = []
     dead = "https://x.com/dead"
@@ -415,8 +415,8 @@ async def test_read_pages_impl_records_failures_and_retries_missing_jsonld(
 
 
 def _draft_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
@@ -462,7 +462,7 @@ def _draft_store():
 
 
 def test_draft_row_maps_jsonld_deterministically() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _draft_store()
     page = {
@@ -494,7 +494,7 @@ def test_draft_row_maps_jsonld_deterministically() -> None:
 
 
 def test_draft_row_falls_back_to_page_text_and_invents_nothing() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _draft_store()
     page = {"url": "https://x.com/a", "title": "Bare page", "text": "body " * 100, "jsonld": None}
@@ -506,7 +506,7 @@ def test_draft_row_falls_back_to_page_text_and_invents_nothing() -> None:
 
 
 def test_strip_html_preserves_paragraphs() -> None:
-    from app.agent.tools import _strip_html
+    from openbrowse.agent.tools import _strip_html
 
     out = _strip_html("<p>One</p><p>Two &amp; three</p><br>Four")
     assert "One" in out and "Two & three" in out
@@ -517,7 +517,7 @@ def test_strip_html_preserves_paragraphs() -> None:
 def test_awaitable_helpers_work_with_and_without_await() -> None:
     import asyncio
 
-    from app.agent.tools import _AwaitableStr, _awaitable
+    from openbrowse.agent.tools import _AwaitableStr, _awaitable
 
     async def _check():
         s = _AwaitableStr("hello")
@@ -536,7 +536,7 @@ def test_awaitable_helpers_work_with_and_without_await() -> None:
 async def test_save_json_persists_without_await(tmp_path) -> None:
     from browser_use import Tools
 
-    from app.agent.tools import register_code_tools
+    from openbrowse.agent.tools import register_code_tools
 
     class _DirFileSystem(_FakeFileSystem):
         def __init__(self, base) -> None:
@@ -568,7 +568,7 @@ def _jobs_store_or_none():
 
 
 async def test_read_pages_impl_reports_progress(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_iframe_targets(session):
         return []
@@ -608,7 +608,7 @@ async def test_read_pages_impl_reports_progress(monkeypatch) -> None:
 def _wave_fakes(monkeypatch, read_one, home="home-tid"):
     import types
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     order: list[tuple[str, str]] = []
     spawn_counter = {"n": 0}
@@ -698,7 +698,7 @@ async def test_read_pages_impl_budget_stops_before_starting(monkeypatch) -> None
 
 
 def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _draft_store()
     page = {
@@ -729,9 +729,9 @@ def test_draft_row_flattens_nested_jsonld_and_maps_links() -> None:
 
 
 def test_draft_row_maps_url_field_from_links() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _draft_row
 
     schema = {
         "type": "object",
@@ -767,7 +767,7 @@ def test_draft_row_maps_url_field_from_links() -> None:
 
 
 def test_strong_overlap_guards_weak_tokens() -> None:
-    from app.agent.tools import _strong_overlap
+    from openbrowse.agent.tools import _strong_overlap
 
     assert _strong_overlap({"posted", "at"}, {"date", "posted"}) is True
     assert _strong_overlap({"location", "type"}, {"employment", "type"}) is False
@@ -775,7 +775,7 @@ def test_strong_overlap_guards_weak_tokens() -> None:
 
 
 def test_gate_settles_partial_fields_when_all_pages_read() -> None:
-    from app.agent.tools import _gate_empty_fields
+    from openbrowse.agent.tools import _gate_empty_fields
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
@@ -791,7 +791,7 @@ def test_gate_settles_partial_fields_when_all_pages_read() -> None:
 
 
 def test_mark_absent_rejected_for_partial_field_with_full_coverage() -> None:
-    from app.agent.tools import _absence_unearned
+    from openbrowse.agent.tools import _absence_unearned
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
@@ -807,7 +807,7 @@ async def test_sandbox_asyncio_run_works(tmp_path) -> None:
 
     from browser_use import Tools
 
-    from app.agent.tools import register_code_tools
+    from openbrowse.agent.tools import register_code_tools
 
     class _DirFileSystem(_FakeFileSystem):
         def __init__(self, base) -> None:
@@ -835,7 +835,7 @@ async def test_sandbox_asyncio_run_works(tmp_path) -> None:
 
 
 def test_load_saved_json_disk_fallback(tmp_path) -> None:
-    from app.agent.tools import _load_saved_json
+    from openbrowse.agent.tools import _load_saved_json
 
     class _DirFileSystem(_FakeFileSystem):
         def __init__(self, base) -> None:
@@ -854,7 +854,7 @@ def test_load_saved_json_disk_fallback(tmp_path) -> None:
 
 
 async def test_mark_absent_action_accepts_field_list() -> None:
-    from app.agent.tools import register_output_store_tools
+    from openbrowse.agent.tools import register_output_store_tools
 
     tools = Tools()
     store = _items_store()
@@ -871,7 +871,7 @@ async def test_mark_absent_action_accepts_field_list() -> None:
 async def test_add_items_from_file_lists_loaded_titles() -> None:
     import json as _json
 
-    from app.agent.tools import register_output_store_tools
+    from openbrowse.agent.tools import register_output_store_tools
 
     tools = Tools()
     store = _items_store()
@@ -909,7 +909,7 @@ def test_find_links_offhost_flagging_helper() -> None:
 
 
 def test_url_discriminators_extracts_long_tokens() -> None:
-    from app.agent.tools import _url_discriminators
+    from openbrowse.agent.tools import _url_discriminators
 
     tokens = _url_discriminators(
         "https://www.example.com/listings/category-x?item_id=3dee50f9-717b-4311&ref=ab"
@@ -921,7 +921,7 @@ def test_url_discriminators_extracts_long_tokens() -> None:
 
 
 async def test_mark_absent_accepts_read_failures_as_looked() -> None:
-    from app.agent.tools import _absence_unearned
+    from openbrowse.agent.tools import _absence_unearned
 
     store = _items_store()
     clipboard: dict = {"_visited": {"https://x.com/a"}}
@@ -937,7 +937,7 @@ async def test_mark_absent_accepts_read_failures_as_looked() -> None:
 async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> None:
     import json as _json
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     texts = iter(["Loading", "Loading…", "X" * 300, "X" * 300, "X" * 400])
     jsonlds = iter([[], [_json.dumps({"@type": "JobPosting", "datePublished": "2026-08-04"})]])
@@ -974,7 +974,7 @@ async def test_read_one_page_waits_out_loading_shell_and_jsonld(monkeypatch) -> 
 
 
 async def test_mark_absent_requires_pages_read() -> None:
-    from app.agent.tools import _absence_unearned
+    from openbrowse.agent.tools import _absence_unearned
 
     store = _items_store()
     clipboard: dict = {"_visited": {"https://x.com/a", "https://x.com/b"}}
@@ -988,9 +988,9 @@ async def test_mark_absent_requires_pages_read() -> None:
 
 
 async def test_mark_absent_earn_check_skips_top_level_and_urlless() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _absence_unearned
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _absence_unearned
 
     store = _items_store()
     assert _absence_unearned(store, {}, "indexPageUrl") is None
@@ -1014,8 +1014,8 @@ async def test_mark_absent_earn_check_skips_top_level_and_urlless() -> None:
 
 
 def _hints_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
@@ -1052,7 +1052,7 @@ def _hints_store():
 
 
 async def test_completeness_gate_bounces_once_with_hints() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
 
     tools = Tools()
     store = _hints_store()
@@ -1082,7 +1082,7 @@ async def test_completeness_gate_bounces_once_with_hints() -> None:
 
 
 async def test_completeness_gate_passes_when_absent_marked() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
 
     tools = Tools()
     store = _hints_store()
@@ -1098,9 +1098,9 @@ async def test_completeness_gate_passes_when_absent_marked() -> None:
 
 
 def test_draft_row_ranked_candidates_survive_enum_rejection() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _draft_row
 
     schema = {
         "type": "object",
@@ -1165,7 +1165,7 @@ class _DirFs:
 async def _run_sandbox(tmp_path, code, session=None, monkeypatch=None):
     import types
 
-    from app.agent.tools import register_code_tools
+    from openbrowse.agent.tools import register_code_tools
 
     tools = Tools()
     register_code_tools(tools, {}, None)
@@ -1199,7 +1199,7 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
 ) -> None:
     import types
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     order: list[tuple[str, str]] = []
 
@@ -1230,7 +1230,7 @@ async def test_run_code_file_shows_code_tab_and_restores_focus(
 
 
 async def test_run_code_file_emits_writing_and_running_events(tmp_path) -> None:
-    from app.agent.tools import register_code_tools
+    from openbrowse.agent.tools import register_code_tools
 
     events: list[str] = []
 
@@ -1253,7 +1253,7 @@ async def test_run_code_file_emits_writing_and_running_events(tmp_path) -> None:
 
 
 def test_partial_json_string_prefix_handles_escapes() -> None:
-    from app.agent.code_stream import _partial_json_string_prefix
+    from openbrowse.agent.code_stream import _partial_json_string_prefix
 
     assert _partial_json_string_prefix('x = 1\\nprint(x)", "rest') == "x = 1\nprint(x)"
     assert _partial_json_string_prefix("half an esc\\") == "half an esc"
@@ -1262,8 +1262,8 @@ def test_partial_json_string_prefix_handles_escapes() -> None:
 
 
 async def test_code_stream_observer_announces_and_pushes(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    from app.agent.code_stream import CodeStreamObserver
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.code_stream import CodeStreamObserver
 
     spawned: list[str] = []
     focused: list[str] = []
@@ -1275,7 +1275,7 @@ async def test_code_stream_observer_announces_and_pushes(monkeypatch) -> None:
     async def fake_focus(session, tid):
         focused.append(tid)
 
-    import app.agent.code_stream as cs_mod
+    import openbrowse.agent.code_stream as cs_mod
 
     monkeypatch.setattr(tools_mod, "_spawn_tab", fake_spawn)
     monkeypatch.setattr(tools_mod, "_focus_target", fake_focus)
@@ -1319,8 +1319,8 @@ async def test_code_stream_observer_announces_and_pushes(monkeypatch) -> None:
 
 
 async def test_code_stream_ignores_prose_mentions(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    from app.agent.code_stream import CodeStreamObserver
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.code_stream import CodeStreamObserver
 
     async def fake_spawn(session, url):
         raise AssertionError("must not open a tab for prose mentions")
@@ -1334,8 +1334,8 @@ async def test_code_stream_ignores_prose_mentions(monkeypatch) -> None:
 
 
 async def test_code_stream_settle_restores_focus_and_closes_orphans(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    from app.agent.code_stream import CodeStreamObserver
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.code_stream import CodeStreamObserver
 
     focused: list[str] = []
     closed: list[str] = []
@@ -1372,7 +1372,7 @@ async def test_code_stream_settle_restores_focus_and_closes_orphans(monkeypatch)
 def test_compact_json_text_elides_long_strings() -> None:
     import json as _json
 
-    from app.agent.tools import _compact_json_text
+    from openbrowse.agent.tools import _compact_json_text
 
     long_text = "x" * 500
     text = "Read from file pages.json:\n" + _json.dumps(
@@ -1394,7 +1394,7 @@ async def test_output_guard_compacts_oversized_json_instead_of_truncating() -> N
 
     from browser_use import ActionResult
 
-    from app.agent.tools import register_output_guard_overrides
+    from openbrowse.agent.tools import register_output_guard_overrides
 
     tools = Tools()
     big_json = _json.dumps([{"i": i, "text": "y" * 600} for i in range(30)])
@@ -1423,7 +1423,7 @@ async def test_output_guard_compacts_oversized_json_instead_of_truncating() -> N
 
 
 def test_saved_links_skip_offhost_for_no_args_reads() -> None:
-    from app.agent.tools import _saved_links_sans_offhost
+    from openbrowse.agent.tools import _saved_links_sans_offhost
 
     clipboard = {
         "found_links": ["https://x.com/a", "https://other.com/brand", "https://x.com/b"],
@@ -1439,7 +1439,7 @@ def test_saved_links_skip_offhost_for_no_args_reads() -> None:
 
 
 async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     events: list[str] = []
 
@@ -1460,7 +1460,7 @@ async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
 
 
 def test_mark_absent_allowed_after_source_url_rewrite() -> None:
-    from app.agent.tools import _absence_unearned, _refresh_read_items
+    from openbrowse.agent.tools import _absence_unearned, _refresh_read_items
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
@@ -1477,7 +1477,7 @@ def test_mark_absent_allowed_after_source_url_rewrite() -> None:
 
 
 def test_gate_settles_partial_field_after_source_url_rewrite() -> None:
-    from app.agent.tools import _gate_empty_fields, _refresh_read_items
+    from openbrowse.agent.tools import _gate_empty_fields, _refresh_read_items
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d" * 300})
@@ -1493,7 +1493,7 @@ def test_gate_settles_partial_field_after_source_url_rewrite() -> None:
 
 
 def test_unread_items_still_block_absence_after_rewrite_of_others() -> None:
-    from app.agent.tools import _absence_unearned, _refresh_read_items
+    from openbrowse.agent.tools import _absence_unearned, _refresh_read_items
 
     store = _items_store()
     store.add_item({"title": "A", "sourceUrl": "https://x.com/a"})
@@ -1506,7 +1506,7 @@ def test_unread_items_still_block_absence_after_rewrite_of_others() -> None:
 
 
 async def test_read_one_page_skips_frame_filter_on_panel_host(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     matched = {"called": False}
 
@@ -1538,7 +1538,7 @@ async def test_read_one_page_skips_frame_filter_on_panel_host(monkeypatch) -> No
 
 
 async def test_read_one_page_falls_back_to_main_doc_when_no_frame(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_match(*args, **kwargs):
         return None
@@ -1567,7 +1567,7 @@ async def test_read_one_page_falls_back_to_main_doc_when_no_frame(monkeypatch) -
 
 
 async def test_read_one_page_still_fails_on_hollow_main_doc(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_match(*args, **kwargs):
         return None
@@ -1593,8 +1593,8 @@ async def test_read_one_page_still_fails_on_hollow_main_doc(monkeypatch) -> None
 
 
 def _apply_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
@@ -1618,7 +1618,7 @@ def _apply_store():
 
 
 def test_draft_row_rejects_footer_text_and_fills_apply_url_from_links() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _apply_store()
     page = {
@@ -1640,7 +1640,7 @@ def test_draft_row_rejects_footer_text_and_fills_apply_url_from_links() -> None:
 
 
 def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _apply_store()
     page = {
@@ -1655,7 +1655,7 @@ def test_draft_row_leaves_apply_url_null_when_no_matching_link() -> None:
 
 
 async def test_done_text_carries_store_output_for_judge() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
 
     tools = Tools()
     store = _items_store()
@@ -1675,7 +1675,7 @@ async def test_done_text_carries_store_output_for_judge() -> None:
 
 
 async def test_done_text_untouched_when_store_empty() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
 
     tools = Tools()
     store = _items_store()
@@ -1691,7 +1691,7 @@ async def test_done_text_untouched_when_store_empty() -> None:
 
 
 async def test_judge_injection_elides_long_values_keeping_all_records() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
 
     tools = Tools()
     store = _items_store()
@@ -1754,7 +1754,7 @@ def _embed_map(with_frame_doc):
 
 
 def test_scan_link_map_frame_filter_counts_matched_frames() -> None:
-    from app.agent.tools import _scan_link_map
+    from openbrowse.agent.tools import _scan_link_map
 
     links, frames, anchors, iframe_present = _scan_link_map(
         _embed_map(with_frame_doc=True),
@@ -1770,7 +1770,7 @@ def test_scan_link_map_frame_filter_counts_matched_frames() -> None:
 
 
 def test_scan_link_map_reports_zero_frames_instead_of_silent_empty() -> None:
-    from app.agent.tools import _scan_link_map
+    from openbrowse.agent.tools import _scan_link_map
 
     links, frames, anchors, iframe_present = _scan_link_map(
         _embed_map(with_frame_doc=False),
@@ -1788,7 +1788,7 @@ async def test_find_links_retries_then_errors_honestly_when_frame_missing(
 ) -> None:
     import types as _t
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -1838,7 +1838,7 @@ async def test_find_links_retries_then_errors_honestly_when_frame_missing(
 
 
 async def test_find_links_frameless_retry_when_embed_present(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -1887,7 +1887,7 @@ async def test_find_links_frameless_retry_when_embed_present(monkeypatch) -> Non
 
 
 async def test_flag_shell_reads_falls_back_to_dom_probe(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def no_targets(session):
         return []
@@ -1909,7 +1909,7 @@ async def test_flag_shell_reads_falls_back_to_dom_probe(monkeypatch) -> None:
 
 
 async def test_flag_shell_reads_tolerates_digit_noise(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def no_targets(session):
         return []
@@ -1932,7 +1932,7 @@ async def test_flag_shell_reads_tolerates_digit_noise(monkeypatch) -> None:
 
 
 async def test_gate_bounces_on_link_deficit_then_passes() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
     from browser_use import Tools
 
     tools = Tools()
@@ -1971,7 +1971,7 @@ async def test_gate_bounces_on_link_deficit_then_passes() -> None:
 
 
 async def test_gate_bounce_names_dom_embeds_when_no_links_found() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
     from browser_use import Tools
 
     tools = Tools()
@@ -1989,7 +1989,7 @@ async def test_gate_bounce_names_dom_embeds_when_no_links_found() -> None:
 
 
 def test_frame_failure_classifier() -> None:
-    from app.agent.tools import _frame_failure
+    from openbrowse.agent.tools import _frame_failure
 
     assert _frame_failure("read the embedding shell, not this page's real content")
     assert _frame_failure("no embedded panel matching 'embed' rendered")
@@ -2000,7 +2000,7 @@ def test_frame_failure_classifier() -> None:
 
 
 async def test_frame_failures_do_not_unlock_mark_absent() -> None:
-    from app.agent.tools import _absence_unearned
+    from openbrowse.agent.tools import _absence_unearned
 
     store = _items_store()
     clipboard: dict = {"_visited": {"https://x.com/a"}}
@@ -2013,7 +2013,7 @@ async def test_frame_failures_do_not_unlock_mark_absent() -> None:
 
 
 def _sandbox_browser_with_frames(frames):
-    from app.agent.tools import _SandboxBrowser
+    from openbrowse.agent.tools import _SandboxBrowser
 
     sb = _SandboxBrowser(None)
 
@@ -2048,7 +2048,7 @@ async def test_wait_for_frame_returns_false_instead_of_raising() -> None:
 async def test_navigate_raises_when_wait_for_frame_never_renders(monkeypatch) -> None:
     import pytest
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_eval(session, js):
         return None
@@ -2071,7 +2071,7 @@ async def test_navigate_raises_when_wait_for_frame_never_renders(monkeypatch) ->
 async def test_match_frame_target_rejects_shared_discriminator(monkeypatch) -> None:
     import types as _t
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     targets = [
         {"targetId": "f1", "url": "https://panel.example.com/view/abcdefgh1234"}
@@ -2115,7 +2115,7 @@ async def test_match_frame_target_rejects_shared_discriminator(monkeypatch) -> N
 async def test_match_frame_target_sole_candidate_host_check(monkeypatch) -> None:
     import types as _t
 
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     session = _t.SimpleNamespace()
 
@@ -2156,7 +2156,7 @@ async def test_match_frame_target_sole_candidate_host_check(monkeypatch) -> None
 
 
 async def test_settle_lazy_links_reports_never_matched_frame(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def no_targets(session):
         return []
@@ -2173,7 +2173,7 @@ async def test_settle_lazy_links_reports_never_matched_frame(monkeypatch) -> Non
 
 
 async def test_read_one_page_flags_short_main_doc_with_embeds(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_eval(session, tid, js):
         if js == tools_mod._BODY_TEXT_JS:
@@ -2201,7 +2201,7 @@ async def test_read_one_page_flags_short_main_doc_with_embeds(monkeypatch) -> No
 async def test_find_links_notes_unverified_when_matched_frame_has_no_links(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -2248,7 +2248,7 @@ async def test_find_links_notes_unverified_when_matched_frame_has_no_links(
 
 
 async def test_find_links_frameless_hint_from_dom_probe(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -2294,8 +2294,8 @@ async def test_find_links_frameless_hint_from_dom_probe(monkeypatch) -> None:
 
 
 async def test_read_pages_thin_pages_named_honestly(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    from app.agent.tools import register_tab_tools
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import register_tab_tools
     from browser_use import Tools
 
     thin_url = "https://x.com/thin"
@@ -2339,8 +2339,8 @@ async def test_read_pages_thin_pages_named_honestly(monkeypatch) -> None:
 async def test_open_in_new_tab_miss_names_unattached_embed(monkeypatch) -> None:
     import types as _t
 
-    import app.agent.tools as tools_mod
-    from app.agent.tools import TabManager
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import TabManager
 
     async def none_element(index):
         return None
@@ -2366,8 +2366,8 @@ async def test_new_tabs_install_captcha_bridge_before_real_navigation(
     import types as _t
     from unittest.mock import AsyncMock
 
-    import app.agent.tools as tools_mod
-    from app.agent.tools import TabManager
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import TabManager
 
     class _Event:
         def __await__(self):
@@ -2410,8 +2410,8 @@ async def test_new_tabs_install_captcha_bridge_before_real_navigation(
 
 
 async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    from app.agent.tools import _SandboxBrowser
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import _SandboxBrowser
 
     async def fake_eval(session, js):
         if "outerHTML" in js:
@@ -2441,7 +2441,7 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
 
 
 async def test_lone_frame_fallback_flagged_and_retried(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     good = "https://x.com/good"
     flaky = "https://x.com/flaky"
@@ -2496,7 +2496,7 @@ async def test_lone_frame_fallback_flagged_and_retried(monkeypatch) -> None:
 async def test_lone_frame_fallback_fails_honestly_when_unrecoverable(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     good = "https://x.com/good"
     flaky = "https://x.com/flaky"
@@ -2534,7 +2534,7 @@ async def test_lone_frame_fallback_fails_honestly_when_unrecoverable(
 
 
 def test_lone_frame_fallback_needs_sibling_proof() -> None:
-    from app.agent.tools import _flag_lone_frame_fallbacks
+    from openbrowse.agent.tools import _flag_lone_frame_fallbacks
 
     results = {
         "https://x.com/a": {"url": "https://x.com/a", "text": "shell"},
@@ -2565,7 +2565,7 @@ def test_store_remove_items() -> None:
 
 
 async def test_remove_items_action_remaps_read_provenance() -> None:
-    from app.agent.tools import register_output_store_tools
+    from openbrowse.agent.tools import register_output_store_tools
     from browser_use import Tools
 
     tools = Tools()
@@ -2595,7 +2595,7 @@ async def test_remove_items_action_remaps_read_provenance() -> None:
 
 
 async def test_store_bridge_remove_items() -> None:
-    from app.agent.tools import _store_bridge
+    from openbrowse.agent.tools import _store_bridge
 
     store = _items_store()
     fs = _FakeFileSystem()
@@ -2612,7 +2612,7 @@ async def test_store_bridge_remove_items() -> None:
 async def test_find_links_retries_recover_late_rewritten_embed_links(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -2667,7 +2667,7 @@ async def test_find_links_retries_recover_late_rewritten_embed_links(
 
 
 async def test_find_links_warns_when_matched_frame_stays_tiny(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -2720,7 +2720,7 @@ async def test_find_links_warns_when_matched_frame_stays_tiny(monkeypatch) -> No
 async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -2781,7 +2781,7 @@ async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
 
 
 def test_system_metrics_pressure_levels(monkeypatch) -> None:
-    import app.system_metrics as sm
+    import openbrowse.system_metrics as sm
 
     monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
@@ -2810,7 +2810,7 @@ def test_system_metrics_pressure_levels(monkeypatch) -> None:
 async def test_pressure_baseline_is_task_scoped(monkeypatch) -> None:
     import asyncio
 
-    import app.system_metrics as sm
+    import openbrowse.system_metrics as sm
 
     monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
@@ -2840,8 +2840,8 @@ async def test_pressure_baseline_is_task_scoped(monkeypatch) -> None:
 
 
 async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
-    import app.system_metrics as sm
+    import openbrowse.agent.tools as tools_mod
+    import openbrowse.system_metrics as sm
 
     monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
@@ -2940,7 +2940,7 @@ async def test_wave_stagger_skips_single_url_waves(monkeypatch) -> None:
 
 
 def test_psi_parse_and_stall_fraction(tmp_path, monkeypatch) -> None:
-    import app.system_metrics as sm
+    import openbrowse.system_metrics as sm
 
     psi = tmp_path / "cpu"
     psi.write_text(
@@ -2965,7 +2965,7 @@ def test_psi_parse_and_stall_fraction(tmp_path, monkeypatch) -> None:
 
 
 def test_stall_fraction_loadavg_fallback(tmp_path, monkeypatch) -> None:
-    import app.system_metrics as sm
+    import openbrowse.system_metrics as sm
 
     monkeypatch.setattr(sm, "_PSI_CPU_PATH", str(tmp_path / "missing"))
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
@@ -2982,7 +2982,7 @@ def test_stall_fraction_loadavg_fallback(tmp_path, monkeypatch) -> None:
 
 
 async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
 
     monkeypatch.setattr(tools_mod, "_FIND_LINKS_RETRY_DELAY_S", 0.0)
@@ -3037,7 +3037,7 @@ async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
 
 
 async def test_gate_bounce_has_no_termination_vocabulary() -> None:
-    from app.agent.tools import register_completeness_gate
+    from openbrowse.agent.tools import register_completeness_gate
     from browser_use import Tools
 
     tools = Tools()
@@ -3057,9 +3057,9 @@ async def test_gate_bounce_has_no_termination_vocabulary() -> None:
 
 
 def test_draft_row_rejected_visible_label_never_pollutes_weaker_field() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row, _labelled_pairs
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _draft_row, _labelled_pairs
 
     schema = {
         "type": "object",
@@ -3102,9 +3102,9 @@ def test_draft_row_rejected_visible_label_never_pollutes_weaker_field() -> None:
 
 
 def test_draft_row_rejected_enum_value_never_pollutes_weaker_field() -> None:
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _draft_row
 
     schema = {
         "type": "object",
@@ -3155,9 +3155,9 @@ def test_draft_row_rejected_enum_value_never_pollutes_weaker_field() -> None:
 def test_draft_row_harvests_undeclared_extra_when_schema_allows() -> None:
     import json as _json
 
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.tools import _draft_row
 
     schema = {
         "type": "object",
@@ -3201,8 +3201,8 @@ def test_draft_row_harvests_undeclared_extra_when_schema_allows() -> None:
 
 
 def _visual_store():
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     schema = {
         "type": "object",
@@ -3226,7 +3226,7 @@ def _visual_store():
 
 
 def test_draft_row_rendered_values_outrank_background_data() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _visual_store()
     page = {
@@ -3252,7 +3252,7 @@ def test_draft_row_rendered_values_outrank_background_data() -> None:
 
 
 def test_draft_row_background_upgrades_visual_only_when_richer() -> None:
-    from app.agent.tools import _draft_row
+    from openbrowse.agent.tools import _draft_row
 
     store = _visual_store()
     page = {
@@ -3280,7 +3280,7 @@ def test_draft_row_background_upgrades_visual_only_when_richer() -> None:
 async def test_read_pages_targets_sole_embed_host_without_frame_filter(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     seen_filters: list = []
 
@@ -3316,7 +3316,7 @@ async def test_read_pages_targets_sole_embed_host_without_frame_filter(
 
 
 async def test_read_pages_ignores_sole_widget_sized_frame(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     seen_filters: list = []
 
@@ -3342,7 +3342,7 @@ async def test_read_pages_ignores_sole_widget_sized_frame(monkeypatch) -> None:
 
 
 async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     seen_filters: list = []
 
@@ -3364,7 +3364,7 @@ async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> N
 
 
 async def test_read_one_page_waits_for_panel_seen_in_dom(monkeypatch) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     match_calls = {"n": 0}
 
@@ -3404,7 +3404,7 @@ async def test_read_one_page_waits_for_panel_seen_in_dom(monkeypatch) -> None:
 async def test_read_one_page_keeps_filter_when_needle_only_in_query(
     monkeypatch,
 ) -> None:
-    import app.agent.tools as tools_mod
+    import openbrowse.agent.tools as tools_mod
 
     async def fake_match(
         session, tid, needle, claimed, baseline, allow_sole=False, page_url=None,
@@ -3441,7 +3441,7 @@ async def test_read_one_page_keeps_filter_when_needle_only_in_query(
 
 
 def test_tolerate_json_list_shapes() -> None:
-    from app.agent.tools import _tolerate_json_list
+    from openbrowse.agent.tools import _tolerate_json_list
 
     assert _tolerate_json_list('["a", "b"]') == ["a", "b"]
     assert _tolerate_json_list(["a"]) == ["a"]
@@ -3453,7 +3453,7 @@ def test_tolerate_json_list_shapes() -> None:
 async def test_mark_absent_accepts_json_string_list() -> None:
     """Claude's observed wire drift: a list argument serialised as its JSON
     text must settle every named field, not bounce as one unknown field."""
-    from app.agent.tools import register_output_store_tools
+    from openbrowse.agent.tools import register_output_store_tools
 
     tools = Tools()
     store = _items_store()
@@ -3475,7 +3475,7 @@ async def test_search_page_flow_wrapper() -> None:
 
     from browser_use import ActionResult
 
-    from app.agent.tools import register_search_page_flow
+    from openbrowse.agent.tools import register_search_page_flow
 
     calls = []
 
@@ -3507,8 +3507,8 @@ async def test_search_page_flow_wrapper() -> None:
 async def test_read_output_fields_json_string_normalised_at_boundary() -> None:
     """The strict signature rejects a stringified list; the boundary normaliser
     repairs it before validation, so the pair must round-trip."""
-    from app.agent.leak_repair import coerce_action_param_shapes
-    from app.agent.tools import action_param_kinds, register_output_store_tools
+    from openbrowse.agent.leak_repair import coerce_action_param_shapes
+    from openbrowse.agent.tools import action_param_kinds, register_output_store_tools
 
     tools = Tools()
     store = _items_store()
@@ -3525,7 +3525,7 @@ async def test_read_output_fields_json_string_normalised_at_boundary() -> None:
 
 
 def test_action_param_kinds_map() -> None:
-    from app.agent.tools import _param_kind, action_param_kinds, register_output_store_tools
+    from openbrowse.agent.tools import _param_kind, action_param_kinds, register_output_store_tools
 
     tools = Tools()
     register_output_store_tools(tools, _items_store(), {})
@@ -3546,7 +3546,7 @@ def test_action_param_kinds_map() -> None:
 
 
 async def test_remember_rejects_reserved_keys() -> None:
-    from app.agent.tools import register_clipboard_tools
+    from openbrowse.agent.tools import register_clipboard_tools
 
     tools = Tools()
     clipboard = {"found_links": ["https://x.com/a"]}
@@ -3559,7 +3559,7 @@ async def test_remember_rejects_reserved_keys() -> None:
 
 
 def test_saved_links_survive_corruption() -> None:
-    from app.agent.tools import _saved_links_sans_offhost
+    from openbrowse.agent.tools import _saved_links_sans_offhost
 
     kept, skipped = _saved_links_sans_offhost({"found_links": "https://x.com/a"})
     assert kept == [] and skipped == 0
@@ -3570,7 +3570,7 @@ def test_saved_links_survive_corruption() -> None:
 
 
 def test_filter_page_urls() -> None:
-    from app.agent.tools import _filter_page_urls
+    from openbrowse.agent.tools import _filter_page_urls
 
     kept, dropped = _filter_page_urls(["null", "https://x.com/a", "jobs", "http://y.com"])
     assert kept == ["https://x.com/a", "http://y.com"] and dropped == 2
@@ -3581,7 +3581,7 @@ def test_filter_page_urls() -> None:
 
 
 def test_coerce_scalar_unwraps_json_strings_for_container_fields() -> None:
-    from app.agent.output_store import _coerce_scalar
+    from openbrowse.agent.output_store import _coerce_scalar
 
     assert _coerce_scalar('["a", "b"]', list[str]) == ["a", "b"]
     assert _coerce_scalar('{"k": "v"}', dict[str, str]) == {"k": "v"}
@@ -3590,7 +3590,7 @@ def test_coerce_scalar_unwraps_json_strings_for_container_fields() -> None:
 
 
 async def test_gate_emits_pass_event_on_clean_done() -> None:
-    from app.agent.tools import register_completeness_gate, register_output_store_tools
+    from openbrowse.agent.tools import register_completeness_gate, register_output_store_tools
 
     tools = Tools()
     store = _items_store()

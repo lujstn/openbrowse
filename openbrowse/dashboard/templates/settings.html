@@ -1,0 +1,360 @@
+{% extends "base.html" %} {% block title %}Settings · OpenBrowse{% endblock %}
+{% block head %}
+<style>
+  .settings-wrap {
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  .settings-card {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 20px 20px 16px;
+    margin-bottom: 16px;
+  }
+  .group-title {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+  }
+  .env-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 7px 0;
+  }
+  .env-key {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    color: #9ca3af;
+  }
+  .env-key .unset {
+    color: #555;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+  .env-value-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .env-row input[name="value"],
+  .env-row input.env-new-key {
+    background: #0a0a0a;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  .env-value-wrap.has-reveal input[name="value"] {
+    padding-right: 36px;
+  }
+  .env-row input:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .reveal-btn {
+    position: absolute;
+    right: 6px;
+    background: none;
+    border: none;
+    color: #555;
+    cursor: pointer;
+    padding: 4px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+  }
+  .reveal-btn:hover {
+    color: #e5e5e5;
+  }
+  .reveal-btn svg {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .reveal-btn .eye-off {
+    display: none;
+  }
+  .reveal-btn.revealed .eye {
+    display: none;
+  }
+  .reveal-btn.revealed .eye-off {
+    display: inline;
+  }
+  .settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 14px;
+    margin-top: 4px;
+  }
+  .settings-note {
+    color: #666;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .save-btn {
+    background: #60a5fa;
+    color: #0a0a0a;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px 22px;
+    cursor: pointer;
+  }
+  .save-btn:hover {
+    background: #7db8fb;
+  }
+  .save-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .save-btn:disabled:hover {
+    background: #60a5fa;
+  }
+  .restart-note {
+    border-left: 2px solid #f59e0b;
+    padding-left: 10px;
+  }
+  .failed-banner {
+    background: #201012;
+    border: 1px solid #4a1d1d;
+    color: #f87171;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="settings-wrap">
+  <h1>Settings</h1>
+  {% if restart_failed %}
+  <div class="failed-banner">
+    The settings were saved to .env, but the server does not appear to have
+    restarted, so the old configuration is still running. Restart it manually
+    to apply the changes.
+  </div>
+  {% endif %}
+  {% if active_sessions %}
+  <div class="failed-banner">
+    Not saved: {{ active_sessions }} session{{ "s" if active_sessions != 1 else "" }}
+    currently running would be killed by the restart. Wait for
+    {{ "them" if active_sessions != 1 else "it" }} to finish, or tick
+    "restart anyway" below to save and restart regardless.
+  </div>
+  {% endif %}
+  {% if host_tune_output %}
+  <div class="failed-banner" style="{% if host_tune_ok %}border-color:#14532d;background:#0f1c12;color:#4ade80;{% endif %}">
+    <strong>Host tuning {{ "applied" if host_tune_ok else "failed" }}.</strong>
+    <pre style="margin:8px 0 0;white-space:pre-wrap;font-size:12px;color:inherit;">{{ host_tune_output }}</pre>
+  </div>
+  {% endif %}
+  {% if update_failed %}
+  <div class="failed-banner">
+    <strong>Update failed.</strong> The running version is unchanged.
+    {% if update and update.install_log %}
+    <pre style="margin:8px 0 0;white-space:pre-wrap;font-size:12px;color:inherit;">{{ update.install_log }}</pre>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if update_busy %}
+  <div class="failed-banner">
+    Not updated: sessions are currently running and the update would restart the
+    server underneath them. Wait for them to finish, then try again.
+  </div>
+  {% endif %}
+  <div class="settings-card" id="update-card">
+    <div class="group-title">Software update</div>
+    <p class="settings-note" style="margin-top:0">
+      Installed: <strong style="color:#cbd5e1">v{{ version }}</strong>
+      {% if update and update.available %}
+      &mdash; <strong style="color:#fbbf24">v{{ update.latest }} is available</strong>
+      {% elif update and update.latest %}
+      &mdash; up to date (latest release: v{{ update.latest }})
+      {% elif update and update.error %}
+      &mdash; last check failed: {{ update.error }}
+      {% else %}
+      &mdash; not checked yet
+      {% endif %}
+    </p>
+    {% if update and update.available %}
+    {% if update_supported %}
+    <form method="post" action="/settings/update" style="margin-top:8px"
+          onsubmit="return confirm('Install v{{ update.latest }} and restart the server?')">
+      <button class="save-btn" type="submit">Install v{{ update.latest }} and restart</button>
+    </form>
+    {% else %}
+    <p class="settings-note">
+      This copy was installed in a way OpenBrowse cannot upgrade itself
+      ({{ update_method }}). Upgrade it manually, then restart the service.
+    </p>
+    {% endif %}
+    {% endif %}
+    <form method="post" action="/settings/update/check" style="margin-top:8px">
+      <button class="save-btn" type="submit" style="background:#1f2937;color:#e5e5e5;font-size:12px;padding:7px 14px">Check now</button>
+    </form>
+  </div>
+  {% if hw_complete %}
+  <div class="settings-card" id="capacity-card">
+    <div class="group-title">Capacity</div>
+    <p class="settings-note" style="margin-top:0">Detected: <strong style="color:#cbd5e1">{{ hw_summary }}</strong></p>
+    <p class="settings-note">How much of this machine can OpenBrowse use?</p>
+    <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
+      <label class="settings-note"><input type="radio" name="hw-share" value="all" data-rec="{{ hw_recs.all }}" /> All of it &mdash; nothing else important runs here</label>
+      <label class="settings-note"><input type="radio" name="hw-share" value="most" checked data-rec="{{ hw_recs.most }}" /> Most of it &mdash; leave some headroom</label>
+      <label class="settings-note"><input type="radio" name="hw-share" value="shared" data-rec="{{ hw_recs.shared }}" /> Share it &mdash; other services matter too</label>
+    </div>
+    <label class="settings-note" style="display:block; margin-bottom:10px;">
+      Concurrent sessions (1&ndash;{{ hw_hard_max }}, currently {{ hw_current }})
+      <input type="range" id="hw-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_current }}" style="width:220px; vertical-align:middle;" />
+      <output id="hw-value">{{ hw_current }}</output>
+    </label>
+    <p class="settings-note">Moving the slider updates <code>MAX_CONCURRENT_SESSIONS</code> below; save to apply.</p>
+    {% if hw_light_on %}
+    <p class="settings-note">&#10003; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; enabled: each browser runs without a GPU process and with capped helper processes and JavaScript memory (<code>CHROME_LIGHT_FLAGS</code> below).</p>
+    {% elif hw_light_recommended %}
+    <p class="settings-note">&#9679; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; recommended for this machine: set <code>CHROME_LIGHT_FLAGS</code> to <code>1</code> below and save. It skips the GPU process and caps helper processes and JavaScript memory; worth turning off only if an unusually heavy web app misbehaves.</p>
+    {% endif %}
+    {% if hw_checklist %}
+    <div class="group-title" style="margin-top:14px">Host tuning</div>
+    {% for row in hw_checklist %}
+    <p class="settings-note" style="margin:4px 0">
+      {% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9432;{% endif %}
+      <strong style="color:#cbd5e1">{{ row.label }}</strong> &mdash; {{ row.detail }}
+    </p>
+    {% endfor %}
+    {% if hw_tune_button %}
+    <form method="post" action="/settings/host-tune" style="margin-top:8px">
+      <input type="hidden" name="share" id="hw-share-hidden" value="most" />
+      <button class="save-btn" type="submit">Apply recommended tuning</button>
+    </form>
+    {% elif hw_checklist | selectattr("state", "equalto", "action") | list %}
+    <p class="settings-note">Apply the recommended items once from a shell on this machine (this also enables the button for next time):</p>
+    <pre style="font-size:12px">openbrowse tune --share most</pre>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+  <form id="settings-form" method="post" action="/settings">
+    {% for group in groups %}
+    <div class="settings-card">
+      <div class="group-title">{{ group.title }}</div>
+      {% for row in group.rows %}
+      <div class="env-row">
+        <span class="env-key">{{ row.key }}{% if not row.present %}<span class="unset">not set</span>{% endif %}</span>
+        <span class="env-value-wrap{% if row.secret %} has-reveal{% endif %}">
+          <input type="hidden" name="key" value="{{ row.key }}" />
+          <input
+            type="{{ 'password' if row.secret else 'text' }}"
+            name="value"
+            value="{{ row.value }}"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          {% if row.secret %}
+          <button type="button" class="reveal-btn" title="Show value" aria-label="Show value">
+            <svg class="eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="eye-off" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </button>
+          {% endif %}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="settings-card">
+      <div class="group-title">Add a variable</div>
+      <div class="env-row">
+        <input class="env-new-key" type="text" name="key" value="" placeholder="NAME" autocomplete="off" spellcheck="false" />
+        <span class="env-value-wrap">
+          <input type="text" name="value" value="" placeholder="value" autocomplete="off" spellcheck="false" />
+        </span>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <span class="settings-note restart-note">
+        Values are written to .env; clearing a value removes the variable.
+        Saving restarts the server, which interrupts any sessions currently running.
+      </span>
+      {% if active_sessions %}
+      <label class="settings-note" style="white-space: nowrap">
+        <input type="checkbox" name="force" value="1" /> restart anyway
+      </label>
+      {% endif %}
+      <button class="save-btn" type="submit" {% if not active_sessions %}disabled{% endif %}>Save and restart</button>
+    </div>
+  </form>
+</div>
+<script>
+  document.querySelectorAll(".reveal-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = btn.parentElement.querySelector("input[name=value]");
+      var show = input.type === "password";
+      input.type = show ? "text" : "password";
+      btn.classList.toggle("revealed", show);
+      btn.title = show ? "Hide value" : "Show value";
+    });
+  });
+  (function () {
+    var form = document.getElementById("settings-form");
+    var save = form.querySelector(".save-btn");
+    function dirty() {
+      return Array.prototype.some.call(
+        form.querySelectorAll("input[name=value], input.env-new-key"),
+        function (i) {
+          return i.value !== i.defaultValue;
+        }
+      );
+    }
+    form.addEventListener("input", function () {
+      save.disabled = !dirty();
+    });
+  })();
+  (function () {
+    var slider = document.getElementById("hw-slider");
+    if (!slider) return;
+    var out = document.getElementById("hw-value");
+    var hidden = document.getElementById("hw-share-hidden");
+    var form = document.getElementById("settings-form");
+    function mcsInput() {
+      var keys = form.querySelectorAll('input[name="key"]');
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i].value === "MAX_CONCURRENT_SESSIONS") {
+          return keys[i].parentElement.querySelector('input[name="value"]');
+        }
+      }
+      return null;
+    }
+    slider.addEventListener("input", function () {
+      out.textContent = slider.value;
+      var target = mcsInput();
+      if (target) {
+        target.value = slider.value;
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    document.querySelectorAll('input[name="hw-share"]').forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        slider.value = radio.dataset.rec;
+        slider.dispatchEvent(new Event("input"));
+        if (hidden) hidden.value = radio.value;
+      });
+    });
+  })();
+</script>
+{% endblock %}

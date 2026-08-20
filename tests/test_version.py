@@ -16,25 +16,27 @@ def _read_version(path: Path, pattern: str) -> str:
     return match.group(1)
 
 
-def test_all_three_versions_agree():
+def test_declared_versions_agree():
     pyproject_version = _read_version(REPO_ROOT / "pyproject.toml", r'^version = "([^"]*)"$')
     citation_version = _read_version(REPO_ROOT / "CITATION.cff", r"^version: (.*)$")
-    main_py_version = _read_version(REPO_ROOT / "app" / "main.py", r'version="([^"]*)"')
 
-    assert pyproject_version == citation_version == main_py_version
+    assert pyproject_version == citation_version
+
+
+def test_package_reports_pyproject_version():
+    import openbrowse
+
+    pyproject_version = _read_version(REPO_ROOT / "pyproject.toml", r'^version = "([^"]*)"$')
+    assert openbrowse.__version__ == pyproject_version
 
 
 @pytest.fixture
 def fixture_root(tmp_path: Path) -> Path:
-    (tmp_path / "app").mkdir()
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "example"\nversion = "1.0.0"\nrequires-python = ">=3.11"\n'
     )
     (tmp_path / "CITATION.cff").write_text(
         "cff-version: 1.2.0\ntitle: Example\nversion: 1.0.0\ndate-released: 2026-01-01\nlicense: MIT\n"
-    )
-    (tmp_path / "app" / "main.py").write_text(
-        'from fastapi import FastAPI\n\napp = FastAPI(\n    title="Example",\n    version="1.0.0",\n)\n'
     )
     return tmp_path
 
@@ -42,12 +44,11 @@ def fixture_root(tmp_path: Path) -> Path:
 def test_apply_version_updates_all_files(fixture_root: Path):
     changes = apply_version(fixture_root, "1.1.0", "2026-02-02")
 
-    assert len(changes) == 4
+    assert len(changes) == 3
     assert 'version = "1.1.0"' in (fixture_root / "pyproject.toml").read_text()
     citation_text = (fixture_root / "CITATION.cff").read_text()
     assert "version: 1.1.0" in citation_text
     assert "date-released: 2026-02-02" in citation_text
-    assert 'version="1.1.0"' in (fixture_root / "app" / "main.py").read_text()
 
 
 def test_apply_version_preserves_other_content(fixture_root: Path):
@@ -55,19 +56,18 @@ def test_apply_version_preserves_other_content(fixture_root: Path):
 
     assert 'name = "example"' in (fixture_root / "pyproject.toml").read_text()
     assert "cff-version: 1.2.0" in (fixture_root / "CITATION.cff").read_text()
-    assert "from fastapi import FastAPI" in (fixture_root / "app" / "main.py").read_text()
 
 
 def test_apply_version_zero_matches_fails_loudly(fixture_root: Path):
-    (fixture_root / "app" / "main.py").write_text("app = object()\n")
+    (fixture_root / "CITATION.cff").write_text("cff-version: 1.2.0\ntitle: Example\n")
 
     with pytest.raises(ValueError, match="pattern matched zero times"):
         apply_version(fixture_root, "1.1.0", "2026-02-02")
 
 
 def test_apply_version_multiple_matches_fails_loudly(fixture_root: Path):
-    (fixture_root / "app" / "main.py").write_text(
-        'app = FastAPI(version="1.0.0")\nother = FastAPI(version="1.0.0")\n'
+    (fixture_root / "CITATION.cff").write_text(
+        "cff-version: 1.2.0\nversion: 1.0.0\nversion: 1.0.0\ndate-released: 2026-01-01\n"
     )
 
     with pytest.raises(ValueError, match="pattern matched 2 times"):
@@ -127,7 +127,6 @@ def test_cli_equal_version_allowed_with_force(cli_root: Path):
 def test_cli_dry_run_writes_nothing(cli_root: Path):
     before_pyproject = (cli_root / "pyproject.toml").read_text()
     before_citation = (cli_root / "CITATION.cff").read_text()
-    before_main = (cli_root / "app" / "main.py").read_text()
 
     result = _run_cli(["1.5.0", "--dry-run"], cwd=cli_root)
 
@@ -135,7 +134,6 @@ def test_cli_dry_run_writes_nothing(cli_root: Path):
     assert "Dry run" in result.stdout
     assert (cli_root / "pyproject.toml").read_text() == before_pyproject
     assert (cli_root / "CITATION.cff").read_text() == before_citation
-    assert (cli_root / "app" / "main.py").read_text() == before_main
 
 
 def test_cli_invalid_semver_rejected(cli_root: Path):
