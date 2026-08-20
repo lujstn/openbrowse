@@ -1123,6 +1123,7 @@ sudo tailscale funnel --bg 8420</pre>
           var first = active.querySelector("input:not([type=hidden]):not([type=radio]):not([type=checkbox])");
           if (first) first.focus();
         }
+        syncStepper();
         document.querySelectorAll("[data-next]").forEach(function (b) {
           b.addEventListener("click", function () {
             goTo(current + 1);
