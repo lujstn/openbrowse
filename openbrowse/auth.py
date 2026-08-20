@@ -18,7 +18,13 @@ from openbrowse import auth_throttle
 from openbrowse.config import settings
 
 _bearer = HTTPBearer(auto_error=False)
-_basic = HTTPBasic(auto_error=True)
+# @nonobvious(forced-by): auto_error off, because it would answer a fresh
+# install's first request with a password challenge before any code could run,
+# and a fresh install has no password. require_dashboard_auth issues the
+# challenge itself, once there is something to challenge against.
+_basic = HTTPBasic(auto_error=False)
+
+SETUP_PATH = "/setup"
 
 
 async def require_api_key(
@@ -94,20 +100,30 @@ def dashboard_auth_ok(authorization: str | None, conn: HTTPConnection | None = N
 
 async def require_dashboard_auth(
     request: Request,
-    credentials: HTTPBasicCredentials = Security(_basic),
+    credentials: HTTPBasicCredentials | None = Security(_basic),
 ) -> str:
-    """Gate the dashboard behind HTTP Basic auth (dashboard user + password, or the API key)."""
+    """Gate the dashboard behind HTTP Basic auth (dashboard user + password, or the API key).
+
+    Until this instance has a credential of its own, the dashboard has nothing to
+    check and sends the visitor to the setup wizard instead. That is the whole
+    reason no default password ships: there is never a working credential that
+    the person who installed OpenBrowse did not choose.
+    """
     ip = auth_throttle.client_ip(request)
     auth_throttle.enforce(ip)
     if not _expected_dashboard_password():
         if settings.allow_insecure_no_auth:
             return "dev"
         raise HTTPException(
-            status_code=503,
-            detail=(
-                "Dashboard authentication is not configured — open /setup in "
-                "your browser to configure this instance."
-            ),
+            status_code=303,
+            detail="OpenBrowse is not configured yet; continue at /setup.",
+            headers={"Location": SETUP_PATH},
+        )
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Basic"},
         )
     if not check_dashboard_credentials(credentials.username, credentials.password):
         auth_throttle.throttle.record_failure(ip)
