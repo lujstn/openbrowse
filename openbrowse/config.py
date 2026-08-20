@@ -157,7 +157,7 @@ class Settings:
         in ("1", "true", "yes")
     )
     default_model: str = field(
-        default_factory=lambda: os.environ.get("DEFAULT_MODEL") or "claude-sonnet-5"
+        default_factory=lambda: os.environ.get("DEFAULT_MODEL") or "gpt-5.6-terra"
     )
     stale_session_minutes: int = 15
     reconcile_interval_seconds: int = 60

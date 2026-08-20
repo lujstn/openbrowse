@@ -99,8 +99,6 @@ uv tool install openbrowse
 openbrowse start
 ```
 
-`openbrowse start` registers OpenBrowse as a systemd service, so it is running now **and starts automatically on every boot from here on** (`openbrowse stop --disable` undoes that). On a machine without systemd it falls back to running in the foreground, as does `openbrowse serve` anywhere.
-
 To run from source instead, clone the repo and use uv directly:
 
 ```bash

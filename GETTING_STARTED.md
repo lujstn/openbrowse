@@ -41,8 +41,7 @@ openbrowse start
 `openbrowse start` registers OpenBrowse as a systemd service, so it is running
 now and starts again on every boot. `openbrowse stop --disable` undoes that, and
 `openbrowse status` and `openbrowse restart` manage it in between. On a machine
-without systemd it runs in the foreground instead, which is also what
-`openbrowse serve` does anywhere.
+without systemd it runs in the foreground instead.
 
 To work on OpenBrowse rather than only run it, clone the repository and run it
 from the checkout:
