@@ -181,17 +181,25 @@
     color: #cbd5e1;
   }
   .update-status {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: 12.5px;
     color: #666;
+    margin-top: 3px;
+    min-height: 18px;
+  }
+  .update-status:empty {
+    display: none;
   }
   .update-status.is-ok {
     color: #34d399;
   }
   .update-status.is-avail {
     color: #fbbf24;
+  }
+  .update-status.is-bad {
+    color: #f87171;
   }
   .update-avail-box {
     display: none;
@@ -211,37 +219,31 @@
     color: #fbbf24;
   }
 
-  /* ---------- performance ---------- */
-  .detected-block {
-    margin: 4px 0 16px;
-  }
-  .detected-label {
-    font-size: 12px;
-    color: #9ca3af;
-    font-weight: 500;
-    margin-bottom: 6px;
-  }
-  .detected-block pre {
-    font-family: "SF Mono", "Menlo", monospace;
-    font-size: 12.5px;
-    color: #e5e5e5;
-    background: #0a0a0a;
-    border: 1px solid #222;
-    border-radius: 8px;
-    padding: 11px 13px;
-    margin: 0;
-  }
+  /* ---------- performance: every control shares the env-row grid ---------- */
   .perf-row {
     display: grid;
     grid-template-columns: 220px 1fr;
     gap: 12px;
     align-items: center;
-    padding: 9px 0;
+    padding: 8px 0;
   }
   .perf-label {
-    font-size: 12.5px;
+    font-size: 12px;
     color: #9ca3af;
     font-weight: 500;
+  }
+  .detected-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .detected-chips span {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11.5px;
+    color: #cbd5e1;
+    background: #1a1a1a;
+    border-radius: 999px;
+    padding: 4px 11px;
   }
   .perf-control {
     display: flex;
@@ -249,13 +251,13 @@
     gap: 10px;
   }
   .perf-control input[type="number"] {
-    width: 90px;
+    width: 84px;
     background: #0a0a0a;
     border: 1px solid #2a2a2a;
     border-radius: 6px;
     color: #e5e5e5;
     font-family: "SF Mono", "Menlo", monospace;
-    font-size: 13px;
+    font-size: 12px;
     padding: 8px 10px;
   }
   .perf-control input[type="number"]:focus {
@@ -266,34 +268,17 @@
     font-size: 11.5px;
     color: #666;
   }
-  .toggle-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border: 1px solid #222;
-    border-radius: 8px;
-    background: #0a0a0a;
-    padding: 13px 14px;
-    margin-top: 10px;
-    cursor: pointer;
-  }
-  .toggle-row input[type="checkbox"] {
-    width: 17px;
-    height: 17px;
+  .perf-control input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
     accent-color: #60a5fa;
     flex: none;
     cursor: pointer;
   }
-  .toggle-row .toggle-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #e5e5e5;
-  }
-  .toggle-row .toggle-desc {
+  .perf-card-note {
     font-size: 11.5px;
-    color: #666;
-    line-height: 1.5;
-    margin-top: 2px;
+    color: #555;
+    margin-top: 10px;
   }
 </style>
 {% endblock %} {% block content %}
@@ -332,10 +317,10 @@
   <div class="settings-card" id="update-card">
     <div class="group-title">Software update</div>
     <div class="update-row">
-      <div class="update-body">
-        Installed: <strong>v{{ version }}</strong>
-        <span class="update-status" id="update-status"
-          >{% if update and update.available %}v{{ update.latest }} is available{% elif update and update.latest %}You&rsquo;re on the latest version.{% elif update and update.error %}Last check failed.{% endif %}</span
+      <div>
+        <div class="update-body">Installed: <strong>v{{ version }}</strong></div>
+        <div class="update-status{% if update and update.available %} is-avail{% elif update and update.latest %} is-ok{% endif %}" id="update-status"
+          >{% if update and update.available %}v{{ update.latest }} is available.{% elif update and update.latest %}You&rsquo;re on the latest version.{% endif %}</div
         >
       </div>
       <button type="button" class="btn-ghost" id="update-check-btn">Check now</button>
@@ -362,9 +347,11 @@
     <div class="settings-card" id="performance-card">
       <div class="group-title">Performance</div>
       {% if hw_complete %}
-      <div class="detected-block">
-        <div class="detected-label">Detected:</div>
-        <pre>{{ hw_summary }}</pre>
+      <div class="perf-row">
+        <span class="perf-label">Detected</span>
+        <span class="detected-chips">
+          {% for part in hw_summary.split(" · ") %}<span>{{ part }}</span>{% endfor %}
+        </span>
       </div>
       {% endif %}
       <div class="perf-row">
@@ -380,18 +367,19 @@
             value="{{ hw_current }}"
             inputmode="numeric"
           />
-          {% if hw_suggested_max %}<span class="perf-hint">Suggested max for this machine: {{ hw_suggested_max }}</span>{% endif %}
+          {% if hw_suggested_max %}<span class="perf-hint">Suggested for this machine: {{ hw_suggested_max }}</span>{% endif %}
         </span>
       </div>
-      <label class="toggle-row">
-        <input type="checkbox" id="light-toggle" {% if hw_light_on %}checked{% endif %} />
-        <input type="hidden" name="key" value="CHROME_LIGHT_FLAGS" />
-        <input type="hidden" name="value" id="light-value" value="{{ '1' if hw_light_on else '' }}" />
-        <span>
-          <span class="toggle-title">Lighter browser</span>
-          <span class="toggle-desc" style="display: block">Runs each browser without a GPU process and with capped memory. Best for small machines.</span>
+      <label class="perf-row" style="cursor: pointer">
+        <span class="perf-label">Lighter browser</span>
+        <span class="perf-control">
+          <input type="checkbox" id="light-toggle" {% if hw_light_on %}checked{% endif %} />
+          <input type="hidden" name="key" value="CHROME_LIGHT_FLAGS" />
+          <input type="hidden" name="value" id="light-value" value="{{ '1' if hw_light_on else '' }}" />
+          <span class="perf-hint">No GPU process, capped memory. Best for small machines.</span>
         </span>
       </label>
+      <div class="perf-card-note">Changes apply with Save and restart below.</div>
     </div>
 
     {% for group in groups %}
@@ -501,7 +489,7 @@
               availBox.classList.add("is-shown");
             }
           } else if (res.error) {
-            status.className = "update-status";
+            status.className = "update-status is-bad";
             status.textContent = "The check failed: " + res.error;
           } else {
             status.className = "update-status is-ok";
@@ -509,10 +497,10 @@
             availBox.classList.remove("is-shown");
           }
         })
-        .catch(function () {
+        .catch(function (err) {
           btn.disabled = false;
-          status.className = "update-status";
-          status.textContent = "The check failed; try again.";
+          status.className = "update-status is-bad";
+          status.textContent = "Could not reach the server to check (" + err.message + ").";
         });
     });
   })();

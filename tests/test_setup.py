@@ -351,7 +351,7 @@ async def test_setup_capacity_section_bounded_by_hardware(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.get("/setup")
     assert resp.status_code == 200
-    assert "Suggested max for this machine: 4" in resp.text
+    assert "Suggested for this machine: 4" in resp.text
     assert "4 cores" in resp.text
     assert 'name="share"' in resp.text
 
