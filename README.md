@@ -104,11 +104,22 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 ## Quick start
 
+With [uv](https://docs.astral.sh/uv/):
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install openbrowse
 openbrowse start
 ```
+
+Or with [pipx](https://pipx.pypa.io/), if that is already how you install Python apps:
+
+```bash
+pipx install openbrowse
+openbrowse start
+```
+
+Either is fine. OpenBrowse notices which one installed it and upgrades itself with that same tool, so the dashboard's one-click update works the same way round.
 
 To run from source instead, clone the repo and use uv directly:
 

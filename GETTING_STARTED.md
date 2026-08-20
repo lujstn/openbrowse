@@ -28,8 +28,8 @@ sudo apt install -y xvfb x11vnc novnc websockify \
   libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libgtk-3-0
 ```
 
-Then install [uv](https://docs.astral.sh/uv/) if you do not have it, and install
-OpenBrowse itself:
+Then install OpenBrowse with either [uv](https://docs.astral.sh/uv/) or
+[pipx](https://pipx.pypa.io/), whichever you already use for Python apps:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -37,6 +37,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install openbrowse
 openbrowse start
 ```
+
+```bash
+pipx install openbrowse
+openbrowse start
+```
+
+Neither is preferred. OpenBrowse works out which one installed it and upgrades
+itself with that same tool, so the installer that owns the app stays the one
+that changes it.
 
 `openbrowse start` registers OpenBrowse as a systemd service, so it is running
 now and starts again on every boot. `openbrowse stop --disable` undoes that, and
@@ -93,6 +102,10 @@ the Settings page, and the server restarts itself afterwards. From a shell:
 openbrowse check-update
 openbrowse update
 ```
+
+`openbrowse update` runs whichever upgrade the install method calls for: `uv tool
+upgrade` for a uv tool, `pipx upgrade` for a pipx app, `pip install --upgrade`
+for a plain venv, or a `git pull` for a checkout.
 
 Set `UPDATE_CHECK_HOURS` in your `.env` to change how often it looks, or `0` to
 switch the background check off.

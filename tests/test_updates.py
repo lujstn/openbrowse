@@ -123,6 +123,71 @@ def test_detect_uv_tool(tmp_path, monkeypatch):
     assert commands == [["/usr/bin/uv", "tool", "upgrade", "openbrowse"]]
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "/home/pi/.local/pipx/venvs/openbrowse",
+        "/home/pi/.local/share/pipx/venvs/openbrowse",
+    ],
+)
+def test_detect_pipx(tmp_path, monkeypatch, prefix):
+    """pipx owns the app, so pipx upgrades it. Reaching around it with a bare pip
+    would leave pipx's records describing a version no longer installed."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/usr/bin/pipx")
+    monkeypatch.setattr(sys, "prefix", prefix)
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pipx"
+    assert commands == [["/usr/bin/pipx", "upgrade", "openbrowse"]]
+
+
+def test_detect_pipx_without_the_binary_offers_no_command(tmp_path, monkeypatch):
+    """Better to say there is no automatic path than to invent one that reaches
+    around the installer."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: None)
+    monkeypatch.setattr(sys, "prefix", "/home/pi/.local/pipx/venvs/openbrowse")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pipx"
+    assert commands is None
+
+
+def test_managed_installs_are_never_mistaken_for_a_plain_venv(monkeypatch):
+    """Both uv and pipx put the app in a venv, so sys.prefix != base_prefix is
+    true for them too. Whichever manager owns the app has to win that race."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/usr/bin/pipx")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    for prefix, expected in (
+        ("/home/pi/.local/share/uv/tools/openbrowse", "uv-tool"),
+        ("/home/pi/.local/pipx/venvs/openbrowse", "pipx"),
+        ("/home/pi/.local/share/pipx/venvs/openbrowse", "pipx"),
+    ):
+        monkeypatch.setattr(sys, "prefix", prefix)
+        assert updates.detect_install_method()[0] == expected, prefix
+
+
+def test_installer_lookup_survives_a_systemd_path(tmp_path, monkeypatch):
+    """systemd hands the service a minimal PATH that usually omits ~/.local/bin,
+    which is where both uv and pipx install themselves."""
+    monkeypatch.setattr(updates.shutil, "which", lambda name: None)
+    monkeypatch.setattr(updates.Path, "home", staticmethod(lambda: tmp_path))
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    for name in ("uv", "pipx"):
+        (tmp_path / ".local" / "bin" / name).write_text("")
+
+    assert updates._uv_binary() == str(tmp_path / ".local" / "bin" / "uv")
+    assert updates._pipx_binary() == str(tmp_path / ".local" / "bin" / "pipx")
+
+
 def test_detect_pip_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "checkout_root", lambda: None)
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))

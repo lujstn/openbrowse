@@ -3,7 +3,9 @@
 The checker polls PyPI's JSON API on an interval and caches the result; the
 dashboard reads the cache to show its badge and calls :func:`install_update`
 when the user asks for the upgrade. The upgrade command depends on how this
-copy was installed: a uv tool, a plain pip/venv install, or a git checkout.
+copy was installed: a uv tool, a pipx app, a plain pip/venv install, or a git
+checkout. uv and pipx are equal citizens; each is upgraded with its own tool so
+the installer that owns the app stays the one that changes it.
 """
 
 from __future__ import annotations
@@ -110,19 +112,41 @@ async def checker_loop() -> None:
         delay = interval
 
 
-def _uv_binary() -> str | None:
-    found = shutil.which("uv")
+def _tool_binary(name: str) -> str | None:
+    """Find an installer we may not have inherited a PATH from.
+
+    A service started by systemd gets a minimal PATH that often omits
+    ~/.local/bin, which is exactly where both uv and pipx put themselves.
+    """
+    found = shutil.which(name)
     if found:
         return found
-    fallback = Path.home() / ".local" / "bin" / "uv"
+    fallback = Path.home() / ".local" / "bin" / name
     return str(fallback) if fallback.exists() else None
+
+
+def _uv_binary() -> str | None:
+    return _tool_binary("uv")
+
+
+def _pipx_binary() -> str | None:
+    return _tool_binary("pipx")
+
+
+def _prefix_contains(*pair: str) -> bool:
+    parts = Path(sys.prefix).resolve().parts
+    first, second = pair
+    return any(
+        parts[i] == first and parts[i + 1] == second for i in range(len(parts) - 1)
+    )
 
 
 def detect_install_method() -> tuple[str, list[list[str]] | None]:
     """Return (method, upgrade command list) for this running copy.
 
-    Methods: 'checkout' (git clone), 'uv-tool' (uv tool install), 'pip'
-    (pip/uv venv install), 'unknown' (no safe upgrade command).
+    Methods: 'checkout' (git clone), 'uv-tool' (uv tool install), 'pipx'
+    (pipx install), 'pip' (plain pip or venv install), 'unknown' (no safe
+    upgrade command).
     """
     # @nonobvious(must-hold): the upgrade follows the package, never
     # settings.home_dir. OPENBROWSE_HOME moves the data directory, and keying off
@@ -135,12 +159,21 @@ def detect_install_method() -> tuple[str, list[list[str]] | None]:
             commands.append([uv, "sync", "--project", str(checkout)])
         return "checkout", commands
 
-    parts = Path(sys.prefix).resolve().parts
-    if any(parts[i] == "uv" and parts[i + 1] == "tools" for i in range(len(parts) - 1)):
+    if _prefix_contains("uv", "tools"):
         uv = _uv_binary()
         if uv:
             return "uv-tool", [[uv, "tool", "upgrade", "openbrowse"]]
         return "uv-tool", None
+
+    # @nonobvious(must-hold): both managed-app checks must precede the plain pip
+    # one, because a uv tool and a pipx app each live in a venv and would
+    # otherwise be upgraded with a bare pip that reaches around their manager and
+    # leaves its records describing a version that is no longer installed.
+    if _prefix_contains("pipx", "venvs"):
+        pipx = _pipx_binary()
+        if pipx:
+            return "pipx", [[pipx, "upgrade", "openbrowse"]]
+        return "pipx", None
 
     if sys.prefix != sys.base_prefix or _in_user_site():
         return "pip", [[sys.executable, "-m", "pip", "install", "--upgrade", "openbrowse"]]
