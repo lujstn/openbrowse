@@ -59,9 +59,9 @@ def test_probe_pi5_like(tmp_path, monkeypatch):
     assert not info.psi_available
     assert not info.resource_limits_set
     assert hard_max(info) == 4
-    assert recommend(info, "all") == 3
-    assert recommend(info, "most") == 2
-    assert recommend(info, "shared") == 1
+    assert recommend(info, "all") == 4
+    assert recommend(info, "most") == 3
+    assert recommend(info, "shared") == 2
     assert "4 cores" in summary(info) and "16GB" in summary(info)
 
 
@@ -89,7 +89,7 @@ def test_probe_vps_like(tmp_path, monkeypatch):
     info = probe()
     assert hard_max(info) == 8
     assert recommend(info, "all") == 8
-    assert recommend(info, "shared") == 6
+    assert recommend(info, "shared") == 3
     assert not info.is_raspberry_pi
     assert not info.root_on_sd
 
@@ -103,7 +103,10 @@ def test_probe_degrades_off_linux(tmp_path, monkeypatch):
     assert "could not be detected" in summary(info)
 
 
-def test_busy_host_tempers_recommendation(tmp_path, monkeypatch):
+def test_busy_host_keeps_presets_distinct(tmp_path, monkeypatch):
+    """Momentary load must not collapse the share presets into one number:
+    a busy probe once suggested the same value for all three choices, which
+    read as the capacity step doing nothing."""
     _fake_host(
         tmp_path, monkeypatch,
         cores=4,
@@ -112,8 +115,8 @@ def test_busy_host_tempers_recommendation(tmp_path, monkeypatch):
     )
     info = probe()
     assert info.load1_per_core == 0.75
-    assert recommend(info, "all") == 2
-    assert recommend(info, "shared") == 1
+    assert recommend(info, "all") == 4
+    assert recommend(info, "shared") == 2
     assert "busy" in summary(info)
 
 
@@ -138,7 +141,7 @@ def test_ram_bound_beats_core_bound(tmp_path, monkeypatch):
     )
     info = probe()
     assert hard_max(info) == 2
-    assert recommend(info, "all") == 1
+    assert recommend(info, "all") == 2
 
 
 def _pi5_info(**over) -> HostInfo:

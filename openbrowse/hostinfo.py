@@ -30,6 +30,11 @@ _CAPACITY_OVERRIDE = f"/etc/systemd/system/{UNIT_NAME}.d/50-capacity.conf"
 
 SHARE_PRESETS: dict[str, float] = {"all": 0.9, "most": 0.7, "shared": 0.4}
 
+# Concurrency suggestions per share choice. Distinct from SHARE_PRESETS, which
+# sizes the host_tune memory ceiling: "all of it" should suggest the full
+# hardware ceiling, not 90% of it.
+_RECOMMEND_FRACTIONS: dict[str, float] = {"all": 1.0, "most": 0.7, "shared": 0.4}
+
 _SESSION_RAM_KB = 2 * 1024 * 1024
 _HARD_MAX_CEILING = 8
 _BUSY_LOAD_PER_CORE = 0.5
@@ -128,18 +133,15 @@ def hard_max(info: HostInfo) -> int:
 
 
 def recommend(info: HostInfo, share: str) -> int:
-    """Suggested concurrency for a share preset, tempered by how busy the box
-    already is at probe time (a host running other services gets one less).
+    """Suggested concurrency for a share preset: a fraction of the hardware
+    ceiling. Deliberately a function of the machine alone, not of how busy it
+    happens to be at probe time: a momentarily loaded host once collapsed all
+    three presets to the same number, which read as the presets doing nothing.
     """
-    fraction = SHARE_PRESETS.get(share, SHARE_PRESETS["most"])
+    fraction = _RECOMMEND_FRACTIONS.get(share, _RECOMMEND_FRACTIONS["most"])
     if not info.complete:
         return 1
-    by_cores = int(info.cores * fraction)
-    by_ram = int(info.mem_available_kb * fraction) // _SESSION_RAM_KB
-    value = min(by_cores, by_ram)
-    if info.load1_per_core > _BUSY_LOAD_PER_CORE:
-        value -= 1
-    return max(1, min(value, hard_max(info)))
+    return max(1, round(hard_max(info) * fraction))
 
 
 def recommendations(info: HostInfo) -> dict[str, int]:

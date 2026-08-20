@@ -1112,111 +1112,91 @@ def _capacity_info(**over):
     return _replace(base, **over)
 
 
-async def test_tuned_machine_says_why_its_tuning_button_vanished(client, monkeypatch):
-    """The sudoers grant names host_tune.sh by full path, so upgrading the
-    package silently revokes it. Reading that as "the upgrade broke tuning" is
-    the natural conclusion unless the page says otherwise."""
-    monkeypatch.setattr(
-        "openbrowse.hostinfo.probe",
-        lambda: _capacity_info(
-            resource_limits_set=True, psi_available=True, root_on_sd=False
-        ),
-    )
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
-
-    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
-
-    assert "no longer re-run the tuner" in resp.text
-    assert "openbrowse tune --share most" in resp.text
-
-
-async def test_settings_capacity_card_renders(client, monkeypatch):
+async def test_settings_performance_card_renders(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
-    assert "Capacity" in resp.text
-    assert 'max="4"' in resp.text
-    assert "openbrowse tune --share most" in resp.text
+    assert "Performance" in resp.text
+    assert "Detected" in resp.text
+    assert "detected-chips" in resp.text
+    assert "Maximum concurrency suggested for this machine: 4" in resp.text
+    assert 'value="MAX_CONCURRENT_SESSIONS"' in resp.text
+    assert 'type="number"' in resp.text
+    # host tuning and the share presets belong to onboarding, not settings
+    assert "Host tuning" not in resp.text
     assert "Apply recommended tuning" not in resp.text
+    assert "How much of this machine" not in resp.text
+    assert "Add a variable" not in resp.text
 
 
-async def test_settings_capacity_button_when_sudo_granted(client, monkeypatch):
-    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: True)
-    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
-    assert "Apply recommended tuning" in resp.text
-
-
-async def test_settings_light_browser_recommended_hint(client, monkeypatch):
-    monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
-    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
-    assert resp.status_code == 200
-    assert "Lighter browser" in resp.text
-    assert "recommended for this machine" in resp.text
-    assert 'value="CHROME_LIGHT_FLAGS"' in resp.text
-
-
-async def test_settings_light_browser_marked_enabled_when_on(client, monkeypatch):
+async def test_settings_light_browser_checkbox_reflects_state(client, monkeypatch):
     from openbrowse.dashboard import routes as routes_mod
 
     monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert 'id="light-toggle"' in resp.text
+    assert 'id="light-toggle" checked' not in resp.text
+
     monkeypatch.setattr(
         "openbrowse.dashboard.routes.settings",
         replace(routes_mod.settings, chrome_light_flags=True),
     )
     resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
-    assert resp.status_code == 200
-    assert "Lighter browser" in resp.text
-    assert "enabled" in resp.text
-    assert "recommended for this machine" not in resp.text
+    assert 'id="light-toggle" checked' in resp.text
 
 
-async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypatch):
-    import subprocess as _subprocess
-
+async def test_settings_hides_the_retired_variables(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: True)
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return _subprocess.CompletedProcess(cmd, 0, stdout="doing: wrote override\ndone\n", stderr="")
-
-    monkeypatch.setattr("openbrowse.dashboard.routes.subprocess.run", fake_run)
-    resp = await client.post(
-        "/settings/host-tune",
-        headers=_basic("admin", "secret-key"),
-        data={"share": "shared"},
-    )
-    assert resp.status_code == 200
-    assert "Host tuning applied" in resp.text
-    assert "wrote override" in resp.text
-    assert any("--share" in c and "shared" in c for c in calls)
-    assert any("--service" in c and "openbrowse.service" in c for c in calls)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    for name in ("ALLOW_INSECURE_NO_AUTH", "KEEP_ALIVE_IDLE_TIMEOUT", "UPDATE_CHECK_HOURS"):
+        assert name not in resp.text, name
 
 
-async def test_settings_host_tune_rejects_bad_share(client, monkeypatch):
-    import subprocess as _subprocess
-
+async def test_settings_shows_defaults_instead_of_not_set(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", _capacity_info)
-    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
-    seen = []
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert 'placeholder="admin"' in resp.text
+    assert "default-chip" in resp.text
 
-    def fake_run(cmd, **kwargs):
-        seen.append(cmd)
-        return _subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
 
-    monkeypatch.setattr("openbrowse.dashboard.routes.subprocess.run", fake_run)
-    resp = await client.post(
-        "/settings/host-tune",
-        headers=_basic("admin", "secret-key"),
-        data={"share": "everything"},
+async def test_settings_update_check_answers_json_in_place(client, monkeypatch):
+    from openbrowse.updates import UpdateState
+
+    async def fake_check():
+        return UpdateState(current="1.9.2", latest="9.9.9", available=True)
+
+    monkeypatch.setattr("openbrowse.dashboard.routes.updates.check_once", fake_check)
+    monkeypatch.setattr(
+        "openbrowse.dashboard.routes.updates.detect_install_method",
+        lambda: ("pipx", [["pipx", "upgrade", "openbrowse"]]),
     )
+    resp = await client.post("/settings/update/check", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
-    assert any("most" in c for c in seen)
+    body = resp.json()
+    assert body["available"] is True
+    assert body["latest"] == "9.9.9"
+    assert body["supported"] is True
+
+
+async def test_run_page_offers_only_configured_providers_models(client, monkeypatch):
+    from openbrowse.dashboard import routes as routes_mod
+
+    monkeypatch.setattr(
+        "openbrowse.dashboard.routes.settings",
+        replace(routes_mod.settings, openai_api_key="sk-proj-x", anthropic_api_key=""),
+    )
+    resp = await client.get("/", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert "GPT-5.6 Terra" in resp.text
+    assert "Claude Sonnet 5" not in resp.text
+
+    monkeypatch.setattr(
+        "openbrowse.dashboard.routes.settings",
+        replace(routes_mod.settings, openai_api_key="", anthropic_api_key="sk-ant-x"),
+    )
+    resp = await client.get("/", headers=_basic("admin", "secret-key"))
+    assert "Claude Sonnet 5" in resp.text
+    assert "GPT-5.6 Terra" not in resp.text
 
 
 async def test_configured_dashboard_challenges_rather_than_redirecting(client):

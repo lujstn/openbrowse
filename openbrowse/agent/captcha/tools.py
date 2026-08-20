@@ -122,7 +122,18 @@ def register_captcha_tools(
     an async callable receiving each attempt's outcome for the session feed.
     """
     if not settings.capsolver_api_key:
-        logger.warning("CAPSOLVER_API_KEY not set — CAPTCHA solving disabled")
+        # No banner at session start: most sessions never meet a CAPTCHA, so
+        # the fact solving is off only matters at the moment one appears.
+        @tools.action(_SOLVE_DESCRIPTION)
+        async def solve_captcha() -> ActionResult:
+            message = (
+                "CAPTCHA solving is off: no CAPSOLVER_API_KEY is configured, so "
+                "this challenge cannot be solved automatically."
+            )
+            if progress is not None:
+                await progress(message)
+            return ActionResult(error=message)
+
         return
 
     giveups: dict[str, int] = {}

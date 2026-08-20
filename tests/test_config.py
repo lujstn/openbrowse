@@ -34,6 +34,16 @@ def test_cost_factor_rejects_values_that_would_break_the_cap(monkeypatch):
 _ENV_ONLY = {"OPENBROWSE_HOME"}
 # SUDO_USER is set by sudo, not by anyone configuring OpenBrowse.
 _NOT_A_SETTING = {"SUDO_USER"}
+# Deliberately absent from the dashboard's variable list: the first two are
+# owned by the Performance card's own controls, the rest are niche knobs that
+# live in .env.example alone so the settings page stays approachable.
+_NOT_IN_DASHBOARD = {
+    "MAX_CONCURRENT_SESSIONS",
+    "CHROME_LIGHT_FLAGS",
+    "KEEP_ALIVE_IDLE_TIMEOUT",
+    "UPDATE_CHECK_HOURS",
+    "ALLOW_INSECURE_NO_AUTH",
+}
 
 
 def _settings_read_from_the_environment() -> set[str]:
@@ -57,7 +67,8 @@ def test_every_setting_is_reachable_from_both_places_a_user_looks():
 
     for name in _settings_read_from_the_environment() - _ENV_ONLY - _NOT_A_SETTING:
         assert f"\n{name}=" in example, f"{name} is missing from .env.example"
-        assert name in grouped, f"{name} is missing from the dashboard's settings groups"
+        if name not in _NOT_IN_DASHBOARD:
+            assert name in grouped, f"{name} is missing from the dashboard's settings groups"
 
 
 def test_the_dashboard_offers_no_setting_that_nothing_reads():

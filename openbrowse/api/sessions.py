@@ -33,7 +33,7 @@ _THINKING_LEVEL_MAP = {
 
 class RunTaskRequest(BaseModel):
     task: str | None = None
-    model: str = Field(default_factory=lambda: settings.default_model)
+    model: str = Field(default_factory=lambda: settings.resolved_default_model)
     sessionId: str | None = None
     keepAlive: bool = False
     maxCostUsd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
@@ -154,7 +154,7 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
     return SessionResponse(
         id=row["id"],
         status=row["status"],
-        model=row.get("model") or settings.default_model,
+        model=row.get("model") or settings.resolved_default_model,
         title=row.get("title"),
         output=output,
         outputSchema=output_schema,

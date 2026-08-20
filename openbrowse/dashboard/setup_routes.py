@@ -179,9 +179,9 @@ async def setup_save(
             lines.append(f"{name}={value.strip()}")
     capacity = _capacity_context()
     if max_concurrent_sessions.strip().isdigit():
-        value = int(max_concurrent_sessions.strip())
-        if capacity["hw_hard_max"]:
-            value = max(1, min(value, capacity["hw_hard_max"]))
+        # The hardware ceiling is advice, never a clamp: the owner of the
+        # machine outranks the probe.
+        value = max(1, int(max_concurrent_sessions.strip()))
         lines.append(f"MAX_CONCURRENT_SESSIONS={value}")
     if chrome_light_flags == "1":
         lines.append("CHROME_LIGHT_FLAGS=1")
