@@ -2812,6 +2812,7 @@ async def test_pressure_baseline_is_task_scoped(monkeypatch) -> None:
 
     import app.system_metrics as sm
 
+    monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
     load = {"v": 0.2}
     monkeypatch.setattr(sm.os, "getloadavg", lambda: (load["v"],) * 3)
@@ -2842,6 +2843,7 @@ async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
     import app.agent.tools as tools_mod
     import app.system_metrics as sm
 
+    monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
     monkeypatch.setattr(sm.os, "getloadavg", lambda: (6.5, 6.0, 6.0))
 
