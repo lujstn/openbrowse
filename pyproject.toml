@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openbrowse"
-version = "1.8.3"
+version = "1.8.2"
 description = "Self-hosted AI browser automation server with a live dashboard, built for small machines like the Raspberry Pi"
 readme = "README.md"
 license = { file = "LICENSE" }
