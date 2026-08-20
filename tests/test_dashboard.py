@@ -1217,3 +1217,13 @@ async def test_settings_host_tune_rejects_bad_share(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert any("most" in c for c in seen)
+
+
+async def test_configured_dashboard_challenges_rather_than_redirecting(client):
+    """The wizard redirect belongs only to an instance with no credential. Once
+    one exists, a missing password must still be challenged for."""
+    resp = await client.get("/")
+
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"] == "Basic"
+    assert resp.headers.get("location") is None

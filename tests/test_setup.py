@@ -223,3 +223,30 @@ async def test_setup_screen_never_asks_for_credentials_that_do_not_exist_yet(cli
     assert resp.status_code == 200
     assert "/api/update" not in resp.text
     assert 'id="update-badge"' not in resp.text
+
+
+async def test_unconfigured_dashboard_sends_you_to_the_wizard_not_a_password_box(client):
+    """A fresh install has no credential, so challenging for one asks a question
+    nothing can answer and locks the owner out of their own machine. No default
+    password exists to plug that gap, so the wizard is the way through."""
+    c, _ = client
+
+    for path in ("/", "/sessions", "/profiles", "/settings"):
+        resp = await c.get(path)
+        assert resp.status_code == 303, path
+        assert resp.headers["location"] == "/setup", path
+        assert "www-authenticate" not in resp.headers, path
+
+    landed = await c.get("/", follow_redirects=True)
+    assert landed.status_code == 200
+    assert "/setup" in str(landed.url)
+
+
+async def test_the_api_is_not_redirected_into_the_wizard(client):
+    """A redirect to an HTML page is a nonsense answer to a programmatic call."""
+    c, _ = client
+
+    resp = await c.post("/v3/sessions", json={})
+
+    assert resp.status_code == 401
+    assert resp.headers.get("location") is None
