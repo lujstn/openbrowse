@@ -79,17 +79,28 @@ The same real-world extraction task (a careers page with 14 records behind an em
 
 OpenAI and Anthropic models are generally at their best at the opposite ends of the reasoning dial. For example, OpenAI's GPT-5.6-Terra performs better with less reasoning, spending less time planning ahead and more time reacting to the page in front of it, while Anthropic's 5-series Claude models lean towards rabbit holes and need reasoning time to refocus on the goal.
 
-### What is "thinking" in OpenBrowse?
+### Common questions
 
-OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of describing how the platform works in "steps" (the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed), so it can't be disabled.
+<details>
 
-**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime.
+<summary>What's the difference between "thinking" and "reasoning"?</summary>
 
-### All supported models
+> OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of describing how the platform works in "steps" (the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed), so it can't be disabled.
+>
+>**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime.
 
-- OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
-- Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
-- Google: ⚠️ Coming soon
+</details>
+
+<details>
+
+<summary>See all supported models</summary>
+
+
+> - OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
+> - Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
+> - Google: ⚠️ Coming soon
+
+</details>
 
 ## Quick start
 
@@ -108,30 +119,9 @@ uv sync
 uv run openbrowse serve
 ```
 
-Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
+Then, open `http://localhost:8420` in a browser. You'll be guided through everything you need to run OpenBrowse.
 
-Then from any `browser-use-sdk` client:
-
-```ts
-import { BrowserUse } from "browser-use-sdk/v3";
-
-const client = new BrowserUse({
-  apiKey: process.env.OPENBROWSE_API_KEY,
-  baseUrl: "http://<your-host>:8420/v3",
-});
-
-const session = await client.sessions.create({
-  task: "Find every product on this page and return the structured list.",
-  model: "claude-sonnet-5",
-  outputSchema: mySchema,
-});
-```
-
-Full installation (system packages, the Xvfb and VNC live view, running under systemd): see [the installation guide](https://openbrowse.co/docs/installation), or [GETTING_STARTED.md](GETTING_STARTED.md) for the short path.
-
-## Updating
-
-The server checks PyPI for new releases in the background and shows an **Update available** badge in the dashboard when one exists; installing it is one click on the Settings page (the server restarts itself afterwards). From a shell, `openbrowse check-update` and `openbrowse update` do the same. Set `UPDATE_CHECK_HOURS=0` in `.env` to disable the background check.
+[View the installation guide](https://openbrowse.co/docs/installation) for more details.
 
 ## Exposing it to the web
 
