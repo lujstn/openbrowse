@@ -2783,6 +2783,7 @@ async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
 def test_system_metrics_pressure_levels(monkeypatch) -> None:
     import app.system_metrics as sm
 
+    monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
     monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
     monkeypatch.setattr(sm.os, "getloadavg", lambda: (5.5, 5.0, 4.0))
     level, s = sm.pressure()
