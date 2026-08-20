@@ -129,9 +129,7 @@ uv sync
 uv run openbrowse serve
 ```
 
-Then, open `http://localhost:8420` in a browser. You'll be guided through everything you need to run OpenBrowse.
-
-[View the installation guide](https://openbrowse.co/docs/installation) for more details.
+Then, open `http://localhost:8420` in a browser. You'll be guided through everything you need to run OpenBrowse. [View the installation guide](https://openbrowse.co/docs/installation) for more details.
 
 ## Exposing it to the web
 
