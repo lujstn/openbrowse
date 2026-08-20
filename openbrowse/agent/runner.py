@@ -1171,7 +1171,7 @@ def valid_efforts(model: str) -> list[str]:
 # request run through either door reasons the same way.
 _RECOMMENDED_EFFORT: dict[str, str] = {
     "claude-sonnet-5": "high",
-    "claude-opus-5": "none",
+    "claude-opus-5": "medium",
     "gpt-5.6-terra": "none",
     "gpt-5.6-sol": "none",
     "gpt-5.6-luna": "max",

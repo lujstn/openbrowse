@@ -1884,3 +1884,28 @@ async def test_llm_setup_failure_records_agent_failure(runner_db, monkeypatch):
     assert stored["status"] == "error"
     assert stored["failure_kind"] == "agent_failure"
     assert stored["failure_status_code"] is None
+
+
+def test_recommended_efforts_match_the_readme_that_claims_to_define_them():
+    """This table decides what an omitted reasoningEffort actually runs at, and
+    its comment says it mirrors the README. Nothing checked that, and it drifted:
+    opus-5 sat at none while the benchmark table it cites showed medium winning
+    on steps, time, tokens and cost alike."""
+    import pathlib
+    import re
+
+    from openbrowse.agent.runner import _RECOMMENDED_EFFORT
+
+    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
+    section = readme.split("### Recommended models", 1)[1].split("\n## ", 1)[0]
+    published = {
+        model: effort
+        for model, effort in re.findall(
+            r'`([a-z0-9.\-]+) \{ "reasoningEffort": "([a-z]+)" \}`', section
+        )
+    }
+
+    assert published, "could not parse any recommendation out of the README"
+    assert published == _RECOMMENDED_EFFORT, (
+        f"README publishes {published}, code applies {_RECOMMENDED_EFFORT}"
+    )
