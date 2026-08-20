@@ -1113,6 +1113,32 @@ async def test_settings_capacity_button_when_sudo_granted(client, monkeypatch):
     assert "Apply recommended tuning" in resp.text
 
 
+async def test_settings_light_browser_recommended_hint(client, monkeypatch):
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert "Lighter browser" in resp.text
+    assert "recommended for this machine" in resp.text
+    assert 'value="CHROME_LIGHT_FLAGS"' in resp.text
+
+
+async def test_settings_light_browser_marked_enabled_when_on(client, monkeypatch):
+    from app.dashboard import routes as routes_mod
+
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    monkeypatch.setattr(
+        "app.dashboard.routes.settings",
+        replace(routes_mod.settings, chrome_light_flags=True),
+    )
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert "Lighter browser" in resp.text
+    assert "enabled" in resp.text
+    assert "recommended for this machine" not in resp.text
+
+
 async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypatch):
     import subprocess as _subprocess
 

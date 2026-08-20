@@ -170,3 +170,43 @@ async def test_setup_restart_requires_saved_env(client, monkeypatch):
     resp = await c.post("/setup/restart")
     assert resp.status_code == 200
     assert called == [1]
+
+
+async def test_setup_light_browser_preselected_on_constrained_hardware(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    resp = await c.get("/setup")
+    assert resp.status_code == 200
+    assert 'name="chrome_light_flags" value="1" checked' in resp.text
+    assert "recommended for this machine" in resp.text
+
+
+async def test_setup_light_browser_unticked_on_big_hardware(client, monkeypatch):
+    c, _ = client
+    big = _fixed_info(
+        is_raspberry_pi=False, cores=16,
+        mem_total_kb=64 * 1024 * 1024, mem_available_kb=48 * 1024 * 1024,
+    )
+    monkeypatch.setattr("app.hostinfo.probe", lambda: big)
+    resp = await c.get("/setup")
+    assert resp.status_code == 200
+    assert 'name="chrome_light_flags"' in resp.text
+    assert 'name="chrome_light_flags" value="1" checked' not in resp.text
+
+
+async def test_setup_save_honours_the_light_browser_choice(client, monkeypatch):
+    c, tmp_path = client
+    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    resp = await c.post(
+        "/setup", data={"api_key": "k1", "chrome_light_flags": "1"}
+    )
+    assert resp.status_code == 200
+    assert "CHROME_LIGHT_FLAGS=1" in (tmp_path / ".env").read_text()
+
+
+async def test_setup_save_omits_the_light_browser_flag_when_opted_out(client, monkeypatch):
+    c, tmp_path = client
+    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    resp = await c.post("/setup", data={"api_key": "k1"})
+    assert resp.status_code == 200
+    assert "CHROME_LIGHT_FLAGS" not in (tmp_path / ".env").read_text()

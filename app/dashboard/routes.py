@@ -49,7 +49,7 @@ _ENV_GROUPS: list[tuple[str, list[str]]] = [
     ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
     ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
     ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
-    ("Runtime", ["MAX_CONCURRENT_SESSIONS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
+    ("Runtime", ["MAX_CONCURRENT_SESSIONS", "CHROME_LIGHT_FLAGS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
 ]
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
 
@@ -733,6 +733,8 @@ def _capacity_context() -> dict[str, Any]:
         "hw_checklist": rows,
         "hw_tune_button": has_actions and info.systemd and _host_tune_available(),
         "hw_current": settings.max_concurrent_sessions,
+        "hw_light_recommended": hostinfo.light_flags_recommended(info),
+        "hw_light_on": settings.chrome_light_flags,
     }
 
 

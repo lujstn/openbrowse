@@ -180,6 +180,11 @@
       <output id="hw-value">{{ hw_current }}</output>
     </label>
     <p class="settings-note">Moving the slider updates <code>MAX_CONCURRENT_SESSIONS</code> below; save to apply.</p>
+    {% if hw_light_on %}
+    <p class="settings-note">&#10003; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; enabled: each browser runs without a GPU process and with capped helper processes and JavaScript memory (<code>CHROME_LIGHT_FLAGS</code> below).</p>
+    {% elif hw_light_recommended %}
+    <p class="settings-note">&#9679; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; recommended for this machine: set <code>CHROME_LIGHT_FLAGS</code> to <code>1</code> below and save. It skips the GPU process and caps helper processes and JavaScript memory; worth turning off only if an unusually heavy web app misbehaves.</p>
+    {% endif %}
     {% if hw_checklist %}
     <div class="group-title" style="margin-top:14px">Host tuning</div>
     {% for row in hw_checklist %}

@@ -38,6 +38,7 @@ def _capacity_context() -> dict:
         "hw_recs": hostinfo.recommendations(info),
         "hw_checklist": hostinfo.checklist(info),
         "hw_systemd": info.systemd,
+        "hw_light_recommended": hostinfo.light_flags_recommended(info),
     }
 
 
@@ -66,6 +67,7 @@ async def setup_save(
     dashboard_password: str = Form(""),
     max_concurrent_sessions: str = Form(""),
     share: str = Form("most"),
+    chrome_light_flags: str = Form(""),
 ):
     if _configured():
         return RedirectResponse("/", status_code=303)
@@ -94,6 +96,8 @@ async def setup_save(
         if capacity["hw_hard_max"]:
             value = max(1, min(value, capacity["hw_hard_max"]))
         lines.append(f"MAX_CONCURRENT_SESSIONS={value}")
+    if chrome_light_flags == "1":
+        lines.append("CHROME_LIGHT_FLAGS=1")
     tmp = _env_path.with_suffix(_env_path.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + "\n")
     tmp.replace(_env_path)

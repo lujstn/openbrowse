@@ -73,11 +73,16 @@ sudo tailscale funnel --bg 8420</pre>
         <output id="mcs-value">{{ hw_recs.most }}</output>
       </label>
       <small id="mcs-note">Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session.</small>
+      <label style="margin-top:10px"><input type="checkbox" name="chrome_light_flags" value="1" {% if hw_light_recommended %}checked{% endif %} /> Lighter browser{% if hw_light_recommended %} &mdash; recommended for this machine{% endif %}</label>
+      <small>Runs each browser without a GPU process and with capped helper processes and JavaScript memory. On small machines with no GPU to help this is faster and lighter, especially with several sessions at once; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</small>
     </fieldset>
     {% else %}
     <label>Max concurrent sessions on this device
       <input name="max_concurrent_sessions" value="1" inputmode="numeric" pattern="[0-9]*" />
       <small>Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session. 2 suits ~4GB/2 cores, 5 suits ~8&ndash;16GB/4 cores, 20 needs ~40GB/16+ cores.</small>
+    </label>
+    <label><input type="checkbox" name="chrome_light_flags" value="1" /> Lighter browser
+      <small>Runs each browser without a GPU process and with capped helper processes and JavaScript memory. Worth enabling on small machines with no GPU; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</small>
     </label>
     {% endif %}
     <button type="submit">Save configuration</button>

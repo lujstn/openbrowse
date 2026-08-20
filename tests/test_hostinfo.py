@@ -156,3 +156,24 @@ def test_checklist_states():
 
     rows = {r["key"]: r for r in checklist(_pi5_info(cgroup_memory=False))}
     assert rows["cgroup"]["state"] == "info"
+
+
+def test_light_flags_recommended_for_constrained_hosts():
+    assert hostinfo.light_flags_recommended(_pi5_info()) is True
+
+    big_vps = _pi5_info(
+        is_raspberry_pi=False, cores=16,
+        mem_total_kb=64 * 1024 * 1024, mem_available_kb=48 * 1024 * 1024,
+    )
+    assert hostinfo.light_flags_recommended(big_vps) is False
+
+    few_cores = _pi5_info(is_raspberry_pi=False, cores=4, mem_total_kb=64 * 1024 * 1024)
+    assert hostinfo.light_flags_recommended(few_cores) is True
+
+    small_ram = _pi5_info(
+        is_raspberry_pi=False, cores=8,
+        mem_total_kb=8 * 1024 * 1024, mem_available_kb=6 * 1024 * 1024,
+    )
+    assert hostinfo.light_flags_recommended(small_ram) is True
+
+    assert hostinfo.light_flags_recommended(_pi5_info(cores=0)) is False
