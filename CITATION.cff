@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use OpenBrowse in your research or project, please cite it as below."
 type: software
 title: "OpenBrowse: Self-hosted AI browser agents"
-version: 1.6.0
+version: 1.7.0
 date-released: 2026-08-20
 license: MIT
 doi: "10.5281/zenodo.21986248"
