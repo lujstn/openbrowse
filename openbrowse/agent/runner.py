@@ -1973,7 +1973,7 @@ async def run_agent_session(session_id: str) -> None:
         return
 
     keep_alive = bool(session.get("keep_alive"))
-    requested_model = session.get("model") or settings.default_model
+    requested_model = session.get("model") or settings.resolved_default_model
     reasoning_effort = _canonical_stored_effort(session.get("reasoning_effort"))
     output_schema = json.loads(session["output_schema"]) if session.get("output_schema") else None
     sensitive_data = json.loads(session["sensitive_data"]) if session.get("sensitive_data") else None
@@ -2166,11 +2166,6 @@ async def run_agent_session(session_id: str) -> None:
             "output_tokens": float(session.get("total_output_tokens") or 0),
         }
         register_captcha_tools(tools, capsolver_costs, _captcha_progress)
-        if not settings.capsolver_api_key:
-            await _captcha_progress(
-                "CAPTCHA solving is off: no CAPSOLVER_API_KEY is configured, so a "
-                "challenge will block this session."
-            )
 
         if store is not None:
             register_output_store_tools(tools, store, clipboard)

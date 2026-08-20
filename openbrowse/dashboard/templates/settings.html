@@ -9,7 +9,7 @@
     background: #111;
     border: 1px solid #222;
     border-radius: 12px;
-    padding: 20px 20px 16px;
+    padding: 22px 22px 18px;
     margin-bottom: 16px;
   }
   .group-title {
@@ -17,7 +17,7 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
   }
   .env-row {
     display: grid;
@@ -37,13 +37,22 @@
     font-size: 11px;
     margin-left: 6px;
   }
+  .env-key .default-chip {
+    color: #666;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 999px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 10px;
+    padding: 1px 7px;
+    margin-left: 6px;
+  }
   .env-value-wrap {
     position: relative;
     display: flex;
     align-items: center;
   }
-  .env-row input[name="value"],
-  .env-row input.env-new-key {
+  .env-row input[name="value"] {
     background: #0a0a0a;
     border: 1px solid #2a2a2a;
     border-radius: 6px;
@@ -125,6 +134,22 @@
   .save-btn:disabled:hover {
     background: #60a5fa;
   }
+  .btn-ghost {
+    background: transparent;
+    color: #888;
+    border: 1px solid #333;
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 500;
+    font-size: 12.5px;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-ghost:hover {
+    color: #e5e5e5;
+    border-color: #444;
+  }
   .restart-note {
     border-left: 2px solid #f59e0b;
     padding-left: 10px;
@@ -138,6 +163,137 @@
     font-size: 13px;
     line-height: 1.5;
     margin-bottom: 16px;
+  }
+
+  /* ---------- software update ---------- */
+  .update-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .update-body {
+    font-size: 13px;
+    color: #9ca3af;
+    line-height: 1.6;
+  }
+  .update-body strong {
+    color: #cbd5e1;
+  }
+  .update-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #666;
+  }
+  .update-status.is-ok {
+    color: #34d399;
+  }
+  .update-status.is-avail {
+    color: #fbbf24;
+  }
+  .update-avail-box {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: rgba(251, 191, 36, 0.06);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    border-radius: 8px;
+  }
+  .update-avail-box.is-shown {
+    display: flex;
+  }
+  .update-avail-box .update-body {
+    color: #fbbf24;
+  }
+
+  /* ---------- performance ---------- */
+  .detected-block {
+    margin: 4px 0 16px;
+  }
+  .detected-label {
+    font-size: 12px;
+    color: #9ca3af;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .detected-block pre {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 12.5px;
+    color: #e5e5e5;
+    background: #0a0a0a;
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 11px 13px;
+    margin: 0;
+  }
+  .perf-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 9px 0;
+  }
+  .perf-label {
+    font-size: 12.5px;
+    color: #9ca3af;
+    font-weight: 500;
+  }
+  .perf-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .perf-control input[type="number"] {
+    width: 90px;
+    background: #0a0a0a;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+  .perf-control input[type="number"]:focus {
+    outline: none;
+    border-color: #60a5fa;
+  }
+  .perf-hint {
+    font-size: 11.5px;
+    color: #666;
+  }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid #222;
+    border-radius: 8px;
+    background: #0a0a0a;
+    padding: 13px 14px;
+    margin-top: 10px;
+    cursor: pointer;
+  }
+  .toggle-row input[type="checkbox"] {
+    width: 17px;
+    height: 17px;
+    accent-color: #60a5fa;
+    flex: none;
+    cursor: pointer;
+  }
+  .toggle-row .toggle-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e5e5e5;
+  }
+  .toggle-row .toggle-desc {
+    font-size: 11.5px;
+    color: #666;
+    line-height: 1.5;
+    margin-top: 2px;
   }
 </style>
 {% endblock %} {% block content %}
@@ -158,12 +314,6 @@
     "restart anyway" below to save and restart regardless.
   </div>
   {% endif %}
-  {% if host_tune_output %}
-  <div class="failed-banner" style="{% if host_tune_ok %}border-color:#14532d;background:#0f1c12;color:#4ade80;{% endif %}">
-    <strong>Host tuning {{ "applied" if host_tune_ok else "failed" }}.</strong>
-    <pre style="margin:8px 0 0;white-space:pre-wrap;font-size:12px;color:inherit;">{{ host_tune_output }}</pre>
-  </div>
-  {% endif %}
   {% if update_failed %}
   <div class="failed-banner">
     <strong>Update failed.</strong> The running version is unchanged.
@@ -178,94 +328,85 @@
     server underneath them. Wait for them to finish, then try again.
   </div>
   {% endif %}
+
   <div class="settings-card" id="update-card">
     <div class="group-title">Software update</div>
-    <p class="settings-note" style="margin-top:0">
-      Installed: <strong style="color:#cbd5e1">v{{ version }}</strong>
-      {% if update and update.available %}
-      &mdash; <strong style="color:#fbbf24">v{{ update.latest }} is available</strong>
-      {% elif update and update.latest %}
-      &mdash; up to date (latest release: v{{ update.latest }})
-      {% elif update and update.error %}
-      &mdash; last check failed: {{ update.error }}
-      {% else %}
-      &mdash; not checked yet
-      {% endif %}
-    </p>
-    {% if update and update.available %}
-    {% if update_supported %}
-    <form method="post" action="/settings/update" style="margin-top:8px"
-          onsubmit="return confirm('Install v{{ update.latest }} and restart the server?')">
-      <button class="save-btn" type="submit">Install v{{ update.latest }} and restart</button>
-    </form>
-    {% else %}
-    <p class="settings-note">
+    <div class="update-row">
+      <div class="update-body">
+        Installed: <strong>v{{ version }}</strong>
+        <span class="update-status" id="update-status"
+          >{% if update and update.available %}v{{ update.latest }} is available{% elif update and update.latest %}You&rsquo;re on the latest version.{% elif update and update.error %}Last check failed.{% endif %}</span
+        >
+      </div>
+      <button type="button" class="btn-ghost" id="update-check-btn">Check now</button>
+    </div>
+    <div class="update-avail-box{% if update and update.available and update_supported %} is-shown{% endif %}" id="update-avail-box">
+      <div class="update-body">
+        <strong id="update-avail-version">{% if update and update.latest %}v{{ update.latest }}{% endif %}</strong>
+        is ready to install. Installing restarts the server, which interrupts running sessions.
+      </div>
+      <form method="post" action="/settings/update" style="margin: 0"
+            onsubmit="return confirm('Install the update and restart the server?')">
+        <button class="save-btn" type="submit" style="white-space: nowrap">Install and restart</button>
+      </form>
+    </div>
+    {% if update and update.available and not update_supported %}
+    <p class="settings-note" style="margin-top: 10px">
       This copy was installed in a way OpenBrowse cannot upgrade itself
       ({{ update_method }}). Upgrade it manually, then restart the service.
     </p>
     {% endif %}
-    {% endif %}
-    <form method="post" action="/settings/update/check" style="margin-top:8px">
-      <button class="save-btn" type="submit" style="background:#1f2937;color:#e5e5e5;font-size:12px;padding:7px 14px">Check now</button>
-    </form>
   </div>
-  {% if hw_complete %}
-  <div class="settings-card" id="capacity-card">
-    <div class="group-title">Capacity</div>
-    <p class="settings-note" style="margin-top:0">Detected: <strong style="color:#cbd5e1">{{ hw_summary }}</strong></p>
-    <p class="settings-note">How much of this machine can OpenBrowse use?</p>
-    <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
-      <label class="settings-note"><input type="radio" name="hw-share" value="all" data-rec="{{ hw_recs.all }}" /> All of it &mdash; nothing else important runs here</label>
-      <label class="settings-note"><input type="radio" name="hw-share" value="most" checked data-rec="{{ hw_recs.most }}" /> Most of it &mdash; leave some headroom</label>
-      <label class="settings-note"><input type="radio" name="hw-share" value="shared" data-rec="{{ hw_recs.shared }}" /> Share it &mdash; other services matter too</label>
-    </div>
-    <label class="settings-note" style="display:block; margin-bottom:10px;">
-      Concurrent sessions (1&ndash;{{ hw_hard_max }}, currently {{ hw_current }})
-      <input type="range" id="hw-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_current }}" style="width:220px; vertical-align:middle;" />
-      <output id="hw-value">{{ hw_current }}</output>
-    </label>
-    <p class="settings-note">Moving the slider updates <code>MAX_CONCURRENT_SESSIONS</code> below; save to apply.</p>
-    {% if hw_light_on %}
-    <p class="settings-note">&#10003; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; enabled: each browser runs without a GPU process and with capped helper processes and JavaScript memory (<code>CHROME_LIGHT_FLAGS</code> below).</p>
-    {% elif hw_light_recommended %}
-    <p class="settings-note">&#9679; <strong style="color:#cbd5e1">Lighter browser</strong> &mdash; recommended for this machine: set <code>CHROME_LIGHT_FLAGS</code> to <code>1</code> below and save. It skips the GPU process and caps helper processes and JavaScript memory; worth turning off only if an unusually heavy web app misbehaves.</p>
-    {% endif %}
-    {% if hw_checklist %}
-    <div class="group-title" style="margin-top:14px">Host tuning</div>
-    {% for row in hw_checklist %}
-    <p class="settings-note" style="margin:4px 0">
-      {% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9432;{% endif %}
-      <strong style="color:#cbd5e1">{{ row.label }}</strong> &mdash; {{ row.detail }}
-    </p>
-    {% endfor %}
-    {% if hw_tune_button %}
-    <form method="post" action="/settings/host-tune" style="margin-top:8px">
-      <input type="hidden" name="share" id="hw-share-hidden" value="most" />
-      <button class="save-btn" type="submit">Apply recommended tuning</button>
-    </form>
-    {% elif hw_checklist | selectattr("state", "equalto", "action") | list %}
-    <p class="settings-note">Apply the recommended items once from a shell on this machine (this also enables the button for next time):</p>
-    <pre style="font-size:12px">openbrowse tune --share most</pre>
-    {% elif hw_tune_grant_missing %}
-    <p class="settings-note">This machine is tuned, but the dashboard can no longer re-run the tuner: the sudoers entry names the script by its full path, and that path moves when OpenBrowse is upgraded. Run it once from a shell to restore the button:</p>
-    <pre style="font-size:12px">openbrowse tune --share most</pre>
-    {% endif %}
-    {% endif %}
-  </div>
-  {% endif %}
+
   <form id="settings-form" method="post" action="/settings">
+    <div class="settings-card" id="performance-card">
+      <div class="group-title">Performance</div>
+      {% if hw_complete %}
+      <div class="detected-block">
+        <div class="detected-label">Detected:</div>
+        <pre>{{ hw_summary }}</pre>
+      </div>
+      {% endif %}
+      <div class="perf-row">
+        <span class="perf-label">Concurrent sessions</span>
+        <span class="perf-control">
+          <input type="hidden" name="key" value="MAX_CONCURRENT_SESSIONS" />
+          <input
+            type="number"
+            name="value"
+            id="mcs-input"
+            min="1"
+            step="1"
+            value="{{ hw_current }}"
+            inputmode="numeric"
+          />
+          {% if hw_suggested_max %}<span class="perf-hint">Suggested max for this machine: {{ hw_suggested_max }}</span>{% endif %}
+        </span>
+      </div>
+      <label class="toggle-row">
+        <input type="checkbox" id="light-toggle" {% if hw_light_on %}checked{% endif %} />
+        <input type="hidden" name="key" value="CHROME_LIGHT_FLAGS" />
+        <input type="hidden" name="value" id="light-value" value="{{ '1' if hw_light_on else '' }}" />
+        <span>
+          <span class="toggle-title">Lighter browser</span>
+          <span class="toggle-desc" style="display: block">Runs each browser without a GPU process and with capped memory. Best for small machines.</span>
+        </span>
+      </label>
+    </div>
+
     {% for group in groups %}
     <div class="settings-card">
       <div class="group-title">{{ group.title }}</div>
       {% for row in group.rows %}
       <div class="env-row">
-        <span class="env-key">{{ row.key }}{% if not row.present %}<span class="unset">not set</span>{% endif %}</span>
+        <span class="env-key">{{ row.key }}{% if not row.present %}{% if row.default %}<span class="default-chip">default</span>{% else %}<span class="unset">not set</span>{% endif %}{% endif %}</span>
         <span class="env-value-wrap{% if row.secret %} has-reveal{% endif %}">
           <input type="hidden" name="key" value="{{ row.key }}" />
           <input
             type="{{ 'password' if row.secret else 'text' }}"
             name="value"
             value="{{ row.value }}"
+            {% if row.default and not row.present %}placeholder="{{ row.default }}"{% endif %}
             autocomplete="off"
             spellcheck="false"
           />
@@ -280,15 +421,6 @@
       {% endfor %}
     </div>
     {% endfor %}
-    <div class="settings-card">
-      <div class="group-title">Add a variable</div>
-      <div class="env-row">
-        <input class="env-new-key" type="text" name="key" value="" placeholder="NAME" autocomplete="off" spellcheck="false" />
-        <span class="env-value-wrap">
-          <input type="text" name="value" value="" placeholder="value" autocomplete="off" spellcheck="false" />
-        </span>
-      </div>
-    </div>
     <div class="settings-actions">
       <span class="settings-note restart-note">
         Values are written to .env; clearing a value removes the variable.
@@ -318,7 +450,7 @@
     var save = form.querySelector(".save-btn");
     function dirty() {
       return Array.prototype.some.call(
-        form.querySelectorAll("input[name=value], input.env-new-key"),
+        form.querySelectorAll("input[name=value]"),
         function (i) {
           return i.value !== i.defaultValue;
         }
@@ -329,34 +461,59 @@
     });
   })();
   (function () {
-    var slider = document.getElementById("hw-slider");
-    if (!slider) return;
-    var out = document.getElementById("hw-value");
-    var hidden = document.getElementById("hw-share-hidden");
-    var form = document.getElementById("settings-form");
-    function mcsInput() {
-      var keys = form.querySelectorAll('input[name="key"]');
-      for (var i = 0; i < keys.length; i++) {
-        if (keys[i].value === "MAX_CONCURRENT_SESSIONS") {
-          return keys[i].parentElement.querySelector('input[name="value"]');
-        }
-      }
-      return null;
-    }
-    slider.addEventListener("input", function () {
-      out.textContent = slider.value;
-      var target = mcsInput();
-      if (target) {
-        target.value = slider.value;
-        target.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+    var toggle = document.getElementById("light-toggle");
+    if (!toggle) return;
+    var hidden = document.getElementById("light-value");
+    toggle.addEventListener("change", function () {
+      hidden.value = toggle.checked ? "1" : "";
+      hidden.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    document.querySelectorAll('input[name="hw-share"]').forEach(function (radio) {
-      radio.addEventListener("change", function () {
-        slider.value = radio.dataset.rec;
-        slider.dispatchEvent(new Event("input"));
-        if (hidden) hidden.value = radio.value;
-      });
+  })();
+  (function () {
+    var btn = document.getElementById("update-check-btn");
+    var status = document.getElementById("update-status");
+    var availBox = document.getElementById("update-avail-box");
+    var availVersion = document.getElementById("update-avail-version");
+    function spinnerHtml() {
+      var blades = "";
+      for (var i = 0; i < 8; i++) {
+        blades +=
+          '<i style="transform:rotate(' + i * 45 + 'deg);animation-delay:' + -(7 - i) * 100 + 'ms"></i>';
+      }
+      return '<span class="ob-spin">' + blades + "</span>";
+    }
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      status.className = "update-status";
+      status.innerHTML = spinnerHtml() + " Checking for updates…";
+      fetch("/settings/update/check", { method: "POST", credentials: "same-origin" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("http " + r.status);
+          return r.json();
+        })
+        .then(function (res) {
+          btn.disabled = false;
+          if (res.available && res.latest) {
+            status.className = "update-status is-avail";
+            status.textContent = "v" + res.latest + " is available";
+            if (res.supported) {
+              availVersion.textContent = "v" + res.latest;
+              availBox.classList.add("is-shown");
+            }
+          } else if (res.error) {
+            status.className = "update-status";
+            status.textContent = "The check failed: " + res.error;
+          } else {
+            status.className = "update-status is-ok";
+            status.textContent = "You’re on the latest version.";
+            availBox.classList.remove("is-shown");
+          }
+        })
+        .catch(function () {
+          btn.disabled = false;
+          status.className = "update-status";
+          status.textContent = "The check failed; try again.";
+        });
     });
   })();
 </script>

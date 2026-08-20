@@ -1012,10 +1012,10 @@ sudo tailscale funnel --bg 8420</pre>
               <div class="share-desc">Other services matter too.</div>
             </label>
           </div>
-          <span class="field-label">Concurrent sessions (1&ndash;{{ hw_hard_max }})</span>
+          <span class="field-label">Concurrent sessions</span>
           <div class="slider-row">
-            <input type="range" name="max_concurrent_sessions" id="mcs-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_recs.most }}" />
-            <output id="mcs-value">{{ hw_recs.most }}</output>
+            <input type="number" name="max_concurrent_sessions" id="mcs-input" min="1" step="1" value="{{ hw_recs.most }}" inputmode="numeric" style="width: 90px" />
+            <span class="field-hint" style="margin: 0">Suggested max for this machine: {{ hw_hard_max }}. Pick any number you like; each session budgets roughly 2GB RAM and one core.</span>
           </div>
           <label class="toggle-row">
             <input type="checkbox" name="chrome_light_flags" value="1" {% if hw_light_recommended %}checked{% endif %} />
@@ -1449,20 +1449,16 @@ sudo tailscale funnel --bg 8420</pre>
         });
 
         /* ---------- step 3: capacity ---------- */
-        var slider = document.getElementById("mcs-slider");
-        if (slider) {
-          var out = document.getElementById("mcs-value");
+        var mcsField = document.getElementById("mcs-input");
+        if (mcsField) {
           document.querySelectorAll('#share-cards input[name="share"]').forEach(function (radio) {
             radio.addEventListener("change", function () {
               document.querySelectorAll("#share-cards .share-card").forEach(function (c) {
                 c.classList.toggle("is-selected", c.contains(radio));
               });
-              slider.value = radio.dataset.rec;
-              out.textContent = radio.dataset.rec;
+              mcsField.value = radio.dataset.rec;
+              mcsField.dispatchEvent(new Event("input", { bubbles: true }));
             });
-          });
-          slider.addEventListener("input", function () {
-            out.textContent = slider.value;
           });
         }
 
@@ -1691,8 +1687,6 @@ sudo tailscale funnel --bg 8420</pre>
           var mcsInput = document.querySelector('input[name="max_concurrent_sessions"]');
           if (st.mcs && mcsInput) {
             mcsInput.value = st.mcs;
-            var out = document.getElementById("mcs-value");
-            if (out) out.textContent = st.mcs;
           }
           var lightInput = document.querySelector('input[name="chrome_light_flags"]');
           if (lightInput && st.light !== null && st.light !== undefined) lightInput.checked = st.light;

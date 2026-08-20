@@ -157,8 +157,24 @@ class Settings:
         in ("1", "true", "yes")
     )
     default_model: str = field(
-        default_factory=lambda: os.environ.get("DEFAULT_MODEL") or "gpt-5.6-terra"
+        default_factory=lambda: os.environ.get("DEFAULT_MODEL") or ""
     )
+
+    @property
+    def resolved_default_model(self) -> str:
+        """The model a session with no explicit choice runs on.
+
+        DEFAULT_MODEL wins outright; otherwise the default follows whichever
+        provider is actually configured, so a fresh install never advertises a
+        model its keys cannot reach.
+        """
+        if self.default_model:
+            return self.default_model
+        if self.openai_api_key:
+            return "gpt-5.6-terra"
+        if self.anthropic_api_key:
+            return "claude-sonnet-5"
+        return "gpt-5.6-terra"
     stale_session_minutes: int = 15
     reconcile_interval_seconds: int = 60
     novnc_base_port: int = 6080

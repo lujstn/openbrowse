@@ -76,15 +76,29 @@ def test_solve_captcha_action_registers():
         assert "solve_captcha" in tools.registry.registry.actions
 
 
-def test_solve_captcha_absent_without_key():
+def test_solve_captcha_without_key_speaks_only_when_faced():
+    """No CAPSOLVER_API_KEY must not banner every session at start; the fact
+    solving is off matters only at the moment a challenge actually appears,
+    so a stub action carries the message instead."""
+    import asyncio
+
     from browser_use import Tools
+
     from openbrowse.agent.captcha.tools import register_captcha_tools
+
     with patch("openbrowse.agent.captcha.tools.settings") as s:
         s.capsolver_api_key = ""
         tools = Tools()
-        register_captcha_tools(tools, [], None)
-        assert "solve_captcha" not in tools.registry.registry.actions
+        seen: list[str] = []
 
+        async def progress(message: str) -> None:
+            seen.append(message)
+
+        register_captcha_tools(tools, [], progress)
+        action = tools.registry.registry.actions["solve_captcha"]
+        result = asyncio.run(action.function())
+        assert result.error and "CAPSOLVER_API_KEY" in result.error
+        assert seen and "CAPTCHA solving is off" in seen[0]
 
 def test_all_strategies_registered_and_unique():
     strats = all_strategies()

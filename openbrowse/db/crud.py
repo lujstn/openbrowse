@@ -73,7 +73,7 @@ async def create_session(
 ) -> dict[str, Any]:
     session_id = _new_id()
     now = _now()
-    model = model or settings.default_model
+    model = model or settings.resolved_default_model
     db = await get_db()
     try:
         await db.execute(

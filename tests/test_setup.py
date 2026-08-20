@@ -351,12 +351,12 @@ async def test_setup_capacity_section_bounded_by_hardware(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.get("/setup")
     assert resp.status_code == 200
-    assert 'max="4"' in resp.text
+    assert "Suggested max for this machine: 4" in resp.text
     assert "4 cores" in resp.text
     assert 'name="share"' in resp.text
 
 
-async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
+async def test_setup_keeps_the_owners_concurrency_choice(client, monkeypatch):
     c, tmp_path = client
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post(
@@ -370,7 +370,7 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
         },
     )
     assert resp.status_code == 200
-    assert "MAX_CONCURRENT_SESSIONS=4" in (tmp_path / ".env").read_text()
+    assert "MAX_CONCURRENT_SESSIONS=99" in (tmp_path / ".env").read_text()
     assert "Restart now" in resp.text
 
 

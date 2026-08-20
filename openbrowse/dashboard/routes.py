@@ -8,7 +8,6 @@ import logging
 import math
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -46,24 +45,27 @@ logger = logging.getLogger(__name__)
 _ENV_PATH = settings.env_path
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
-    (
-        "Authentication",
-        ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD", "ALLOW_INSECURE_NO_AUTH"],
-    ),
+    ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
     ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
     ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
-    (
-        "Runtime",
-        [
-            "MAX_CONCURRENT_SESSIONS",
-            "CHROME_LIGHT_FLAGS",
-            "DEFAULT_MODEL",
-            "CLOUD_MAX_COST_FACTOR",
-            "KEEP_ALIVE_IDLE_TIMEOUT",
-        ],
-    ),
-    ("Updates", ["UPDATE_CHECK_HOURS"]),
+    ("Runtime", ["DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
 ]
+
+
+def _env_defaults() -> dict[str, str]:
+    """Effective values shown for variables the user has not set: settings
+    rows must never read "not set" when the server in fact runs a default."""
+    return {
+        "DASHBOARD_USER": "admin",
+        "DEFAULT_MODEL": settings.resolved_default_model,
+        "CLOUD_MAX_COST_FACTOR": "1",
+        "CAPTCHA_MAX_COST_USD": "0.03",
+    }
+
+
+# Owned by the Performance card's own controls; listing them again as raw
+# variables would save conflicting values from two places at once.
+_ENV_MANAGED_ELSEWHERE = frozenset({"MAX_CONCURRENT_SESSIONS", "CHROME_LIGHT_FLAGS"})
 # @nonobvious(forced-by): OPENBROWSE_HOME chooses which .env is read, so it is
 # consulted before that file is loaded. An editable row for it would save a value
 # that can never take effect.
@@ -326,6 +328,24 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-4-6[1m]", "Claude Sonnet 4.6 (1M)"),
 ]
 
+def available_model_options() -> list[tuple[str, str]]:
+    """Model choices a session on this instance can actually run: a family is
+    offered only when its provider key is configured. With no key at all the
+    full list stands, so a dev instance still renders a usable picker."""
+    has_anthropic = bool(settings.anthropic_api_key)
+    has_openai = bool(settings.openai_api_key)
+    if not has_anthropic and not has_openai:
+        return MODEL_OPTIONS
+    out: list[tuple[str, str]] = []
+    for value, label in MODEL_OPTIONS:
+        if value.startswith("claude-") and not has_anthropic:
+            continue
+        if value.startswith("gpt-") and not has_openai:
+            continue
+        out.append((value, label))
+    return out or MODEL_OPTIONS
+
+
 def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     spec = model_reasoning(model_value)
     unset = effort_when_unset(model_value)
@@ -456,17 +476,17 @@ def _format_relative_time(iso_str: str) -> str:
 async def run_page(request: Request):
     profiles, _ = await crud.list_profiles(page=1, page_size=50)
     options_map = reasoning_options_map()
-    default_reasoning = options_map.get(settings.default_model, {})
+    default_reasoning = options_map.get(settings.resolved_default_model, {})
     return templates.TemplateResponse(
         request,
         "run.html",
         context={
             "profiles": profiles,
-            "models": MODEL_OPTIONS,
+            "models": available_model_options(),
             "reasoning_options": default_reasoning.get("options", []),
             "reasoning_default": default_reasoning.get("default", "default"),
             "reasoning_options_json": json.dumps(options_map),
-            "default_model": settings.default_model,
+            "default_model": settings.resolved_default_model,
             "active_count": pool.active_count,
             "max_concurrent": settings.max_concurrent_sessions,
         },
@@ -483,7 +503,7 @@ async def run_task(
     reasoning_effort: str = Form("default"),
     output_schema: str = Form(""),
 ):
-    model = model or settings.default_model
+    model = model or settings.resolved_default_model
     try:
         effort = validate_effort(model, reasoning_effort)
         if effort == "default":
@@ -713,44 +733,13 @@ async def dashboard_stop_session(session_id: str):
     return JSONResponse({"ok": True, "action": "stop"})
 
 
-_HOST_TUNE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "host_tune.sh"
-
-
-def _host_tune_available() -> bool:
-    """True when the sudoers grant from a previous host_tune.sh run lets the
-    dashboard re-run it without a password, turning suggestions into buttons.
-    """
-    try:
-        result = subprocess.run(
-            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--dry-run"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 def _capacity_context() -> dict[str, Any]:
     info = hostinfo.probe()
-    rows = hostinfo.checklist(info)
-    has_actions = any(r["state"] == "action" for r in rows)
-    tune_available = _host_tune_available()
     return {
         "hw_summary": hostinfo.summary(info),
         "hw_complete": info.complete,
-        "hw_hard_max": hostinfo.hard_max(info) if info.complete else None,
-        "hw_recs": hostinfo.recommendations(info),
-        "hw_checklist": rows,
-        "hw_tune_button": has_actions and info.systemd and tune_available,
-        # @nonobvious(means): the sudoers grant names host_tune.sh by its full
-        # path, which moves when the package does, so an upgrade can leave a
-        # tuned machine unable to re-tune itself with nothing on screen saying so.
-        "hw_tune_grant_missing": (
-            info.systemd and not tune_available and info.resource_limits_set
-        ),
+        "hw_suggested_max": hostinfo.hard_max(info) if info.complete else None,
         "hw_current": settings.max_concurrent_sessions,
-        "hw_light_recommended": hostinfo.light_flags_recommended(info),
         "hw_light_on": settings.chrome_light_flags,
     }
 
@@ -772,8 +761,9 @@ async def update_status():
 
 @router.post("/settings/update/check")
 async def settings_update_check():
-    await updates.check_once()
-    return RedirectResponse("/settings", status_code=303)
+    state = await updates.check_once()
+    method, commands = updates.detect_install_method()
+    return JSONResponse({**state.as_dict(), "supported": bool(commands), "method": method})
 
 
 @router.post("/settings/update")
@@ -794,12 +784,15 @@ async def settings_page(request: Request):
     entries = _read_env_file()
     grouped_keys: set[str] = set()
 
+    defaults = _env_defaults()
+
     def row(k: str) -> dict[str, Any]:
         return {
             "key": k,
             "value": entries.get(k, ""),
             "present": k in entries,
             "secret": _is_secret_var(k),
+            "default": defaults.get(k, ""),
         }
 
     groups = []
@@ -807,7 +800,11 @@ async def settings_page(request: Request):
         grouped_keys.update(keys)
         groups.append({"title": title, "rows": [row(k) for k in keys]})
     other = [
-        row(k) for k in entries if k not in grouped_keys and k not in _ENV_NOT_EDITABLE
+        row(k)
+        for k in entries
+        if k not in grouped_keys
+        and k not in _ENV_NOT_EDITABLE
+        and k not in _ENV_MANAGED_ELSEWHERE
     ]
     if other:
         groups.append({"title": "Other", "rows": other})
@@ -818,6 +815,13 @@ async def settings_page(request: Request):
             restart_failed = _STARTED_AT < float(restarted)
         except ValueError:
             pass
+    capacity = _capacity_context()
+    # The card edits what the next restart will run, so a value already saved
+    # to .env outranks the one the current process happens to hold.
+    if entries.get("MAX_CONCURRENT_SESSIONS", "").isdigit():
+        capacity["hw_current"] = int(entries["MAX_CONCURRENT_SESSIONS"])
+    if "CHROME_LIGHT_FLAGS" in entries:
+        capacity["hw_light_on"] = entries["CHROME_LIGHT_FLAGS"] == "1"
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -826,56 +830,7 @@ async def settings_page(request: Request):
             "restart_failed": restart_failed,
             "update_failed": bool(request.query_params.get("update_failed")),
             "update_busy": bool(request.query_params.get("update_busy")),
-            **_capacity_context(),
-            **_update_context(),
-        },
-    )
-
-
-@router.post("/settings/host-tune")
-async def settings_host_tune(request: Request, share: str = Form("most")):
-    if share not in hostinfo.SHARE_PRESETS:
-        share = "most"
-    try:
-        result = subprocess.run(
-            [
-                "sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT),
-                "--share", share, "--service", hostinfo.UNIT_NAME,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        output = (result.stdout + result.stderr).strip()
-        ok = result.returncode == 0
-    except Exception as e:
-        output = str(e)
-        ok = False
-    entries = _read_env_file()
-    groups = [
-        {
-            "title": title,
-            "rows": [
-                {
-                    "key": k,
-                    "value": entries.get(k, ""),
-                    "present": k in entries,
-                    "secret": _is_secret_var(k),
-                }
-                for k in keys
-            ],
-        }
-        for title, keys in _ENV_GROUPS
-    ]
-    return templates.TemplateResponse(
-        request,
-        "settings.html",
-        context={
-            "groups": groups,
-            "restart_failed": False,
-            "host_tune_output": output,
-            "host_tune_ok": ok,
-            **_capacity_context(),
+            **capacity,
             **_update_context(),
         },
     )
