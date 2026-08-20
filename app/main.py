@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OpenBrowse",
-    version="1.7.0",
+    version="1.7.1",
     lifespan=lifespan,
 )
 

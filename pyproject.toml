@@ -1,6 +1,6 @@
 [project]
 name = "openbrowse"
-version = "1.7.0"
+version = "1.7.1"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
