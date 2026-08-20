@@ -134,3 +134,107 @@ def test_start_does_not_offer_flags_it_would_ignore():
     --port it silently dropped would be a promise the service never keeps."""
     with pytest.raises(SystemExit):
         cli.main(["start", "--port", "9000"])
+
+
+def _uninstall_env(monkeypatch, tmp_path, method="pipx"):
+    """Point every path the uninstall touches at harmless test locations."""
+    from dataclasses import replace
+
+    from openbrowse.config import settings
+
+    data_dir = tmp_path / "openbrowse-home"
+    data_dir.mkdir()
+    (data_dir / ".env").write_text("API_KEY=x\n")
+    cache_dir = tmp_path / "cloak-cache"
+    cache_dir.mkdir()
+    (cache_dir / "chromium-1" ).mkdir()
+    cmdline = tmp_path / "cmdline.txt"
+    cmdline.write_text("console=serial0 root=PARTUUID=x rw psi=1\n")
+
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("HT_CMDLINE", str(cmdline))
+    monkeypatch.setenv("HT_SUDOERS_DIR", str(tmp_path / "sudoers.d"))
+    monkeypatch.setattr(
+        "openbrowse.config.settings", replace(settings, home_dir=data_dir)
+    )
+    monkeypatch.setattr(
+        updates, "detect_install_method", lambda: (method, None)
+    )
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/fake/pipx")
+    monkeypatch.setattr(updates, "_uv_binary", lambda: "/fake/uv")
+
+    ran: list[list[str]] = []
+    monkeypatch.setattr(
+        "subprocess.run", lambda cmd, **kw: ran.append(list(cmd)) or SimpleNamespace(returncode=0)
+    )
+    return data_dir, cache_dir, cmdline, ran
+
+
+def test_uninstall_removes_everything_with_yes(monkeypatch, tmp_path, capsys):
+    data_dir, cache_dir, cmdline, ran = _uninstall_env(monkeypatch, tmp_path)
+    assert cli.main(["uninstall", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "fully uninstalled" in out
+    assert not data_dir.exists()
+    assert not cache_dir.exists()
+    assert ["/fake/pipx", "uninstall", "openbrowse"] in ran
+    # psi revert went through sudo with the flag stripped from the written content
+    psi_cmds = [c for c in ran if c[:2] == ["sudo", "sh"]]
+    assert psi_cmds and "psi=1" not in psi_cmds[0][-1].split(">")[0].replace("' >", "")
+
+
+def test_uninstall_aborts_without_confirmation(monkeypatch, tmp_path, capsys):
+    data_dir, cache_dir, _, ran = _uninstall_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "no thanks")
+    assert cli.main(["uninstall"]) == 1
+    assert "nothing was removed" in capsys.readouterr().out
+    assert data_dir.exists()
+    assert cache_dir.exists()
+    assert ran == []
+
+
+def test_uninstall_honours_keep_flags(monkeypatch, tmp_path):
+    data_dir, cache_dir, _, ran = _uninstall_env(monkeypatch, tmp_path)
+    assert cli.main(["uninstall", "--yes", "--keep-data", "--keep-browser"]) == 0
+    assert data_dir.exists()
+    assert cache_dir.exists()
+    assert ["/fake/pipx", "uninstall", "openbrowse"] in ran
+
+
+def test_uninstall_leaves_a_checkout_alone(monkeypatch, tmp_path, capsys):
+    _, _, _, ran = _uninstall_env(monkeypatch, tmp_path, method="checkout")
+    assert cli.main(["uninstall", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "delete the clone" in out
+    assert ["/fake/pipx", "uninstall", "openbrowse"] not in ran
+    assert ["/fake/uv", "tool", "uninstall", "openbrowse"] not in ran
+
+
+def test_uninstall_uses_uv_for_uv_tools(monkeypatch, tmp_path):
+    _, _, _, ran = _uninstall_env(monkeypatch, tmp_path, method="uv-tool")
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert ["/fake/uv", "tool", "uninstall", "openbrowse"] in ran
+
+
+def test_uninstall_handles_unreadable_privileged_dirs(monkeypatch, tmp_path):
+    """/etc/sudoers.d is 0750 root-only on Linux: probing a child raises
+    PermissionError for a normal user, and uninstall must shrug, not crash."""
+    _, _, _, ran = _uninstall_env(monkeypatch, tmp_path)
+    locked = tmp_path / "locked-sudoers"
+    monkeypatch.setenv("HT_SUDOERS_DIR", str(locked))
+
+    real_exists = os.path.exists
+
+    import pathlib
+
+    original = pathlib.Path.exists
+
+    def guarded(self, **kw):
+        if str(self).startswith(str(locked)):
+            raise PermissionError(13, "Permission denied", str(self))
+        return original(self, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "exists", guarded)
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert ["sudo", "rm", "-f", str(locked / "openbrowse-hosttune")] in ran
+    del real_exists

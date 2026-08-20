@@ -193,6 +193,12 @@ async def launch_chrome(slot: DisplaySlot) -> str:
     """
     import cloakbrowser
 
+    from openbrowse import prefetch
+
+    # A fetch in flight owns the disk; launching under it repeats the exact
+    # I/O starvation the prefetch exists to prevent.
+    await prefetch.wait_until_settled()
+
     binary_path = cloakbrowser.ensure_binary()
     stealth_args = cloakbrowser.get_default_stealth_args()
 
