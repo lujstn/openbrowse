@@ -30,7 +30,7 @@
   </form>
   {% else %}
   <p>Restart the server to apply the configuration:</p>
-  <pre>sudo systemctl restart browser-use.service
+  <pre>sudo systemctl restart openbrowse.service
 # or, if you run it manually, stop and re-run uvicorn</pre>
   {% endif %}
   <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>

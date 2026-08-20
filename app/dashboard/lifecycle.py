@@ -9,6 +9,7 @@ import subprocess
 
 from app.agent.pool import pool
 from app.browser.factory import display_manager
+from app.hostinfo import UNIT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +28,7 @@ def schedule_restart() -> None:
         except Exception:
             logger.warning("display cleanup before restart failed", exc_info=True)
         try:
-            subprocess.Popen(
-                ["sudo", "-n", "systemctl", "restart", "browser-use.service"]
-            )
+            subprocess.Popen(["sudo", "-n", "systemctl", "restart", UNIT_NAME])
         except Exception:
             logger.warning("systemctl restart failed", exc_info=True)
         # @nonobvious(forced-by): under systemd a non-zero exit revives the

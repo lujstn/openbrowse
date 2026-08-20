@@ -105,21 +105,21 @@ Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time *
 Then from any `browser-use-sdk` client:
 
 ```ts
-import { BrowserUse } from "browser-use-sdk";
+import { BrowserUse } from "browser-use-sdk/v3";
 
 const client = new BrowserUse({
   apiKey: process.env.OPENBROWSE_API_KEY,
   baseUrl: "http://<your-host>:8420/v3",
 });
 
-const task = await client.tasks.create({
+const session = await client.sessions.create({
   task: "Find every product on this page and return the structured list.",
   model: "claude-sonnet-5",
   outputSchema: mySchema,
 });
 ```
 
-Full installation (Raspberry Pi system packages, Xvfb + VNC live view, systemd service): see [GETTING_STARTED.md](GETTING_STARTED.md).
+Full installation (system packages, the Xvfb and VNC live view, running under systemd): see [the installation guide](https://openbrowse.co/docs/installation), or [GETTING_STARTED.md](GETTING_STARTED.md) for the short path.
 
 ## Exposing it to the web
 
