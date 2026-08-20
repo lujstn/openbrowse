@@ -85,8 +85,6 @@ OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of 
 
 **Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime.
 
-Leave `reasoningEffort` out and the session runs at the recommended level for that model, which is the one marked **Recommended** below and preselected in the dashboard. That is deliberately not the same as the provider's own default, which for `gpt-5.6-terra` would be `medium` rather than `none`. Set `DEFAULT_MODEL` in `.env` to choose the model a request gets when it names none; the API and the dashboard both follow it.
-
 ### All supported models
 
 - OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
