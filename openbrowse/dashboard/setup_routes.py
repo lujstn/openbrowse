@@ -30,11 +30,21 @@ setup_router = APIRouter(tags=["setup"])
 
 MIN_PASSWORD_LENGTH = 8
 
+# True once this process has written .env through the wizard. The credentials
+# are adopted into the running process at that moment, which flips
+# _configured() on; the post-setup routes (restart, tuning re-check) key off
+# this flag so finishing setup does not lock the finish screen's own buttons.
+_completed_this_process = False
+
 _VALIDATE_TIMEOUT_S = 8.0
 
 
 def _configured() -> bool:
     return bool(settings.api_key or settings.dashboard_password)
+
+
+def _setup_routes_open() -> bool:
+    return _completed_this_process or not _configured()
 
 
 def _capacity_context() -> dict:
@@ -115,7 +125,7 @@ async def _check_provider_key(provider: str, key: str) -> tuple[bool | None, str
 
 @setup_router.post("/setup/validate-key")
 async def setup_validate_key(payload: _KeyCheck):
-    if _configured():
+    if not _setup_routes_open():
         return JSONResponse({"detail": "Setup is already complete."}, status_code=403)
     ok, reason = await _check_provider_key(payload.provider, payload.key.strip())
     return {"ok": ok, "reason": reason}
@@ -137,7 +147,8 @@ async def setup_save(
         return RedirectResponse("/", status_code=303)
     if _env_path.exists() and _env_path.read_text().strip():
         return HTMLResponse(
-            "A non-empty .env already exists; edit it directly instead.",
+            "A non-empty .env already exists, so this screen will not overwrite it. "
+            "Edit it directly, or delete it and restart the service to run setup again.",
             status_code=409,
         )
     api_key = api_key.strip()
@@ -176,20 +187,48 @@ async def setup_save(
     tmp = _env_path.with_suffix(_env_path.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + "\n")
     tmp.replace(_env_path)
+    # Adopt the new credentials into the running process so the dashboard is
+    # usable without a restart. Settings is a frozen dataclass, so this is the
+    # one sanctioned breach of that seal; capacity settings are deliberately
+    # not adopted here because the pool and browser flags are already built,
+    # and only a restart honestly applies them.
+    for field_name, value in (
+        ("api_key", api_key),
+        ("dashboard_password", dashboard_password),
+        ("anthropic_api_key", anthropic_api_key.strip()),
+        ("openai_api_key", openai_api_key.strip()),
+        ("capsolver_api_key", capsolver_api_key.strip()),
+    ):
+        object.__setattr__(settings, field_name, value)
+    global _completed_this_process
+    _completed_this_process = True
     return templates.TemplateResponse(
         request,
         "setup.html",
         context={
             "done": True,
             "share": share,
+            "tune_command": f"sudo openbrowse tune --share {share}",
             **capacity,
         },
     )
 
 
+@setup_router.get("/setup/tuning-status")
+async def setup_tuning_status():
+    if not _setup_routes_open():
+        return JSONResponse({"detail": "Setup is already complete."}, status_code=403)
+    info = hostinfo.probe()
+    rows = hostinfo.checklist(info)
+    return {
+        "checklist": rows,
+        "actions_remaining": sum(1 for row in rows if row["state"] == "action"),
+    }
+
+
 @setup_router.post("/setup/restart", response_class=HTMLResponse)
 async def setup_restart(request: Request):
-    if _configured():
+    if not _setup_routes_open():
         return RedirectResponse("/", status_code=303)
     if not (_env_path.exists() and _env_path.read_text().strip()):
         return HTMLResponse("Save the configuration first.", status_code=400)

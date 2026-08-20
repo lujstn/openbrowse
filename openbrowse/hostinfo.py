@@ -120,7 +120,10 @@ def hard_max(info: HostInfo) -> int:
     """
     if not info.complete:
         return 1
-    by_ram = info.mem_total_kb // _SESSION_RAM_KB
+    # @nonobvious(forced-by): a board sold as 4GB reports ~3.8GiB usable once the
+    # kernel and firmware take their cut, so flooring total/2GB would cap it at a
+    # single session; rounding to the nearest session matches the marketing size.
+    by_ram = (info.mem_total_kb + _SESSION_RAM_KB // 2) // _SESSION_RAM_KB
     return max(1, min(info.cores, by_ram, _HARD_MAX_CEILING))
 
 
