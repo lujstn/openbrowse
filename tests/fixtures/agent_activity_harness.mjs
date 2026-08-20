@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import vm from "node:vm";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, "../../app/dashboard/static/agents.js"), "utf8");
+const source = readFileSync(join(here, "../../openbrowse/dashboard/static/agents.js"), "utf8");
 
 function makeEl() {
   const el = {

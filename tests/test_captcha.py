@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.agent.captcha import all_strategies, strategy_for
-from app.agent.captcha.base import Detection, SolveContext, TokenStrategy
-from app.agent.captcha.registry import detect_from_probe
-from app.agent.captcha import cdp as cdp_mod, pipeline, probe as probe_mod
+from openbrowse.agent.captcha import all_strategies, strategy_for
+from openbrowse.agent.captcha.base import Detection, SolveContext, TokenStrategy
+from openbrowse.agent.captcha.registry import detect_from_probe
+from openbrowse.agent.captcha import cdp as cdp_mod, pipeline, probe as probe_mod
 
 
 # @nonobvious(mirrors): the solving service's published task list. A task type
@@ -68,8 +68,8 @@ def _ctx(**kw):
 
 def test_solve_captcha_action_registers():
     from browser_use import Tools
-    from app.agent.captcha.tools import register_captcha_tools
-    with patch("app.agent.captcha.tools.settings") as s:
+    from openbrowse.agent.captcha.tools import register_captcha_tools
+    with patch("openbrowse.agent.captcha.tools.settings") as s:
         s.capsolver_api_key = "k"
         tools = Tools()
         register_captcha_tools(tools, [], None)
@@ -78,8 +78,8 @@ def test_solve_captcha_action_registers():
 
 def test_solve_captcha_absent_without_key():
     from browser_use import Tools
-    from app.agent.captcha.tools import register_captcha_tools
-    with patch("app.agent.captcha.tools.settings") as s:
+    from openbrowse.agent.captcha.tools import register_captcha_tools
+    with patch("openbrowse.agent.captcha.tools.settings") as s:
         s.capsolver_api_key = ""
         tools = Tools()
         register_captcha_tools(tools, [], None)
@@ -234,7 +234,7 @@ async def test_missing_runtime_parameters_never_create_a_paid_task(
 
 
 async def test_geetest_v3_refreshes_runtime_parameters_before_the_task():
-    from app.agent.captcha.strategies import geetest as geetest_mod
+    from openbrowse.agent.captcha.strategies import geetest as geetest_mod
 
     strat = strategy_for("geetest_v3")
     fresh = {
@@ -278,7 +278,7 @@ async def test_geetest_v3_refreshes_runtime_parameters_before_the_task():
 async def test_geetest_solution_uses_getvalidate_fields_and_success_callbacks(
     kind, solution, expected
 ):
-    from app.agent.captcha.strategies import geetest as geetest_mod
+    from openbrowse.agent.captcha.strategies import geetest as geetest_mod
 
     seen = {}
 
@@ -295,7 +295,7 @@ async def test_geetest_solution_uses_getvalidate_fields_and_success_callbacks(
 
 
 async def test_mtcaptcha_supports_named_and_function_callbacks():
-    from app.agent.captcha.strategies import mtcaptcha as mtcaptcha_mod
+    from openbrowse.agent.captcha.strategies import mtcaptcha as mtcaptcha_mod
 
     seen = {}
 
@@ -313,7 +313,7 @@ async def test_mtcaptcha_supports_named_and_function_callbacks():
 
 
 async def test_bridge_is_installed_for_the_current_and_next_document():
-    from app.agent.captcha import bridge as bridge_mod
+    from openbrowse.agent.captcha import bridge as bridge_mod
 
     add_script = AsyncMock(return_value={"identifier": "bridge"})
     evaluate = AsyncMock(return_value={})
@@ -336,7 +336,7 @@ async def test_bridge_is_installed_for_the_current_and_next_document():
 
 
 def test_bridge_preserves_initialisers_and_chainable_success_registration():
-    from app.agent.captcha.bridge import _BRIDGE_JS
+    from openbrowse.agent.captcha.bridge import _BRIDGE_JS
 
     assert 'return original.apply(this, args)' in _BRIDGE_JS
     assert 'return original.apply(this, arguments)' in _BRIDGE_JS
@@ -345,7 +345,7 @@ def test_bridge_preserves_initialisers_and_chainable_success_registration():
 
 
 def test_bridge_captures_and_replays_the_page_geetest_registration_get():
-    from app.agent.captcha.bridge import _BRIDGE_JS
+    from openbrowse.agent.captcha.bridge import _BRIDGE_JS
 
     assert 'request.method !== "GET"' in _BRIDGE_JS
     assert "response.clone().text()" in _BRIDGE_JS
@@ -355,7 +355,7 @@ def test_bridge_captures_and_replays_the_page_geetest_registration_get():
 
 
 async def test_geetest_v3_without_a_replayable_challenge_spends_nothing():
-    from app.agent.captcha.strategies import geetest as geetest_mod
+    from openbrowse.agent.captcha.strategies import geetest as geetest_mod
 
     strat = strategy_for("geetest_v3")
     create = AsyncMock()
@@ -373,7 +373,7 @@ async def test_geetest_v3_without_a_replayable_challenge_spends_nothing():
 
 
 async def test_geetest_v3_refreshes_again_after_a_stale_challenge_error():
-    from app.agent.captcha.strategies import geetest as geetest_mod
+    from openbrowse.agent.captcha.strategies import geetest as geetest_mod
 
     strat = strategy_for("geetest_v3")
     refreshed = AsyncMock(side_effect=[
@@ -495,7 +495,7 @@ def _address_eval(base, here):
 
 
 async def _ctx_for(base, here, api_origin):
-    from app.agent.captcha import tools as ctools
+    from openbrowse.agent.captcha import tools as ctools
     with patch.object(ctools, "_eval_js", _address_eval(base, here)), \
          patch.object(ctools.cdp, "page_cookie_header", AsyncMock(return_value="")):
         return await ctools._build_ctx(
@@ -531,7 +531,7 @@ def test_captcha_spend_is_capped_by_default():
     """The default has to be a real ceiling, not a nominal one: a page names the
     address a solve is billed against, so a loop on a hostile page spends until
     something stops it."""
-    from app.config import Settings
+    from openbrowse.config import Settings
     cap = Settings().captcha_cost_cap_usd
     assert 0 < cap <= 0.05
     dearest_solve = 3.0 / 1000
@@ -539,7 +539,7 @@ def test_captcha_spend_is_capped_by_default():
 
 
 def test_every_token_strategy_can_actually_place_its_solution():
-    from app.agent.captcha.base import TokenStrategy
+    from openbrowse.agent.captcha.base import TokenStrategy
     for s in all_strategies():
         if not isinstance(s, TokenStrategy):
             continue
@@ -609,7 +609,7 @@ async def test_aws_waf_token_becomes_a_cookie_and_a_reload():
 
 
 def test_cookies_are_accepted_in_every_shape_a_solver_returns():
-    from app.agent.captcha.cdp import normalise_cookies
+    from openbrowse.agent.captcha.cdp import normalise_cookies
     expected = [("a", "1", "site.example", "/"), ("b", "2", "site.example", "/")]
     for raw in ({"a": "1", "b": "2"},
                 "a=1; b=2",
@@ -652,7 +652,7 @@ async def test_a_retry_refuses_a_challenge_of_another_kind():
 
 
 async def test_verify_does_not_wait_out_an_in_page_widget():
-    from app.agent.captcha import base as base_mod
+    from openbrowse.agent.captcha import base as base_mod
     budgets = []
 
     async def fake_advanced(session, timeout_s=25.0):
@@ -666,7 +666,7 @@ async def test_verify_does_not_wait_out_an_in_page_widget():
 
 
 async def test_shared_placement_writes_into_the_widgets_form():
-    from app.agent.captcha.base import TokenStrategy, _PLACE_JS
+    from openbrowse.agent.captcha.base import TokenStrategy, _PLACE_JS
     seen = {}
 
     class _Probe(TokenStrategy):
@@ -685,7 +685,7 @@ async def test_shared_placement_writes_into_the_widgets_form():
         seen["js"] = expr
         return {"fields": 1, "inForm": True, "valueLen": 9, "callback": "cb"}
 
-    from app.agent.captcha import base as base_mod
+    from openbrowse.agent.captcha import base as base_mod
     with patch.object(base_mod, "_eval_js", fake_eval):
         await _Probe()._place(SimpleNamespace(), {"token": "abcdefghi"},
                               Detection(kind="probe-only"))
@@ -695,14 +695,14 @@ async def test_shared_placement_writes_into_the_widgets_form():
 
 
 def test_token_is_placed_inside_the_widgets_form():
-    from app.agent.captcha.base import _PLACE_JS
+    from openbrowse.agent.captcha.base import _PLACE_JS
     assert 'closest("form")' in _PLACE_JS
     assert "make(form)" in _PLACE_JS
     assert "out.inForm" in _PLACE_JS
 
 
 def test_submit_refuses_anything_but_this_challenges_own_filled_form():
-    from app.agent.captcha.cdp import _SUBMIT_WIDGET_JS
+    from openbrowse.agent.captcha.cdp import _SUBMIT_WIDGET_JS
     assert '"empty"' in _SUBMIT_WIDGET_JS
     assert '"no-response-field"' in _SUBMIT_WIDGET_JS
     assert 'document.querySelector("form")' not in _SUBMIT_WIDGET_JS

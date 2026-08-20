@@ -83,7 +83,9 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of describing how the platform works in "steps" (the 👁️ see / 🛝 plan / ➡️ next / 💭 thinking cards in the live feed), so it can't be disabled.
 
-**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime. Models will have different default reasoning levels depending on their provider, so it's a good idea to set this value explicitly.
+**Model reasoning** is different: it's the Chain-of-Thought reasoning provided by LLM providers (e.g. Anthropic's extended thinking, OpenAI's reasoning effort), and can be controlled per session by changing `reasoningEffort` in the API. Values are validated per model at runtime.
+
+Leave `reasoningEffort` out and the session runs at the recommended level for that model, which is the one marked **Recommended** below and preselected in the dashboard. That is deliberately not the same as the provider's own default, which for `gpt-5.6-terra` would be `medium` rather than `none`. Set `DEFAULT_MODEL` in `.env` to choose the model a request gets when it names none; the API and the dashboard both follow it.
 
 ### All supported models
 
@@ -94,10 +96,18 @@ OpenBrowse separates two kinds of reasoning. **Browser thinking** is our way of 
 ## Quick start
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install openbrowse
+openbrowse start
+```
+
+To run from source instead, clone the repo and use uv directly:
+
+```bash
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse
 uv sync
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8420
+uv run openbrowse serve
 ```
 
 Open `http://<your-host>:8420` in a browser. A fresh install serves a one-time **setup screen** that generates your API bearer key, takes your Anthropic / OpenAI / CapSolver keys, sets your dashboard password and concurrency limit, and writes `.env` for you.
@@ -120,6 +130,10 @@ const session = await client.sessions.create({
 ```
 
 Full installation (system packages, the Xvfb and VNC live view, running under systemd): see [the installation guide](https://openbrowse.co/docs/installation), or [GETTING_STARTED.md](GETTING_STARTED.md) for the short path.
+
+## Updating
+
+The server checks PyPI for new releases in the background and shows an **Update available** badge in the dashboard when one exists; installing it is one click on the Settings page (the server restarts itself afterwards). From a shell, `openbrowse check-update` and `openbrowse update` do the same. Set `UPDATE_CHECK_HOURS=0` in `.env` to disable the background check.
 
 ## Exposing it to the web
 

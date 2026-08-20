@@ -8,13 +8,13 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.auth import require_dashboard_auth
-from app.config import settings
-from app.dashboard import import_routes
-from app.db import crud
-from app.db.models import init_db
-from app.profiles import cloud_export, import_jobs
-from app.profiles.storage import profile_state_path
+from openbrowse.auth import require_dashboard_auth
+from openbrowse.config import settings
+from openbrowse.dashboard import import_routes
+from openbrowse.db import crud
+from openbrowse.db.models import init_db
+from openbrowse.profiles import cloud_export, import_jobs
+from openbrowse.profiles.storage import profile_state_path
 
 
 @pytest.fixture(autouse=True)
@@ -27,9 +27,9 @@ async def setup(tmp_path, monkeypatch):
         api_key="",
         allow_insecure_no_auth=True,
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
     import_jobs.jobs._jobs.clear()

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.agent.schema import SchemaConversionError, json_schema_to_pydantic
+from openbrowse.agent.schema import SchemaConversionError, json_schema_to_pydantic
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

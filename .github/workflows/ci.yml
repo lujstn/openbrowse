@@ -16,6 +16,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Compile check
-        run: PYTHONPATH=. uv run python -m compileall -q app tests scripts
+        run: PYTHONPATH=. uv run python -m compileall -q openbrowse tests scripts
+      - name: Lint
+        run: uv run ruff check .
       - name: Tests
         run: PYTHONPATH=. uv run pytest -q

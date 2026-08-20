@@ -1,11 +1,10 @@
 """Browser factory tests -- only test logic, not actual Xvfb/VNC."""
 
-import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from app.browser.factory import DisplayManager, DisplaySlot, launch_chrome, stop_chrome, wait_for_cdp
-from app.config import settings
+from openbrowse.browser.factory import DisplayManager, DisplaySlot, launch_chrome, stop_chrome
+from openbrowse.config import settings
 
 
 @pytest.fixture
@@ -13,7 +12,7 @@ def manager():
     return DisplayManager()
 
 
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_allocate_display(mock_popen, manager):
     mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
     slot = await manager.allocate()
@@ -25,8 +24,8 @@ async def test_allocate_display(mock_popen, manager):
     assert slot.novnc_proc is None
 
 
-@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_ensure_vnc_starts_once_and_is_idempotent(mock_popen, mock_wait, manager):
     mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
     mock_wait.return_value = True
@@ -43,20 +42,20 @@ async def test_ensure_vnc_starts_once_and_is_idempotent(mock_popen, mock_wait, m
     mock_wait.assert_awaited_once()
 
 
-@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_ensure_vnc_false_for_released_slot(mock_popen, mock_wait, manager):
     mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
     mock_wait.return_value = True
-    with patch("app.browser.factory.stop_chrome", new=AsyncMock()):
+    with patch("openbrowse.browser.factory.stop_chrome", new=AsyncMock()):
         slot = await manager.allocate()
         await manager.release(slot.display_num)
     assert await manager.ensure_vnc(slot.display_num) is False
     mock_wait.assert_not_awaited()
 
 
-@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_ensure_vnc_restarts_dead_processes(mock_popen, mock_wait, manager):
     mock_popen.side_effect = lambda *a, **k: MagicMock(poll=MagicMock(return_value=None))
     mock_wait.return_value = True
@@ -69,11 +68,11 @@ async def test_ensure_vnc_restarts_dead_processes(mock_popen, mock_wait, manager
     assert mock_popen.call_count == 4
 
 
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_allocate_multiple(mock_popen, manager, monkeypatch):
     from dataclasses import replace
 
-    import app.browser.factory as factory_mod
+    import openbrowse.browser.factory as factory_mod
 
     monkeypatch.setattr(
         factory_mod, "settings", replace(settings, max_concurrent_sessions=5)
@@ -85,8 +84,8 @@ async def test_allocate_multiple(mock_popen, manager, monkeypatch):
     assert s1.cdp_port != s2.cdp_port
 
 
-@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
-@patch("app.browser.factory.subprocess.Popen")
+@patch("openbrowse.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.subprocess.Popen")
 async def test_release_terminates_all_processes(mock_popen, mock_wait, manager):
     mock_proc = MagicMock(poll=MagicMock(return_value=None))
     mock_popen.return_value = mock_proc
@@ -95,7 +94,7 @@ async def test_release_terminates_all_processes(mock_popen, mock_wait, manager):
     mock_chrome_proc = AsyncMock()
     mock_chrome_proc.returncode = None
 
-    with patch("app.browser.factory.stop_chrome", new=AsyncMock()) as mock_stop:
+    with patch("openbrowse.browser.factory.stop_chrome", new=AsyncMock()) as mock_stop:
         slot = await manager.allocate()
         await manager.ensure_vnc(slot.display_num)
         slot.chrome_proc = mock_chrome_proc
@@ -105,8 +104,8 @@ async def test_release_terminates_all_processes(mock_popen, mock_wait, manager):
     assert mock_proc.terminate.call_count == 3
 
 
-@patch("app.browser.factory.asyncio.create_subprocess_exec", new_callable=AsyncMock)
-@patch("app.browser.factory.wait_for_cdp", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.asyncio.create_subprocess_exec", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.wait_for_cdp", new_callable=AsyncMock)
 async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
     mock_wait_cdp.return_value = None
 
@@ -156,12 +155,12 @@ async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
     mock_wait_cdp.assert_called_once_with(9222)
 
 
-@patch("app.browser.factory.asyncio.create_subprocess_exec", new_callable=AsyncMock)
-@patch("app.browser.factory.wait_for_cdp", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.asyncio.create_subprocess_exec", new_callable=AsyncMock)
+@patch("openbrowse.browser.factory.wait_for_cdp", new_callable=AsyncMock)
 async def test_launch_chrome_light_flags_env_gated(mock_wait_cdp, mock_create_subproc, monkeypatch):
     from dataclasses import replace
 
-    import app.browser.factory as factory_mod
+    import openbrowse.browser.factory as factory_mod
 
     mock_wait_cdp.return_value = None
     mock_proc = AsyncMock()
@@ -198,7 +197,7 @@ async def test_stop_chrome_terminates():
     async def _await_it(awaitable, timeout=None):
         return await awaitable
 
-    with patch("app.browser.factory.asyncio.wait_for", side_effect=_await_it):
+    with patch("openbrowse.browser.factory.asyncio.wait_for", side_effect=_await_it):
         await stop_chrome(slot)
 
     mock_proc.terminate.assert_called_once()

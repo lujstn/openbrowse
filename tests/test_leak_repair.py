@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from app.agent.leak_repair import (
+from openbrowse.agent.leak_repair import (
     hoist_leaked_action,
     is_missing_action_error,
     repair_anthropic_message,
@@ -198,7 +198,7 @@ def test_html_tags_in_prose_are_not_treated_as_leaks():
     byte-for-byte intact. Only the card-field tags, <invoke>/<parameter> junk and
     <action> payloads count as leaks.
     """
-    from app.agent.leak_repair import scrub_tag_bleed
+    from openbrowse.agent.leak_repair import scrub_tag_bleed
 
     prose = (
         "The page has an <a> tag pointing at the job and a <title> element; "
@@ -317,7 +317,7 @@ def test_merge_conservative_without_tool_name():
 
 
 def test_mistyped_vs_missing_action_errors():
-    from app.agent.leak_repair import mistyped_action_params
+    from openbrowse.agent.leak_repair import mistyped_action_params
 
     missing = Exception("1 validation error for AgentOutput\naction\n  Field required")
     mistyped = Exception(
@@ -334,7 +334,7 @@ def test_mistyped_vs_missing_action_errors():
 
 
 def test_coerce_action_param_shapes():
-    from app.agent.leak_repair import coerce_action_param_shapes
+    from openbrowse.agent.leak_repair import coerce_action_param_shapes
 
     kinds = {
         "read_pages": {
@@ -375,7 +375,7 @@ def test_coerce_action_param_shapes():
 def test_coerce_is_noop_on_well_typed_reply():
     import copy
 
-    from app.agent.leak_repair import coerce_action_param_shapes
+    from openbrowse.agent.leak_repair import coerce_action_param_shapes
 
     kinds = {
         "read_pages": {

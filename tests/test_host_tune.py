@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "host_tune.sh"
+_SCRIPT = Path(__file__).resolve().parent.parent / "openbrowse" / "scripts" / "host_tune.sh"
 
 
 def _run(tmp_path, *args, meminfo_kb=16 * 1024 * 1024, pi=True, psi=False):

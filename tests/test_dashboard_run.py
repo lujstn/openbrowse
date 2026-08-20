@@ -1,6 +1,6 @@
 """Unit tests for dashboard run helpers — port formula and model option list."""
 
-from app.dashboard.routes import (
+from openbrowse.dashboard.routes import (
     MODEL_OPTIONS,
     reasoning_options_map,
     _live_sessions,
@@ -35,7 +35,7 @@ def test_model_options_curated_list():
         "claude-sonnet-4-6",
         "claude-sonnet-4-6[1m]",
     ]
-    from app.agent.runner import _resolve_model
+    from openbrowse.agent.runner import _resolve_model
 
     for value in values:
         assert _resolve_model(value)[1]
@@ -52,10 +52,13 @@ def test_reasoning_options_map_covers_all_models_with_defaults():
 
 
 def test_reasoning_options_per_generation():
+    """"Default" has to name the level the session actually runs at. Where our
+    pick differs from the provider's, the provider's is labelled as such rather
+    than as the default, which it no longer is."""
     options_map = reasoning_options_map()
     sonnet5 = options_map["claude-sonnet-5"]
     assert sonnet5["default"] == "high"
-    assert dict(sonnet5["options"])["high"] == "High (Default, Recommended)"
+    assert dict(sonnet5["options"])["high"] == "High (Default)"
     assert dict(sonnet5["options"])["none"] == "None"
     assert "off" not in dict(sonnet5["options"])
     opus48 = options_map["claude-opus-4-8[1m]"]
@@ -67,15 +70,27 @@ def test_reasoning_options_per_generation():
     assert fable["default"] == "high"
     terra = options_map["gpt-5.6-terra"]
     assert terra["default"] == "none"
-    assert dict(terra["options"])["none"] == "None (Recommended)"
-    assert dict(terra["options"])["medium"] == "Medium (Default)"
+    assert dict(terra["options"])["none"] == "None (Default)"
+    assert dict(terra["options"])["medium"] == "Medium (Provider default)"
     assert dict(terra["options"])["max"] == "Max"
     luna = options_map["gpt-5.6-luna"]
     assert luna["default"] == "max"
-    assert dict(luna["options"])["max"] == "Max (Recommended)"
+    assert dict(luna["options"])["max"] == "Max (Default)"
+    assert dict(luna["options"])["medium"] == "Medium (Provider default)"
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
     assert sonnet46["default"] == "none"
+
+
+def test_no_option_is_labelled_default_unless_it_is_the_one_used():
+    """The preselected value and the one marked Default must be the same option,
+    or the dropdown contradicts itself."""
+    from openbrowse.agent.runner import effort_when_unset
+
+    for model, spec in reasoning_options_map().items():
+        labelled = [v for v, label in spec["options"] if "(Default)" in label]
+        assert labelled == [spec["default"]], model
+        assert spec["default"] == effort_when_unset(model), model
 
 
 def test_model_provider_labels():
@@ -88,8 +103,8 @@ def test_model_provider_labels():
 def test_live_sessions_filters_running_with_url_and_caps(monkeypatch):
     from dataclasses import replace
 
-    from app.config import settings
-    from app.dashboard import routes as routes_mod
+    from openbrowse.config import settings
+    from openbrowse.dashboard import routes as routes_mod
 
     monkeypatch.setattr(
         routes_mod, "settings", replace(settings, max_concurrent_sessions=5)
@@ -108,7 +123,7 @@ def test_live_sessions_filters_running_with_url_and_caps(monkeypatch):
 def test_message_display_includes_model_reasoning_card():
     import json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "result",
@@ -125,7 +140,7 @@ def test_message_display_includes_model_reasoning_card():
 def test_strip_thinking_removes_reasoning_keys_including_legacy():
     import json
 
-    from app.dashboard.routes import _strip_thinking
+    from openbrowse.dashboard.routes import _strip_thinking
 
     data = json.dumps(
         {"see": "a", "thinking": "b", "model_reasoning": "c", "model_thinking": "d"}
@@ -138,7 +153,7 @@ def test_strip_thinking_removes_reasoning_keys_including_legacy():
 
 
 def test_mdlite_escapes_then_formats():
-    from app.dashboard.routes import _mdlite
+    from openbrowse.dashboard.routes import _mdlite
 
     out = str(_mdlite("**Plan** use `run_code_file`\n<script>x</script>"))
     assert "<strong>Plan</strong>" in out
@@ -150,7 +165,7 @@ def test_mdlite_escapes_then_formats():
 def test_message_display_reasoning_event_row():
     import json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "event",
@@ -167,7 +182,7 @@ def test_message_display_reasoning_event_row():
 def test_message_display_error_full_card():
     import json as _json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "browser_action_error",
@@ -189,7 +204,7 @@ def test_message_display_error_full_card():
 
 
 def test_usd_filter_rounds_up_to_cent():
-    from app.dashboard.routes import _usd
+    from openbrowse.dashboard.routes import _usd
 
     assert _usd(0.399) == "0.40"
     assert _usd(0.2358) == "0.24"
@@ -202,7 +217,7 @@ def test_usd_filter_rounds_up_to_cent():
 def test_message_display_result_snippet_card():
     import json as _json
 
-    from app.dashboard.routes import message_display
+    from openbrowse.dashboard.routes import message_display
 
     row = {
         "type": "result",
@@ -218,3 +233,13 @@ def test_message_display_result_snippet_card():
     }
     md = message_display(row)
     assert md["result_snippet"].startswith("Read 14 of 14 pages")
+
+
+def test_recommendation_table_covers_only_real_models():
+    """A typo here silently downgrades a model to the provider default rather
+    than failing, so every key must resolve."""
+    from openbrowse.agent.runner import _RECOMMENDED_EFFORT, _resolve_model, valid_efforts
+
+    for model, effort in _RECOMMENDED_EFFORT.items():
+        assert _resolve_model(model)[1]
+        assert effort in valid_efforts(model), f"{model} cannot run at {effort}"

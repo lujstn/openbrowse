@@ -1,6 +1,6 @@
 """Run-lifecycle registry and profile-claim tests."""
 
-from app.agent import activity
+from openbrowse.agent import activity
 
 
 def _reset():

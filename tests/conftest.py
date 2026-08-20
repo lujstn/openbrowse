@@ -1,6 +1,6 @@
 import pytest
 
-from app.auth_throttle import throttle
+from openbrowse.auth_throttle import throttle
 
 
 # @nonobvious(forced-by): the auth throttle is process-global, so failed-auth
