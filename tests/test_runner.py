@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.agent.runner import (
+from openbrowse.agent.runner import (
     _THINKING_BUDGETS,
     _build_llm,
     _canonical_stored_effort,
@@ -20,12 +20,12 @@ from app.agent.runner import (
     valid_efforts,
     validate_effort,
 )
-from app.config import settings as app_settings
+from openbrowse.config import settings as app_settings
 
 
 @pytest.fixture
 async def runner_db(tmp_path, monkeypatch):
-    from app.db.models import init_db
+    from openbrowse.db.models import init_db
 
     test_settings = replace(
         app_settings,
@@ -33,9 +33,9 @@ async def runner_db(tmp_path, monkeypatch):
         data_dir=tmp_path / "data",
         profiles_dir=tmp_path / "data" / "profiles",
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.agent.runner.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.agent.runner.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
     return test_settings
@@ -70,7 +70,7 @@ def test_resolve_openai_gpt56():
 
 
 def test_resolve_accepts_either_version_punctuation():
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     for provider, model_ids in (
         ("anthropic", runner._ANTHROPIC_MODELS),
@@ -116,7 +116,7 @@ def test_removed_aliases_rejected():
 
 
 def test_model_warnings_removed():
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     assert not hasattr(runner, "_MODEL_WARNINGS")
     assert not hasattr(runner, "_ALWAYS_THINKING_NOTE")
@@ -127,7 +127,7 @@ def test_thinking_budget_map():
 
 
 def test_build_llm_openai_missing_key(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai=""))
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
@@ -135,7 +135,7 @@ def test_build_llm_openai_missing_key(monkeypatch):
 
 
 def test_build_llm_anthropic_missing_key(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic=""))
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
@@ -143,7 +143,7 @@ def test_build_llm_anthropic_missing_key(monkeypatch):
 
 
 def test_build_llm_adaptive_thinking(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     provider, model_id, llm = runner._build_llm("claude-opus-4.8", "high")
@@ -153,7 +153,7 @@ def test_build_llm_adaptive_thinking(monkeypatch):
 
 
 def test_build_llm_budget_thinking_old_model(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     _, model_id, llm = runner._build_llm("claude-sonnet-4-6", "high")
@@ -163,7 +163,7 @@ def test_build_llm_budget_thinking_old_model(monkeypatch):
 
 
 def test_build_llm_anthropic_no_thinking_omits_temperature(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     _, _, llm = runner._build_llm("claude-sonnet-5", "none")
@@ -172,7 +172,7 @@ def test_build_llm_anthropic_no_thinking_omits_temperature(monkeypatch):
 
 
 def test_build_llm_openai_reasoning_effort(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     provider, model_id, llm = runner._build_llm("gpt-5.6-terra", "medium")
@@ -186,7 +186,7 @@ def test_resolve_fable_and_mythos():
 
 
 def test_build_llm_always_thinking_models_reject_none(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     for model in ("claude-fable-5", "claude-mythos-5"):
@@ -198,7 +198,7 @@ def test_build_llm_always_thinking_models_reject_none(monkeypatch):
 
 
 def test_always_thinking_models_are_registered():
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     for model in ("claude-fable-5", "claude-mythos-5"):
         assert model in runner._ANTHROPIC_MODELS
@@ -208,8 +208,8 @@ def test_always_thinking_models_are_registered():
 
 
 def test_every_model_is_priced():
-    import app.agent.runner as runner
-    from app.agent import cost
+    import openbrowse.agent.runner as runner
+    from openbrowse.agent import cost
 
     for model_id in set(runner._ANTHROPIC_MODELS) | set(runner._OPENAI_MODELS):
         assert cost._lookup(model_id) is not None, model_id
@@ -255,14 +255,14 @@ def test_resolve_default_effort_per_generation():
 
 
 def test_registry_covers_every_model():
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     all_ids = set(runner._ANTHROPIC_MODELS) | set(runner._OPENAI_MODELS)
     assert all_ids == set(runner._MODEL_REASONING)
 
 
 def test_build_llm_wire_shapes(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x", openai="sk-x"))
 
@@ -289,7 +289,7 @@ def test_build_llm_wire_shapes(monkeypatch):
 
 
 def test_build_llm_openai_output_budget_scales_with_effort(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     for effort, budget in (
@@ -306,7 +306,7 @@ def test_build_llm_openai_output_budget_scales_with_effort(monkeypatch):
 
 
 def test_build_llm_openai_timeout_scales_with_effort(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     for effort, timeout in (
@@ -328,7 +328,7 @@ def test_resolve_opus_1m_suffix_strips_to_base():
 
 
 def test_build_llm_1m_sets_betas_and_stays_adaptive(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     provider, model_id, llm = runner._build_llm("claude-opus-4-8[1m]", "high")
@@ -338,7 +338,7 @@ def test_build_llm_1m_sets_betas_and_stays_adaptive(monkeypatch):
 
 
 def test_build_llm_opus5_builds(monkeypatch):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     provider, model_id, _ = runner._build_llm("claude-opus-5", "none")
@@ -346,7 +346,7 @@ def test_build_llm_opus5_builds(monkeypatch):
 
 
 def _responses_llm(monkeypatch, effort="max"):
-    import app.agent.runner as runner
+    import openbrowse.agent.runner as runner
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
@@ -479,7 +479,7 @@ async def test_responses_ainvoke_parses_structured_output(monkeypatch):
 
 
 def test_openai_llm_uses_prompt_schema_not_strict_response_format(monkeypatch):
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     monkeypatch.setattr(
         runner_mod, "settings", types.SimpleNamespace(openai_api_key="test-key")
@@ -521,7 +521,7 @@ def _fake_session(cached):
 
 
 async def test_lean_state_serves_stub_once_then_full(monkeypatch):
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     session, calls = _fake_session(_cached_state())
 
@@ -546,7 +546,7 @@ async def test_lean_state_serves_stub_once_then_full(monkeypatch):
 
 
 async def test_lean_state_falls_through_on_url_change(monkeypatch):
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     session, calls = _fake_session(_cached_state("https://x.com/listings"))
 
@@ -561,7 +561,7 @@ async def test_lean_state_falls_through_on_url_change(monkeypatch):
 
 
 async def test_lean_state_ineligible_passes_through(monkeypatch):
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     session, calls = _fake_session(_cached_state())
     flag = {"eligible": False}
@@ -573,7 +573,7 @@ async def test_lean_state_ineligible_passes_through(monkeypatch):
 def test_lean_state_installs_on_real_browser_session():
     from browser_use import BrowserSession
 
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     session = BrowserSession(cdp_url="http://127.0.0.1:1")
     runner_mod._install_lean_state(session, {"eligible": False})
@@ -581,7 +581,7 @@ def test_lean_state_installs_on_real_browser_session():
 
 
 def test_store_only_actions_exclude_page_changers():
-    from app.agent.runner import _STORE_ONLY_ACTIONS
+    from openbrowse.agent.runner import _STORE_ONLY_ACTIONS
 
     for name in ("update_items", "mark_absent", "read_pages", "run_code_file"):
         assert name in _STORE_ONLY_ACTIONS
@@ -590,7 +590,7 @@ def test_store_only_actions_exclude_page_changers():
 
 
 def test_action_detail_and_category_for_new_actions():
-    from app.agent.runner import _category_for
+    from openbrowse.agent.runner import _category_for
 
     assert _category_for("read_pages") == "read"
     assert _category_for("update_items") == "schema"
@@ -598,7 +598,7 @@ def test_action_detail_and_category_for_new_actions():
 
 
 def test_card_order_puts_action_directly_after_thinking():
-    from app.agent.runner import _CARD_ORDER
+    from openbrowse.agent.runner import _CARD_ORDER
 
     assert _CARD_ORDER[0] == "thinking"
     assert _CARD_ORDER[1] == "action"
@@ -614,7 +614,7 @@ def _missing_action_exc():
 async def test_missing_action_retries_twice_then_succeeds(monkeypatch):
     from browser_use import ChatAnthropic
 
-    from app.agent.runner import _RepairingChatAnthropic
+    from openbrowse.agent.runner import _RepairingChatAnthropic
 
     calls: list[list] = []
 
@@ -639,7 +639,7 @@ async def test_missing_action_three_failures_raises_short_error(monkeypatch):
 
     from browser_use import ChatAnthropic
 
-    from app.agent.runner import _RepairingChatAnthropic
+    from openbrowse.agent.runner import _RepairingChatAnthropic
 
     async def fake_ainvoke(self, messages, output_format=None, **kwargs):
         raise _missing_action_exc()
@@ -787,7 +787,7 @@ async def test_responses_action_repair_three_failures_short_error(monkeypatch):
 
 
 async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-1"
@@ -847,8 +847,8 @@ async def test_responses_streaming_pushes_reasoning_to_activity(monkeypatch):
 
 
 async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
-    import app.agent.runner as runner_mod
-    from app.agent.runner import _RepairingChatAnthropic
+    import openbrowse.agent.runner as runner_mod
+    from openbrowse.agent.runner import _RepairingChatAnthropic
 
     llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
     llm._activity_session = "sess-2"
@@ -894,7 +894,7 @@ async def test_anthropic_drain_stream_pushes_thinking_to_activity(monkeypatch):
 async def test_responses_streaming_stream_field_grows_monotonically_and_unsliced(
     monkeypatch,
 ):
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-3"
@@ -980,7 +980,7 @@ class _ReviewStore:
 async def test_run_with_review_loops_until_reviewer_passes(monkeypatch) -> None:
     import types as _t
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     events: list[str] = []
 
@@ -1013,7 +1013,7 @@ async def test_run_with_review_forces_changes_after_two_justifications(
 ) -> None:
     import types as _t
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     async def fake_create_message(**kwargs):
         return None
@@ -1043,7 +1043,7 @@ async def test_run_with_review_forces_changes_after_two_justifications(
 async def test_run_with_review_skips_failed_or_passing_runs(monkeypatch) -> None:
     import types as _t
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     called: list[str] = []
 
@@ -1068,7 +1068,7 @@ async def test_run_with_review_skips_failed_or_passing_runs(monkeypatch) -> None
 async def test_run_with_review_stops_when_round_adds_no_steps(monkeypatch) -> None:
     import types as _t
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     events: list[str] = []
 
@@ -1095,14 +1095,14 @@ async def test_run_with_review_stops_when_round_adds_no_steps(monkeypatch) -> No
 def test_browser_sessions_keep_alive_for_review_rounds() -> None:
     import inspect
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     src = inspect.getsource(runner_mod.run_agent_session)
     assert "browser_session.browser_profile.keep_alive = True" in src
 
 
 async def test_invoke_repair_names_mistyped_arguments():
-    from app.agent.runner import _invoke_with_action_repair
+    from openbrowse.agent.runner import _invoke_with_action_repair
 
     calls = []
 
@@ -1124,7 +1124,7 @@ async def test_invoke_repair_names_mistyped_arguments():
 
 
 def test_friendly_error_clips_to_first_sentence():
-    from app.agent.runner import _friendly_error
+    from openbrowse.agent.runner import _friendly_error
 
     long = (
         "'[\"companyName\", \"companyUrl\"]' is not a schema field. Fields: "
@@ -1141,7 +1141,7 @@ def test_reasoning_row_is_titled_by_how_long_it_took():
     """Half a sentence of thought is not a headline; the whole thought is a
     caret away in the card, so the row reports duration instead.
     """
-    from app.agent.runner import _reasoned_title
+    from openbrowse.agent.runner import _reasoned_title
 
     assert _reasoned_title(4.23) == "Reasoned for 4.2s"
     assert _reasoned_title(21.6) == "Reasoned for 21.6s"
@@ -1154,7 +1154,7 @@ def test_reasoning_row_is_titled_by_how_long_it_took():
 
 
 def test_action_detail_humanises_bare_steps():
-    from app.agent.runner import _action_detail
+    from openbrowse.agent.runner import _action_detail
 
     class _Act:
         def __init__(self, payload):
@@ -1174,7 +1174,7 @@ def test_action_detail_humanises_bare_steps():
 
 
 def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
-    from app.agent.runner import (
+    from openbrowse.agent.runner import (
         _STALE_CAPTCHA_CLAIM_RE,
         _captcha_corrected_system_prompt,
     )
@@ -1194,7 +1194,7 @@ def test_captcha_claims_are_corrected_in_the_system_prompt() -> None:
 def test_the_prompt_is_corrected_when_nothing_can_solve_a_captcha() -> None:
     """Without a solver the stock prompt is more dangerous, not less: it tells the
     model a solve is coming that never will."""
-    from app.agent.runner import (
+    from openbrowse.agent.runner import (
         _STALE_CAPTCHA_CLAIM_RE,
         _captcha_corrected_system_prompt,
     )
@@ -1213,7 +1213,7 @@ def test_a_half_corrected_prompt_is_not_read_as_a_clean_one() -> None:
     to be read off the result, not inferred from the number that matched."""
     from unittest.mock import patch
 
-    from app.agent.runner import (
+    from openbrowse.agent.runner import (
         _STALE_CAPTCHA_CLAIM_RE,
         _captcha_corrected_system_prompt,
     )
@@ -1240,7 +1240,7 @@ def test_the_rebuilt_prompt_mirrors_the_agents_own_template_choice() -> None:
     rebuild that guesses these two can install a prompt for the wrong schema."""
     from unittest.mock import patch
 
-    from app.agent.runner import _captcha_corrected_system_prompt
+    from openbrowse.agent.runner import _captcha_corrected_system_prompt
 
     llm = types.SimpleNamespace(model="claude-sonnet-5")
     with patch("browser_use.agent.prompts.SystemPrompt") as system_prompt:
@@ -1259,7 +1259,7 @@ def test_the_rebuilt_prompt_mirrors_the_agents_own_template_choice() -> None:
 def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
     from unittest.mock import patch
 
-    from app.agent.runner import _captcha_corrected_system_prompt
+    from openbrowse.agent.runner import _captcha_corrected_system_prompt
 
     llm = types.SimpleNamespace(model="claude-sonnet-5")
     with patch(
@@ -1276,7 +1276,7 @@ def test_captcha_correction_survives_an_unbuildable_prompt() -> None:
 def test_a_failed_run_does_not_paste_its_result_into_the_session_row() -> None:
     """The completion summary is copied to sessions.last_step_summary, which the
     sessions list renders as a one-line headline for every row."""
-    from app.agent.runner import _completion_summary
+    from openbrowse.agent.runner import _completion_summary
 
     summary = _completion_summary(
         is_successful=False,
@@ -1390,7 +1390,7 @@ def test_completion_summary_schema_mismatch():
 def test_on_step_end_reports_stop_not_timeout_when_agent_was_stopped():
     import inspect
 
-    from app.agent import runner as runner_mod
+    from openbrowse.agent import runner as runner_mod
 
     src = inspect.getsource(runner_mod.run_agent_session)
     assert "Cancelled by stop request" in src
@@ -1399,7 +1399,7 @@ def test_on_step_end_reports_stop_not_timeout_when_agent_was_stopped():
 
 
 def test_the_no_solver_extension_offers_no_action_that_is_not_there() -> None:
-    from app.agent.runner import _CAPTCHA_EXTENSION, _CAPTCHA_UNAVAILABLE_EXTENSION
+    from openbrowse.agent.runner import _CAPTCHA_EXTENSION, _CAPTCHA_UNAVAILABLE_EXTENSION
 
     assert "solve_captcha" in _CAPTCHA_EXTENSION
     assert "solve_captcha" not in _CAPTCHA_UNAVAILABLE_EXTENSION
@@ -1407,8 +1407,8 @@ def test_the_no_solver_extension_offers_no_action_that_is_not_there() -> None:
 
 
 def test_solver_instructions_cover_interactive_puzzles_before_manual_input() -> None:
-    from app.agent.captcha.tools import _SOLVE_DESCRIPTION
-    from app.agent.runner import _CAPTCHA_EXTENSION
+    from openbrowse.agent.captcha.tools import _SOLVE_DESCRIPTION
+    from openbrowse.agent.runner import _CAPTCHA_EXTENSION
 
     for text in (_SOLVE_DESCRIPTION, _CAPTCHA_EXTENSION):
         assert "authorised" in text
@@ -1421,7 +1421,7 @@ def test_solver_instructions_cover_interactive_puzzles_before_manual_input() -> 
 def test_every_stale_captcha_claim_has_a_replacement_for_both_modes() -> None:
     """The three tables are zipped, and zip would silently drop the tail of any
     claim left without a replacement."""
-    from app.agent.runner import (
+    from openbrowse.agent.runner import (
         _SOLVING_REPLACEMENTS,
         _STALE_CAPTCHA_CLAIMS,
         _UNSOLVABLE_REPLACEMENTS,
@@ -1454,8 +1454,8 @@ _SALVAGE_SCHEMA = {
 
 
 def _salvage_parts(*, complete: bool):
-    from app.agent.output_store import OutputStore
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
     store = OutputStore(model)
@@ -1472,7 +1472,7 @@ def _agent_with_result(text: str | None):
 
 
 def test_budget_salvage_keeps_a_complete_store_as_a_success():
-    from app.agent.runner import _budget_salvage
+    from openbrowse.agent.runner import _budget_salvage
 
     store, model = _salvage_parts(complete=True)
     output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
@@ -1482,7 +1482,7 @@ def test_budget_salvage_keeps_a_complete_store_as_a_success():
 
 
 def test_budget_salvage_keeps_an_incomplete_store_but_calls_it_a_failure():
-    from app.agent.runner import _budget_salvage
+    from openbrowse.agent.runner import _budget_salvage
 
     store, model = _salvage_parts(complete=False)
     output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
@@ -1492,9 +1492,9 @@ def test_budget_salvage_keeps_an_incomplete_store_but_calls_it_a_failure():
 
 
 def test_budget_salvage_falls_back_to_result_json_when_the_store_is_empty():
-    from app.agent.output_store import OutputStore
-    from app.agent.runner import _budget_salvage
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.runner import _budget_salvage
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
     empty = OutputStore(model)
@@ -1507,9 +1507,9 @@ def test_budget_salvage_falls_back_to_result_json_when_the_store_is_empty():
 
 
 def test_budget_salvage_reports_nothing_when_there_is_nothing_to_keep():
-    from app.agent.output_store import OutputStore
-    from app.agent.runner import _budget_salvage
-    from app.agent.schema import json_schema_to_pydantic
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.runner import _budget_salvage
+    from openbrowse.agent.schema import json_schema_to_pydantic
 
     model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
     empty = OutputStore(model)
@@ -1519,7 +1519,7 @@ def test_budget_salvage_reports_nothing_when_there_is_nothing_to_keep():
 
 def test_budget_salvage_never_claims_success_without_a_schema():
     """No schema means no completeness gate, so nothing can vouch for the answer."""
-    from app.agent.runner import _budget_salvage
+    from openbrowse.agent.runner import _budget_salvage
 
     output, is_successful = _budget_salvage(_agent_with_result("some prose"), None, {}, None)
 
@@ -1531,8 +1531,8 @@ async def test_live_reasoning_stream_clips_where_the_persisted_row_clips(monkeyp
     """A live card longer than the row that replaces it would visibly shrink at
     handoff, so both clip at the same character.
     """
-    import app.agent.runner as runner_mod
-    from app.agent.runner import _REASONING_MAX_CHARS
+    import openbrowse.agent.runner as runner_mod
+    from openbrowse.agent.runner import _REASONING_MAX_CHARS
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-cap"
@@ -1599,8 +1599,8 @@ async def test_thinking_block_announces_itself_before_any_delta_arrives(monkeypa
     """Adaptive thinking can open a block then stay silent, so the feed has to
     say it is thinking on the block, not on the first token.
     """
-    import app.agent.runner as runner_mod
-    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+    import openbrowse.agent.runner as runner_mod
+    from openbrowse.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
 
     llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
     llm._activity_session = "sess-silent"
@@ -1642,7 +1642,7 @@ def test_the_live_reasoning_label_carries_no_emoji():
     """The live surface shows a shimmering label and a timer; an emoji standing
     in for a spinner is what that surface replaced.
     """
-    from app.agent.runner import _REASONING_LABEL
+    from openbrowse.agent.runner import _REASONING_LABEL
 
     assert _REASONING_LABEL == "Thinking"
     assert not any(ord(c) > 0x2000 for c in _REASONING_LABEL)
@@ -1652,7 +1652,7 @@ async def test_reasoning_row_records_how_long_the_thought_took(monkeypatch):
     """The live surface says "Thought for 4.2s"; reopening the session later
     should say the same thing, so the elapsed time rides on the stored row.
     """
-    import app.agent.runner as runner_mod
+    import openbrowse.agent.runner as runner_mod
 
     llm = _responses_llm(monkeypatch, "high")
     llm._activity_session = "sess-duration"
@@ -1713,8 +1713,8 @@ async def test_thinking_declares_itself_so_only_thought_shimmers(monkeypatch):
     """The dashboard spins a phase that acts and shimmers a phase that thinks, so
     every push has to say which it is.
     """
-    import app.agent.runner as runner_mod
-    from app.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
+    import openbrowse.agent.runner as runner_mod
+    from openbrowse.agent.runner import _REASONING_LABEL, _RepairingChatAnthropic
 
     llm = _RepairingChatAnthropic(model="claude-sonnet-5", api_key="k")
     llm._activity_session = "sess-kind"
@@ -1766,7 +1766,7 @@ def test_every_acting_phase_says_it_is_working():
     """
     import re
 
-    from app.agent import runner
+    from openbrowse.agent import runner
 
     src = Path(runner.__file__).read_text()
     for label in ("Running actions", "Preparing next step"):
@@ -1777,7 +1777,7 @@ def test_every_acting_phase_says_it_is_working():
 
 
 def test_failure_info_classifies_provider_rate_limit():
-    from app.agent.runner import _failure_info
+    from openbrowse.agent.runner import _failure_info
     from browser_use.llm.exceptions import ModelRateLimitError
 
     assert _failure_info(ModelRateLimitError(message="slow down", model="x")) == (
@@ -1788,7 +1788,7 @@ def test_failure_info_classifies_provider_rate_limit():
 
 
 def test_failure_info_classifies_provider_server_error():
-    from app.agent.runner import _failure_info
+    from openbrowse.agent.runner import _failure_info
     from browser_use.llm.exceptions import ModelProviderError
 
     assert _failure_info(
@@ -1797,7 +1797,7 @@ def test_failure_info_classifies_provider_server_error():
 
 
 def test_failure_info_classifies_provider_timeout():
-    from app.agent.runner import _failure_info
+    from openbrowse.agent.runner import _failure_info
     from browser_use.llm.exceptions import ModelProviderError
 
     assert _failure_info(
@@ -1806,7 +1806,7 @@ def test_failure_info_classifies_provider_timeout():
 
 
 def test_failure_info_classifies_budget_and_session_timeouts():
-    from app.agent.runner import BudgetExceededError, _failure_info
+    from openbrowse.agent.runner import BudgetExceededError, _failure_info
 
     assert _failure_info(BudgetExceededError("cap hit")) == (
         "budget_exceeded",
@@ -1821,13 +1821,13 @@ def test_failure_info_classifies_budget_and_session_timeouts():
 
 
 def test_failure_info_falls_back_to_agent_failure():
-    from app.agent.runner import _failure_info
+    from openbrowse.agent.runner import _failure_info
 
     assert _failure_info(RuntimeError("boom")) == ("agent_failure", None, "error")
 
 
 def test_failure_info_preserves_provider_connection_errors():
-    from app.agent.runner import _failure_info
+    from openbrowse.agent.runner import _failure_info
     from browser_use.llm.exceptions import ModelProviderError
     from openai import APIConnectionError
 
@@ -1846,8 +1846,8 @@ def test_failure_info_preserves_provider_connection_errors():
 
 
 async def test_llm_setup_failure_records_agent_failure(runner_db, monkeypatch):
-    from app.agent import runner
-    from app.db import crud
+    from openbrowse.agent import runner
+    from openbrowse.db import crud
 
     session = await crud.create_session(
         task="a task",

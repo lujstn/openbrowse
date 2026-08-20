@@ -4,17 +4,17 @@ from dataclasses import replace
 
 import pytest
 
-from app.config import settings
-from app.db.models import init_db
-from app.db import crud
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
+from openbrowse.db import crud
 
 
 @pytest.fixture(autouse=True)
 async def setup_db(tmp_path, monkeypatch):
     """Use a temp database for each test."""
     test_settings = replace(settings, db_path=tmp_path / "test.db")
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
     await init_db()
 
 

@@ -18,7 +18,6 @@ SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 PYPROJECT_VERSION_RE = re.compile(r'^version = "[^"]*"$', re.MULTILINE)
 CITATION_VERSION_RE = re.compile(r"^version: .*$", re.MULTILINE)
 CITATION_DATE_RE = re.compile(r"^date-released: .*$", re.MULTILINE)
-MAIN_PY_VERSION_RE = re.compile(r'version="[^"]*"')
 
 
 def parse_semver(text: str) -> tuple[int, int, int]:
@@ -38,7 +37,7 @@ def _replace_exactly_once(pattern: re.Pattern[str], replacement: str, text: str,
 
 
 def apply_version(root: Path, version: str, date_str: str) -> list[str]:
-    """Rewrite the three version-bearing files under root. Returns change summary lines."""
+    """Rewrite the version-bearing files under root. Returns change summary lines."""
     changes: list[str] = []
 
     pyproject_path = root / "pyproject.toml"
@@ -65,18 +64,8 @@ def apply_version(root: Path, version: str, date_str: str) -> list[str]:
     changes.append(f"CITATION.cff: version {old_cit_version_str} -> {version}")
     changes.append(f"CITATION.cff: date-released {old_cit_date_str} -> {date_str}")
 
-    main_py_path = root / "app" / "main.py"
-    main_py_text = main_py_path.read_text()
-    old_main_match = MAIN_PY_VERSION_RE.search(main_py_text)
-    old_main_version = old_main_match.group(0).split('"')[1] if old_main_match else "?"
-    new_main_py_text = _replace_exactly_once(
-        MAIN_PY_VERSION_RE, f'version="{version}"', main_py_text, "app/main.py"
-    )
-    changes.append(f"app/main.py: version {old_main_version} -> {version}")
-
     pyproject_path.write_text(new_pyproject_text)
     citation_path.write_text(new_citation_text)
-    main_py_path.write_text(new_main_py_text)
 
     return changes
 
@@ -96,7 +85,7 @@ def run_release(root: Path, version: str, notes: str | None) -> None:
         print("+ " + " ".join(cmd))
         subprocess.run(cmd, check=True, cwd=root, **kwargs)
 
-    run(["git", "add", "pyproject.toml", "CITATION.cff", "app/main.py"])
+    run(["git", "add", "pyproject.toml", "CITATION.cff"])
     run(["git", "commit", "-S", "-m", f"chore: {tag}"])
     run(["git", "tag", "-s", tag, "-m", f"OpenBrowse {tag}"])
     run(["git", "push", "origin", "HEAD"])
@@ -150,7 +139,6 @@ def main(argv: list[str] | None = None) -> int:
         for label, current in (
             ("pyproject.toml: version", current_version),
             ("CITATION.cff: version", current_version),
-            ("app/main.py: version", current_version),
         ):
             print(f"  {label} {current} -> {args.version}")
         return 0

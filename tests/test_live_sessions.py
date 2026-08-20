@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent import live
-from app.config import settings
-from app.db import crud
-from app.db.models import init_db
+from openbrowse.agent import live
+from openbrowse.config import settings
+from openbrowse.db import crud
+from openbrowse.db.models import init_db
 
 
 @pytest.fixture(autouse=True)
@@ -20,8 +20,8 @@ async def db(tmp_path, monkeypatch):
         data_dir=tmp_path / "data",
         profiles_dir=tmp_path / "data" / "profiles",
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
     yield test_settings
@@ -201,7 +201,7 @@ async def test_replay_preamble_drops_the_oldest_turns_over_the_cap():
 
 
 async def test_pool_submit_reclaims_the_slot_from_a_parked_session(monkeypatch):
-    from app.agent import pool as pool_mod
+    from openbrowse.agent import pool as pool_mod
 
     started: list[str] = []
     entries: dict[str, object] = {}

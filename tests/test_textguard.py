@@ -3,7 +3,7 @@
 Pure — stdlib only, no browser-use or pydantic — so it runs in any environment.
 """
 
-from app.agent.textguard import guard_key
+from openbrowse.agent.textguard import guard_key
 
 
 def test_same_text_same_key():

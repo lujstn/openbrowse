@@ -5,9 +5,9 @@ from dataclasses import replace
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import settings
-from app.db.models import init_db
-from app.main import app
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
+from openbrowse.main import app
 
 
 @pytest.fixture
@@ -22,14 +22,14 @@ async def client(tmp_path, monkeypatch):
         allow_insecure_no_auth=False,
     )
     for target in (
-        "app.config.settings",
-        "app.db.models.settings",
-        "app.auth.settings",
-        "app.dashboard.setup_routes.settings",
+        "openbrowse.config.settings",
+        "openbrowse.db.models.settings",
+        "openbrowse.auth.settings",
+        "openbrowse.dashboard.setup_routes.settings",
     ):
         monkeypatch.setattr(target, test_settings)
     monkeypatch.setattr(
-        "app.dashboard.setup_routes._env_path", tmp_path / ".env"
+        "openbrowse.dashboard.setup_routes._env_path", tmp_path / ".env"
     )
     await init_db()
     transport = ASGITransport(app=app)
@@ -82,10 +82,10 @@ async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
         api_key="configured",
     )
     for target in (
-        "app.config.settings",
-        "app.db.models.settings",
-        "app.auth.settings",
-        "app.dashboard.setup_routes.settings",
+        "openbrowse.config.settings",
+        "openbrowse.db.models.settings",
+        "openbrowse.auth.settings",
+        "openbrowse.dashboard.setup_routes.settings",
     ):
         monkeypatch.setattr(target, test_settings)
     await init_db()
@@ -107,7 +107,7 @@ async def test_codeview_shell_served_without_auth(client):
 def _fixed_info(**over):
     from dataclasses import replace as _replace
 
-    from app.hostinfo import HostInfo
+    from openbrowse.hostinfo import HostInfo
 
     base = HostInfo(
         cores=4, mem_total_kb=16 * 1024 * 1024, mem_available_kb=13 * 1024 * 1024,
@@ -120,7 +120,7 @@ def _fixed_info(**over):
 
 async def test_setup_capacity_section_bounded_by_hardware(client, monkeypatch):
     c, _ = client
-    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.get("/setup")
     assert resp.status_code == 200
     assert 'max="4"' in resp.text
@@ -130,7 +130,7 @@ async def test_setup_capacity_section_bounded_by_hardware(client, monkeypatch):
 
 async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
     c, tmp_path = client
-    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post(
         "/setup",
         data={"api_key": "k1", "max_concurrent_sessions": "99", "share": "all"},
@@ -142,7 +142,7 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
 
 
 async def test_setup_falls_back_to_plain_input_without_probe(client, monkeypatch):
-    from app.hostinfo import HostInfo
+    from openbrowse.hostinfo import HostInfo
 
     c, _ = client
     empty = HostInfo(
@@ -150,7 +150,7 @@ async def test_setup_falls_back_to_plain_input_without_probe(client, monkeypatch
         psi_available=False, is_raspberry_pi=False, systemd=False,
         cgroup_memory=False, root_on_sd=False, resource_limits_set=False,
     )
-    monkeypatch.setattr("app.hostinfo.probe", lambda: empty)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: empty)
     resp = await c.get("/setup")
     assert resp.status_code == 200
     assert 'name="max_concurrent_sessions" value="1"' in resp.text.replace("\n", " ")
@@ -165,7 +165,7 @@ async def test_setup_restart_requires_saved_env(client, monkeypatch):
     (tmp_path / ".env").write_text("API_KEY=k\n")
     called = []
     monkeypatch.setattr(
-        "app.dashboard.setup_routes.schedule_restart", lambda: called.append(1)
+        "openbrowse.dashboard.setup_routes.schedule_restart", lambda: called.append(1)
     )
     resp = await c.post("/setup/restart")
     assert resp.status_code == 200
@@ -174,7 +174,7 @@ async def test_setup_restart_requires_saved_env(client, monkeypatch):
 
 async def test_setup_light_browser_preselected_on_constrained_hardware(client, monkeypatch):
     c, _ = client
-    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.get("/setup")
     assert resp.status_code == 200
     assert 'name="chrome_light_flags" value="1" checked' in resp.text
@@ -187,7 +187,7 @@ async def test_setup_light_browser_unticked_on_big_hardware(client, monkeypatch)
         is_raspberry_pi=False, cores=16,
         mem_total_kb=64 * 1024 * 1024, mem_available_kb=48 * 1024 * 1024,
     )
-    monkeypatch.setattr("app.hostinfo.probe", lambda: big)
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: big)
     resp = await c.get("/setup")
     assert resp.status_code == 200
     assert 'name="chrome_light_flags"' in resp.text
@@ -196,7 +196,7 @@ async def test_setup_light_browser_unticked_on_big_hardware(client, monkeypatch)
 
 async def test_setup_save_honours_the_light_browser_choice(client, monkeypatch):
     c, tmp_path = client
-    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post(
         "/setup", data={"api_key": "k1", "chrome_light_flags": "1"}
     )
@@ -206,7 +206,7 @@ async def test_setup_save_honours_the_light_browser_choice(client, monkeypatch):
 
 async def test_setup_save_omits_the_light_browser_flag_when_opted_out(client, monkeypatch):
     c, tmp_path = client
-    monkeypatch.setattr("app.hostinfo.probe", lambda: _fixed_info())
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post("/setup", data={"api_key": "k1"})
     assert resp.status_code == 200
     assert "CHROME_LIGHT_FLAGS" not in (tmp_path / ".env").read_text()

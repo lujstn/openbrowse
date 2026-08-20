@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import settings
-from app.db.models import init_db
-from app.main import app
+from openbrowse.config import settings
+from openbrowse.db.models import init_db
+from openbrowse.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -23,11 +23,11 @@ async def setup(tmp_path, monkeypatch):
         allow_insecure_no_auth=True,
         cloud_max_cost_factor=1.0,
     )
-    monkeypatch.setattr("app.config.settings", test_settings)
-    monkeypatch.setattr("app.db.models.settings", test_settings)
-    monkeypatch.setattr("app.auth.settings", test_settings)
-    monkeypatch.setattr("app.api.sessions.settings", test_settings)
-    monkeypatch.setattr("app.profiles.storage.settings", test_settings)
+    monkeypatch.setattr("openbrowse.config.settings", test_settings)
+    monkeypatch.setattr("openbrowse.db.models.settings", test_settings)
+    monkeypatch.setattr("openbrowse.auth.settings", test_settings)
+    monkeypatch.setattr("openbrowse.api.sessions.settings", test_settings)
+    monkeypatch.setattr("openbrowse.profiles.storage.settings", test_settings)
     (tmp_path / "data" / "profiles").mkdir(parents=True)
     await init_db()
     return test_settings
@@ -40,7 +40,7 @@ async def client():
         yield c
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_create_session_with_task(mock_submit, client):
     resp = await client.post(
         "/v3/sessions",
@@ -52,7 +52,7 @@ async def test_create_session_with_task(mock_submit, client):
     assert data["model"] == "claude-sonnet-4.6"
     mock_submit.assert_called_once()
 
-    from app.db import crud
+    from openbrowse.db import crud
 
     messages, _ = await crud.list_messages(data["id"], limit=10)
     assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
@@ -63,8 +63,8 @@ async def test_create_session_with_task(mock_submit, client):
 async def test_start_returns_while_pool_is_full(client, monkeypatch):
     import asyncio
 
-    import app.agent.pool as pool_mod
-    from app.agent.pool import SessionPool
+    import openbrowse.agent.pool as pool_mod
+    from openbrowse.agent.pool import SessionPool
 
     release = asyncio.Event()
 
@@ -73,7 +73,7 @@ async def test_start_returns_while_pool_is_full(client, monkeypatch):
 
     monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
     busy_pool = SessionPool(max_concurrent=1)
-    monkeypatch.setattr("app.api.sessions.pool", busy_pool)
+    monkeypatch.setattr("openbrowse.api.sessions.pool", busy_pool)
 
     first = await client.post("/v3/sessions", json={"task": "one"})
     assert first.status_code == 200
@@ -261,7 +261,7 @@ async def test_get_nonexistent_session(client):
 
 
 async def test_session_response_surfaces_failure_fields(client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     create_resp = await client.post("/v3/sessions", json={})
     sid = create_resp.json()["id"]
@@ -288,7 +288,7 @@ async def test_list_messages_empty(client):
 
 async def test_incoming_budget_scaled_to_local_cost(client, setup, monkeypatch):
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     resp = await client.post("/v3/sessions", json={"maxCostUsd": 6})
     assert resp.status_code == 200
@@ -303,7 +303,7 @@ async def test_budget_untouched_at_default_factor(client):
 
 async def test_absent_budget_stays_absent(client, setup, monkeypatch):
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     resp = await client.post("/v3/sessions", json={})
     assert resp.status_code == 200
@@ -312,7 +312,7 @@ async def test_absent_budget_stays_absent(client, setup, monkeypatch):
 
 async def test_scaled_budget_rounds_to_cents(client, setup, monkeypatch):
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.6)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.6)
     )
     resp = await client.post("/v3/sessions", json={"maxCostUsd": 6})
     assert resp.status_code == 200
@@ -321,7 +321,7 @@ async def test_scaled_budget_rounds_to_cents(client, setup, monkeypatch):
 
 async def test_tiny_scaled_budget_keeps_a_cent_floor(client, setup, monkeypatch):
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     resp = await client.post("/v3/sessions", json={"maxCostUsd": 0.01})
     assert resp.status_code == 200
@@ -344,14 +344,14 @@ async def test_rejects_non_finite_budget(client):
         assert resp.status_code == 422, raw
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_rerun_keeps_settings_the_caller_omitted(
     mock_submit, client, setup, monkeypatch
 ):
-    from app.db import crud
+    from openbrowse.db import crud
 
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     created = await client.post(
         "/v3/sessions",
@@ -378,12 +378,12 @@ async def test_rerun_keeps_settings_the_caller_omitted(
     assert stored["system_prompt_extension"] == "be brief"
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_rerun_scales_a_budget_the_caller_resends(
     mock_submit, client, setup, monkeypatch
 ):
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
     again = await client.post(
@@ -395,19 +395,19 @@ async def test_rerun_scales_a_budget_the_caller_resends(
 
 @pytest.fixture(autouse=True)
 def _clear_live_sessions():
-    from app.agent import live
+    from openbrowse.agent import live
 
     live._live.clear()
     yield
     live._live.clear()
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_followup_continues_a_parked_session(mock_submit, client):
     from types import SimpleNamespace
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
@@ -428,12 +428,12 @@ async def test_followup_continues_a_parked_session(mock_submit, client):
     ]
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_followup_changing_the_model_starts_over(mock_submit, client):
     from types import SimpleNamespace
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     session = await crud.create_session(
         task="first task", model="claude-sonnet-5", keep_alive=True
@@ -465,14 +465,14 @@ async def test_followup_changing_the_model_starts_over(mock_submit, client):
     mock_submit.assert_called_once()
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_differently(
     mock_submit, client
 ):
     from types import SimpleNamespace
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     session = await crud.create_session(
         task="first task", model="claude-sonnet-4-6", keep_alive=True
@@ -496,11 +496,11 @@ async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_different
     mock_submit.assert_not_called()
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_followup_accepted_after_a_keepalive_session_was_released(
     mock_submit, client
 ):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="stopped")
@@ -513,9 +513,9 @@ async def test_followup_accepted_after_a_keepalive_session_was_released(
     mock_submit.assert_called_once()
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client):
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=False)
     await crud.update_session(session["id"], status="stopped")
@@ -528,13 +528,13 @@ async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client)
     mock_submit.assert_not_called()
 
 
-@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+@patch("openbrowse.api.sessions.pool.cancel", new_callable=AsyncMock)
 async def test_stop_task_strategy_cancels_the_run_and_leaves_the_session_usable(
     mock_cancel, client
 ):
     """Stopping the task ends the run and the browser with it, as it always has,
     and leaves the session addressable so a later call can give it new work."""
-    from app.db import crud
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="running")
@@ -546,12 +546,12 @@ async def test_stop_task_strategy_cancels_the_run_and_leaves_the_session_usable(
     assert (await crud.get_session(session["id"]))["status"] == "idle"
 
 
-@patch("app.api.sessions.pool.cancel", new_callable=AsyncMock)
+@patch("openbrowse.api.sessions.pool.cancel", new_callable=AsyncMock)
 async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
     from types import SimpleNamespace
 
-    from app.agent import live
-    from app.db import crud
+    from openbrowse.agent import live
+    from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
@@ -563,16 +563,16 @@ async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
     assert (await crud.get_session(session["id"]))["status"] == "stopped"
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
     mock_submit, client, setup, monkeypatch
 ):
     """maxCostUsd bounds the session, not the turn, so a conversation would
     strangle itself if every follow-up drew from the same fixed pot."""
-    from app.db import crud
+    from openbrowse.db import crud
 
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
     await crud.update_session(sid, total_cost_usd=2.40)
@@ -583,14 +583,14 @@ async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
     assert again.json()["maxCostUsd"] == "5.4"
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
     mock_submit, client, setup, monkeypatch
 ):
-    from app.db import crud
+    from openbrowse.db import crud
 
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
     await crud.update_session(sid, total_cost_usd=2.40)
@@ -602,15 +602,15 @@ async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
     assert again.json()["maxCostUsd"] == "2.0"
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_a_named_budget_does_not_become_the_session_allowance(
     mock_submit, client, setup, monkeypatch
 ):
     """A one-off ceiling for a single dispatch must not resize every later top-up."""
-    from app.db import crud
+    from openbrowse.db import crud
 
     monkeypatch.setattr(
-        "app.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
+        "openbrowse.api.sessions.settings", replace(setup, cloud_max_cost_factor=0.5)
     )
     sid = (await client.post("/v3/sessions", json={"maxCostUsd": 6})).json()["id"]
     await client.post(
@@ -623,11 +623,11 @@ async def test_a_named_budget_does_not_become_the_session_allowance(
     assert third.json()["maxCostUsd"] == "4.0"
 
 
-@patch("app.api.sessions.pool.submit_nowait")
+@patch("openbrowse.api.sessions.pool.submit_nowait")
 async def test_a_session_created_without_a_budget_stays_unbudgeted(
     mock_submit, client
 ):
-    from app.db import crud
+    from openbrowse.db import crud
 
     sid = (await client.post("/v3/sessions", json={})).json()["id"]
     await crud.update_session(sid, total_cost_usd=1.75)

@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-import app.agent.pool as pool_mod
-from app.agent.pool import SessionPool
+import openbrowse.agent.pool as pool_mod
+from openbrowse.agent.pool import SessionPool
 
 
 def _gated_runner(monkeypatch):

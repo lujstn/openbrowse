@@ -2,8 +2,8 @@
 
 from dataclasses import replace
 
-import app.hostinfo as hostinfo
-from app.hostinfo import HostInfo, checklist, hard_max, probe, recommend, recommendations, summary
+import openbrowse.hostinfo as hostinfo
+from openbrowse.hostinfo import HostInfo, checklist, hard_max, probe, recommend, recommendations, summary
 
 
 def _meminfo(total_kb: int, available_kb: int) -> str:

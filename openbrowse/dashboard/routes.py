@@ -1,0 +1,1252 @@
+"""Admin dashboard routes — HTMX + SSE for live updates, run form, and live browser feed."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, AsyncGenerator
+
+import html as _html
+
+import httpx
+import websockets
+from markupsafe import Markup
+from fastapi import APIRouter, Depends, Form, Request, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+from sse_starlette.sse import EventSourceResponse
+
+from openbrowse import __version__, hostinfo, system_metrics, updates
+from openbrowse.agent.activity import get_activity
+from openbrowse.agent import live
+from openbrowse.agent.pool import pool
+from openbrowse.agent.runner import (
+    _category_for,
+    model_reasoning,
+    resolve_default_effort,
+    validate_effort,
+)
+from openbrowse.api.sessions import _to_session_response
+from openbrowse.auth import dashboard_auth_ok, require_dashboard_auth
+from openbrowse.browser.factory import display_manager
+from openbrowse.config import settings
+from openbrowse.dashboard.lifecycle import schedule_restart
+from openbrowse.db import crud
+from openbrowse.profiles.storage import cookie_domains, read_state_file
+
+logger = logging.getLogger(__name__)
+
+_ENV_PATH = settings.env_path
+_STARTED_AT = time.time()
+_ENV_GROUPS: list[tuple[str, list[str]]] = [
+    ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
+    ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
+    ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
+    ("Runtime", ["MAX_CONCURRENT_SESSIONS", "CHROME_LIGHT_FLAGS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
+]
+_SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
+
+
+_BUSY_STATUSES = ("running", "created")
+
+
+def _is_secret_var(key: str) -> bool:
+    return any(m in key.upper() for m in _SECRET_MARKERS)
+
+
+def _read_env_file() -> dict[str, str]:
+    entries: dict[str, str] = {}
+    if _ENV_PATH.exists():
+        for line in _ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                entries[k.strip()] = v
+    return entries
+
+_template_dir = Path(__file__).parent / "templates"
+templates = Jinja2Templates(directory=str(_template_dir))
+
+
+def _safe_fromjson(value: str) -> dict:
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+templates.env.filters["fromjson"] = _safe_fromjson
+
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_CODE_RE = re.compile(r"`([^`\n]+)`")
+_MD_FENCE_RE = re.compile(r"```[^\n]*\n?(.*?)(?:```\n?|\Z)", re.DOTALL)
+_MD_LIST_ITEM_RE = re.compile(r"^[-*]\s+(.*)$")
+
+
+def _mdlite_inline(text: str) -> str:
+    t = _MD_BOLD_RE.sub(r"<strong>\1</strong>", text)
+    return _MD_CODE_RE.sub(r"<code>\1</code>", t)
+
+
+def _mdlite_prose(text: str) -> str:
+    """Bold/code resolve across a whole paragraph (so a marker pair can still
+    span a line break), list items resolve per line; lines are batched into
+    the two so a run of plain lines stays one bold-eligible unit.
+    """
+    parts: list[str] = []
+    para_lines: list[str] = []
+    list_items: list[str] = []
+
+    def flush_para() -> None:
+        if para_lines:
+            joined = _mdlite_inline("\n".join(para_lines))
+            parts.append(joined.replace("\n", "<br>"))
+            para_lines.clear()
+
+    def flush_list() -> None:
+        if list_items:
+            parts.append("<ul>" + "".join(list_items) + "</ul>")
+            list_items.clear()
+
+    for line in text.split("\n"):
+        item = _MD_LIST_ITEM_RE.match(line)
+        if item:
+            flush_para()
+            list_items.append(f"<li>{_mdlite_inline(item.group(1))}</li>")
+            continue
+        flush_list()
+        para_lines.append(line)
+    flush_para()
+    flush_list()
+    return "<br>".join(parts)
+
+
+def _mdlite(text: str) -> Markup:
+    """Markdown-lite for model reasoning text: escape everything, then resolve
+    bold, inline code, fenced code blocks and bullet lists. An unterminated
+    ``**`` or backtick has no matching closer to find, so it is left as
+    literal text rather than guessed at; an unterminated fence has nowhere to
+    stop, so it runs to the end of the text as code. Both cases are reachable
+    on real (not just streamed) text, since reasoning is truncated to 6000
+    characters before storage and that cut can land mid-marker.
+    """
+    t = _html.escape(str(text or ""))
+    out: list[str] = []
+    pos = 0
+    for m in _MD_FENCE_RE.finditer(t):
+        if m.start() > pos:
+            out.append(_mdlite_prose(t[pos : m.start()]))
+        out.append(f"<pre><code>{m.group(1)}</code></pre>")
+        pos = m.end()
+    out.append(_mdlite_prose(t[pos:]))
+    return Markup("".join(out))
+
+
+templates.env.filters["mdlite"] = _mdlite
+
+
+def _usd(value: Any) -> str:
+    """Costs render at whole cents, rounded UP — the amount actually charged."""
+    cents = math.ceil(float(value or 0) * 100 - 1e-9)
+    return f"{cents / 100:.2f}"
+
+
+templates.env.filters["usd"] = _usd
+
+
+def _usd4(value: Any) -> str:
+    """The breakdown is for reading a real charge, not for paying it, so it shows
+    the figure as billed rather than rounded up to the nearest cent.
+    """
+    return f"{float(value or 0):.4f}"
+
+
+templates.env.filters["usd4"] = _usd4
+
+_SELECTOR_RE = re.compile(
+    r"^[a-zA-Z][a-zA-Z0-9]*(\[[a-zA-Z_:][\w:-]*(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\])*$"
+)
+_SELECTOR_ATTR_RE = re.compile(r"\[([a-zA-Z_:][\w:-]*)(?:[~^$*|]?=(?:\"[^\"]*\"|'[^']*'|[^\]]*))?\]")
+_SELECTOR_ACTIONS = {"find_elements", "search_page"}
+_CODE_ACTIONS = {"evaluate", "find_elements", "search_page"}
+
+
+def _htmlify_selector(selector: str) -> str | None:
+    sel = selector.strip()
+    if not sel or not _SELECTOR_RE.match(sel):
+        return None
+    tag = re.match(r"^[a-zA-Z][a-zA-Z0-9]*", sel).group(0)
+    attrs = _SELECTOR_ATTR_RE.findall(sel)
+    return "<" + " ".join([tag] + attrs) + ">"
+
+
+def message_display(m: dict) -> dict:
+    """Category, label, cleaned summary and code-style flag for a feed row, derived
+    at render time so it works for old runs (whose stored data predates
+    categorisation) as well as new ones."""
+    t = m.get("type") or "info"
+    summary = m.get("summary") or ""
+    if t == "event":
+        data = _safe_fromjson(m.get("data") or "")
+        category = data.get("category", "memory")
+        label = data.get("action", "note")
+        # @nonobvious(forced-by): stored rows from old runs carry the previous
+        # vocabulary; normalising at render time keeps their history readable
+        # without a data migration.
+        if label == "northStar" or category == "goal":
+            category, label = "goal", "goal"
+            if summary.startswith("North Star: "):
+                summary = summary[len("North Star: ") :]
+        elif category == "memory":
+            summary = summary.replace(" saved → ", ": ", 1)
+        elif category == "judge":
+            label = "review"
+            if summary.startswith("Judge dissent: "):
+                summary = summary[len("Judge dissent: ") :]
+        out = {
+            "category": category,
+            "label": label,
+            "summary": summary,
+            "code": False,
+        }
+        if data.get("reasoning"):
+            out["reasoning"] = data["reasoning"]
+        return out
+    if t == "user_message":
+        return {"category": "user", "label": "user", "summary": summary, "code": False}
+    if t == "browser_action_error":
+        data = _safe_fromjson(m.get("data") or "")
+        out = {
+            "category": "error",
+            "label": "error",
+            "summary": summary,
+            "code": False,
+            "error_full": data.get("error_full") or "",
+        }
+        for k in ("see", "plan", "next", "thinking"):
+            if data.get(k):
+                out[k] = data[k]
+        return out
+    if t == "planning":
+        return {"category": "planning", "label": "planning", "summary": summary, "code": False}
+    if t == "completion":
+        return {"category": "completion", "label": "done", "summary": summary, "code": False}
+    data = _safe_fromjson(m.get("data") or "")
+    action = data.get("action")
+    category = data.get("category")
+    if not action:
+        first = summary.split(" ", 1)[0] if summary else ""
+        if first and ("_" in first or (first.isalpha() and first.islower())):
+            action = first
+    if not category:
+        category = _category_for(action or summary)
+
+    cleaned = summary
+    if action and cleaned.startswith(action + " "):
+        cleaned = cleaned[len(action) + 1 :]
+
+    code = bool(data.get("code")) or action in _CODE_ACTIONS
+
+    if action in _SELECTOR_ACTIONS:
+        htmlified = _htmlify_selector(cleaned)
+        if htmlified:
+            cleaned = htmlified
+    elif action == "click" and cleaned.strip().isdigit():
+        cleaned = "element #" + cleaned.strip()
+
+    cards = {
+        k: data.get(k)
+        for k in ("see", "plan", "next", "thinking", "model_reasoning", "result_snippet")
+        if data.get(k)
+    }
+    label = action or category
+    if action == "done":
+        category, label = "judge", "review"
+        reply = data.get("review_reply")
+        if reply == "resubmitted":
+            cleaned = "Resubmitted after changes"
+        elif reply == "replied":
+            cleaned = "Replied to reviewer"
+        else:
+            cleaned = "Submitted for review"
+    return {
+        "category": category,
+        "label": label,
+        "summary": cleaned,
+        "code": code,
+        **cards,
+    }
+
+
+templates.env.globals["message_display"] = message_display
+
+router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
+vnc_router = APIRouter(tags=["dashboard-vnc"])
+
+MODEL_OPTIONS: list[tuple[str, str]] = [
+    ("claude-sonnet-5", "Claude Sonnet 5"),
+    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+    ("gpt-5.6-sol", "GPT-5.6 Sol"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna"),
+    ("claude-opus-5", "Claude Opus 5"),
+    ("claude-fable-5", "Claude Fable 5"),
+    ("claude-mythos-5", "Claude Mythos 5 (Project Glasswing only)"),
+    ("claude-opus-4-8", "Claude Opus 4.8"),
+    ("claude-opus-4-8[1m]", "Claude Opus 4.8 (1M)"),
+    ("claude-opus-4-7", "Claude Opus 4.7"),
+    ("claude-opus-4-7[1m]", "Claude Opus 4.7 (1M)"),
+    ("claude-opus-4-6", "Claude Opus 4.6"),
+    ("claude-opus-4-6[1m]", "Claude Opus 4.6 (1M)"),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+    ("claude-sonnet-4-6[1m]", "Claude Sonnet 4.6 (1M)"),
+]
+
+# @nonobvious(mirrors): the benchmark-backed picks from the README's
+# recommended-models section; the dropdown preselects these.
+_RECOMMENDED_EFFORT: dict[str, str] = {
+    "claude-sonnet-5": "high",
+    "claude-opus-5": "none",
+    "gpt-5.6-terra": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-luna": "max",
+}
+
+
+def _reasoning_options_for(model_value: str) -> dict[str, Any]:
+    spec = model_reasoning(model_value)
+    recommended = _RECOMMENDED_EFFORT.get(model_value)
+
+    def decorate(value: str, label: str) -> str:
+        marks = []
+        if value == spec.default:
+            marks.append("Default")
+        if value == recommended:
+            marks.append("Recommended")
+        return f"{label} ({', '.join(marks)})" if marks else label
+
+    options: list[tuple[str, str]] = []
+    if spec.can_disable:
+        options.append(("none", decorate("none", "None")))
+    for level in spec.efforts:
+        label = "Extra High" if level == "xhigh" else level.capitalize()
+        options.append((level, decorate(level, label)))
+    return {"options": options, "default": recommended or spec.default}
+
+
+def reasoning_options_map() -> dict[str, dict[str, Any]]:
+    return {value: _reasoning_options_for(value) for value, _ in MODEL_OPTIONS}
+
+_LIVE_STATUSES = ("running",)
+
+_dispatched_tasks: set[asyncio.Task[None]] = set()
+
+
+def _novnc_port_for_display(display_num: int) -> int:
+    return settings.novnc_base_port + (display_num - settings.xvfb_base_display)
+
+
+async def _display_num_for_session(session_id: str) -> int | None:
+    session = await crud.get_session(session_id)
+    if not session:
+        return None
+    display_num = session.get("display_num")
+    if display_num is None:
+        return None
+    return int(display_num)
+
+
+async def _novnc_port_for_session(session_id: str) -> int | None:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return None
+    return _novnc_port_for_display(display_num)
+
+
+async def _ensure_vnc_for_session(session_id: str) -> bool:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return False
+    return await display_manager.ensure_vnc(display_num)
+
+
+def _live_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sessions with a browser worth watching — running, or parked between
+    follow-ups with their tabs still open.
+    """
+    watchable = [
+        s
+        for s in sessions
+        if (s.get("status") in _LIVE_STATUSES or live.is_live(s["id"]))
+        and s.get("live_url")
+    ]
+    return watchable[: settings.max_concurrent_sessions]
+
+
+def model_provider(model: str | None) -> str:
+    key = (model or "").strip()
+    if key.endswith("[1m]"):
+        key = key[:-4]
+    if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
+        return "OpenAI"
+    return "Anthropic"
+
+
+def _format_duration_secs(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = int(minutes // 60)
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+
+
+def _format_duration(created_at: str, updated_at: str, status: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        start = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if status in ("running", "created", "idle"):
+            end = datetime.now(timezone.utc)
+        else:
+            end = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        seconds = (end - start).total_seconds()
+        return _format_duration_secs(max(0, seconds))
+    except (ValueError, TypeError):
+        return "—"
+
+
+def _format_relative_time(iso_str: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+        seconds = diff.total_seconds()
+        if seconds < 60:
+            return "just now"
+        if seconds < 3600:
+            return f"{int(seconds // 60)} min ago"
+        if seconds < 86400:
+            return f"{int(seconds // 3600)}h ago"
+        return f"{int(seconds // 86400)}d ago"
+    except (ValueError, TypeError):
+        return iso_str
+
+
+@router.get("/", response_class=HTMLResponse)
+async def run_page(request: Request):
+    profiles, _ = await crud.list_profiles(page=1, page_size=50)
+    options_map = reasoning_options_map()
+    default_reasoning = options_map.get(settings.default_model, {})
+    return templates.TemplateResponse(
+        request,
+        "run.html",
+        context={
+            "profiles": profiles,
+            "models": MODEL_OPTIONS,
+            "reasoning_options": default_reasoning.get("options", []),
+            "reasoning_default": default_reasoning.get("default", "default"),
+            "reasoning_options_json": json.dumps(options_map),
+            "default_model": settings.default_model,
+            "active_count": pool.active_count,
+            "max_concurrent": settings.max_concurrent_sessions,
+        },
+    )
+
+
+@router.post("/run")
+async def run_task(
+    task: str = Form(...),
+    model: str = Form("claude-sonnet-5"),
+    profile_id: str = Form(""),
+    max_cost_usd: float = Form(0.50),
+    keep_alive: bool = Form(False),
+    reasoning_effort: str = Form("default"),
+    output_schema: str = Form(""),
+):
+    try:
+        effort = validate_effort(model, reasoning_effort)
+        if effort == "default":
+            effort = resolve_default_effort(model)
+    except ValueError as e:
+        return HTMLResponse(str(e), status_code=400)
+
+    parsed_schema: dict[str, Any] | None = None
+    schema_text = (output_schema or "").strip()
+    if schema_text:
+        try:
+            candidate = json.loads(schema_text)
+        except json.JSONDecodeError:
+            return HTMLResponse("Invalid output schema: not valid JSON", status_code=400)
+        if not isinstance(candidate, dict):
+            return HTMLResponse(
+                "Invalid output schema: must be a JSON object", status_code=400
+            )
+        parsed_schema = candidate
+
+    session = await crud.create_session(
+        task=task,
+        model=model,
+        profile_id=(profile_id or None),
+        output_schema=parsed_schema,
+        max_cost_usd=max_cost_usd,
+        default_max_cost_usd=max_cost_usd,
+        keep_alive=keep_alive,
+        reasoning_effort=effort,
+    )
+    await crud.create_message(
+        session_id=session["id"],
+        role="user",
+        msg_type="user_message",
+        summary=task[:2000],
+        count_step=False,
+    )
+    pool.submit_nowait(session["id"])
+    return RedirectResponse(f"/session/{session['id']}", status_code=303)
+
+
+@router.get("/sessions", response_class=HTMLResponse)
+async def sessions_page(request: Request):
+    sessions, total = await crud.list_sessions(page=1, page_size=50)
+    return templates.TemplateResponse(
+        request,
+        "sessions.html",
+        context={
+            "sessions": sessions,
+            "live_sessions": _live_sessions(sessions),
+            "total": total,
+            "format_duration": _format_duration,
+            "format_relative": _format_relative_time,
+            "model_provider": model_provider,
+        },
+    )
+
+
+@router.get("/session/{session_id}", response_class=HTMLResponse)
+async def session_detail(request: Request, session_id: str):
+    session = await crud.get_session(session_id)
+    if not session:
+        return HTMLResponse("Session not found", status_code=404)
+    messages, _ = await crud.list_messages(session_id, limit=500)
+    return templates.TemplateResponse(
+        request,
+        "session_detail.html",
+        context={
+            "session": session,
+            "messages": messages,
+            "browser_live": live.is_live(session_id),
+            "max_concurrent": settings.max_concurrent_sessions,
+            "output_types": ["planning", "result", "completion"],
+            "format_duration": _format_duration,
+            "format_relative": _format_relative_time,
+            "model_provider": model_provider,
+        },
+    )
+
+
+def _strip_thinking(data: str | None) -> str | None:
+    """A message's data blob without its raw thinking text, for the steps-only
+    export scope. Non-JSON data passes through untouched.
+    """
+    if not data:
+        return data
+    try:
+        parsed = json.loads(data)
+    except (json.JSONDecodeError, TypeError):
+        return data
+    if isinstance(parsed, dict):
+        parsed.pop("thinking", None)
+        parsed.pop("model_reasoning", None)
+        # @nonobvious(mirrors): pre-rename rows stored model_thinking.
+        parsed.pop("model_thinking", None)
+        return json.dumps(parsed)
+    return data
+
+
+@router.get("/system/metrics.json")
+async def system_metrics_json():
+    """Host pressure history for the dashboard monitor strip."""
+    return JSONResponse(
+        {
+            "now": system_metrics.sample(),
+            "history": system_metrics.history(),
+            "thresholds": {
+                "elevated": system_metrics.ELEVATED_LOAD_PER_CORE,
+                "saturated": system_metrics.SATURATED_LOAD_PER_CORE,
+            },
+        }
+    )
+
+
+def _attachment(session_id: str, scope: str) -> dict[str, str]:
+    suffix = "" if scope == "full" else f".{scope}"
+    return {
+        "Content-Disposition": f'attachment; filename="{session_id}{suffix}.json"'
+    }
+
+
+@router.get("/session/{session_id}/log")
+async def session_log(session_id: str, scope: str = "full", download: bool = False):
+    """Session export at three scopes: ``output`` is only the schema answer,
+    ``steps`` is the session and step log without raw thinking, ``full`` is
+    everything the feed shows. With ``download`` the response arrives as an
+    attachment named ``<session id>.json`` so exports land as files.
+    """
+    session = await crud.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    headers = _attachment(session_id, scope) if download else None
+    if scope == "output":
+        raw = session.get("output")
+        try:
+            return JSONResponse(json.loads(raw) if raw else None, headers=headers)
+        except (json.JSONDecodeError, TypeError):
+            return JSONResponse({"output": raw}, headers=headers)
+
+    messages, _ = await crud.list_messages(session_id, limit=1000)
+    export = _to_session_response(session).model_dump()
+    export["task"] = session.get("task")
+    export["messages"] = [
+        {
+            "createdAt": m.get("created_at"),
+            "type": m.get("type"),
+            "summary": m.get("summary"),
+            "data": _strip_thinking(m.get("data")) if scope == "steps" else m.get("data"),
+        }
+        for m in messages
+    ]
+    return JSONResponse(export, headers=headers)
+
+
+@router.post("/session/{session_id}/message")
+async def session_followup(session_id: str, task: str = Form(...)):
+    """Send the next thing the user says to a keep-alive session.
+
+    A session whose browser is still parked continues on the same agent, keeping
+    its history and its tabs. One whose browser has already been released starts
+    a fresh run instead, with the conversation so far replayed into it.
+    """
+    session = await crud.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    if not session.get("keep_alive"):
+        return JSONResponse({"error": "Session was not started as keep-alive"}, status_code=400)
+    if session.get("status") in _BUSY_STATUSES:
+        return JSONResponse({"error": "Session is still working"}, status_code=409)
+    text = (task or "").strip()
+    if not text:
+        return JSONResponse({"error": "Message is empty"}, status_code=400)
+    outcome = await pool.follow_up(session_id, text)
+    if outcome == live.BUSY:
+        return JSONResponse({"error": "Session is still working"}, status_code=409)
+    await crud.create_message(
+        session_id=session_id,
+        role="user",
+        msg_type="user_message",
+        summary=text[:2000],
+        count_step=False,
+    )
+    budget = crud.topped_up_budget(session)
+    topped_up = {} if budget is None else {"max_cost_usd": budget}
+    if outcome == live.DELIVERED:
+        await crud.update_session(
+            session_id, task=text, status="running", **topped_up
+        )
+        return JSONResponse({"ok": True, "continued": True})
+    await crud.update_session(session_id, task=text, status="created", **topped_up)
+    pool.submit_nowait(session_id)
+    return JSONResponse({"ok": True, "continued": False})
+
+
+@router.post("/session/{session_id}/stop")
+async def dashboard_stop_session(session_id: str):
+    session = await crud.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    # @nonobvious(forced-by): the release flag has to be set before the agent is
+    # asked to stop — a keep-alive worker that sees only a stopped agent parks
+    # with its browser open and waits for a follow-up that is never coming.
+    released = await live.request_release(
+        session_id, "Stopped from the dashboard", wait=False
+    )
+    if released and live.stop_agent(session_id):
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            data=json.dumps({"category": "system", "action": "stop"}),
+            summary="Stop requested from the dashboard",
+            count_step=False,
+        )
+        return JSONResponse({"ok": True, "action": "stop"})
+    await pool.cancel(session_id)
+    await crud.update_session(session_id, status="stopped")
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="event",
+        data=json.dumps({"category": "system", "action": "stop"}),
+        summary="Stop requested from the dashboard",
+        count_step=False,
+    )
+    return JSONResponse({"ok": True, "action": "stop"})
+
+
+_HOST_TUNE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "host_tune.sh"
+
+
+def _host_tune_available() -> bool:
+    """True when the sudoers grant from a previous host_tune.sh run lets the
+    dashboard re-run it without a password, turning suggestions into buttons.
+    """
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--dry-run"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _capacity_context() -> dict[str, Any]:
+    info = hostinfo.probe()
+    rows = hostinfo.checklist(info)
+    has_actions = any(r["state"] == "action" for r in rows)
+    return {
+        "hw_summary": hostinfo.summary(info),
+        "hw_complete": info.complete,
+        "hw_hard_max": hostinfo.hard_max(info) if info.complete else None,
+        "hw_recs": hostinfo.recommendations(info),
+        "hw_checklist": rows,
+        "hw_tune_button": has_actions and info.systemd and _host_tune_available(),
+        "hw_current": settings.max_concurrent_sessions,
+        "hw_light_recommended": hostinfo.light_flags_recommended(info),
+        "hw_light_on": settings.chrome_light_flags,
+    }
+
+
+def _update_context() -> dict[str, Any]:
+    method, commands = updates.detect_install_method()
+    return {
+        "version": __version__,
+        "update": updates.state,
+        "update_method": method,
+        "update_supported": bool(commands),
+    }
+
+
+@router.get("/api/update")
+async def update_status():
+    return JSONResponse(updates.state.as_dict())
+
+
+@router.post("/settings/update/check")
+async def settings_update_check():
+    await updates.check_once()
+    return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/update")
+async def settings_update_install(request: Request):
+    if pool.active_count > 0:
+        return RedirectResponse("/settings?update_busy=1", status_code=303)
+    ok, _ = await updates.install_update()
+    if not ok:
+        return RedirectResponse("/settings?update_failed=1", status_code=303)
+    _schedule_restart()
+    return templates.TemplateResponse(
+        request, "restarting.html", context={"saved_at": int(time.time())}
+    )
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    entries = _read_env_file()
+    grouped_keys: set[str] = set()
+
+    def row(k: str) -> dict[str, Any]:
+        return {
+            "key": k,
+            "value": entries.get(k, ""),
+            "present": k in entries,
+            "secret": _is_secret_var(k),
+        }
+
+    groups = []
+    for title, keys in _ENV_GROUPS:
+        grouped_keys.update(keys)
+        groups.append({"title": title, "rows": [row(k) for k in keys]})
+    other = [row(k) for k in entries if k not in grouped_keys]
+    if other:
+        groups.append({"title": "Other", "rows": other})
+    restart_failed = False
+    restarted = request.query_params.get("restarted")
+    if restarted:
+        try:
+            restart_failed = _STARTED_AT < float(restarted)
+        except ValueError:
+            pass
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        context={
+            "groups": groups,
+            "restart_failed": restart_failed,
+            "update_failed": bool(request.query_params.get("update_failed")),
+            "update_busy": bool(request.query_params.get("update_busy")),
+            **_capacity_context(),
+            **_update_context(),
+        },
+    )
+
+
+@router.post("/settings/host-tune")
+async def settings_host_tune(request: Request, share: str = Form("most")):
+    if share not in hostinfo.SHARE_PRESETS:
+        share = "most"
+    try:
+        result = subprocess.run(
+            [
+                "sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT),
+                "--share", share, "--service", hostinfo.UNIT_NAME,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = (result.stdout + result.stderr).strip()
+        ok = result.returncode == 0
+    except Exception as e:
+        output = str(e)
+        ok = False
+    entries = _read_env_file()
+    groups = [
+        {
+            "title": title,
+            "rows": [
+                {
+                    "key": k,
+                    "value": entries.get(k, ""),
+                    "present": k in entries,
+                    "secret": _is_secret_var(k),
+                }
+                for k in keys
+            ],
+        }
+        for title, keys in _ENV_GROUPS
+    ]
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        context={
+            "groups": groups,
+            "restart_failed": False,
+            "host_tune_output": output,
+            "host_tune_ok": ok,
+            **_capacity_context(),
+            **_update_context(),
+        },
+    )
+
+
+def _schedule_restart() -> None:
+    schedule_restart()
+
+
+def write_env_file(path: Path, entries: dict[str, str]) -> None:
+    """Atomic .env replacement — a crash mid-write must never truncate the only
+    copy of the host's secrets."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(f"{k}={v}" for k, v in entries.items()) + "\n")
+    os.replace(tmp, path)
+
+
+@router.post("/settings")
+async def settings_save(request: Request):
+    form = await request.form()
+    new: dict[str, str] = {}
+    for k, v in zip(form.getlist("key"), form.getlist("value")):
+        k, v = str(k).strip(), str(v).strip()
+        if k and v:
+            new[k] = v
+    if pool.active_count > 0 and not form.get("force"):
+        grouped_keys: set[str] = set()
+        groups = []
+        for title, keys in _ENV_GROUPS:
+            grouped_keys.update(keys)
+            groups.append(
+                {
+                    "title": title,
+                    "rows": [
+                        {
+                            "key": k,
+                            "value": new.get(k, ""),
+                            "present": k in new,
+                            "secret": _is_secret_var(k),
+                        }
+                        for k in keys
+                    ],
+                }
+            )
+        other = [
+            {"key": k, "value": v, "present": True, "secret": _is_secret_var(k)}
+            for k, v in new.items()
+            if k not in grouped_keys
+        ]
+        if other:
+            groups.append({"title": "Other", "rows": other})
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            context={
+                "groups": groups,
+                "restart_failed": False,
+                "active_sessions": pool.active_count,
+                **_update_context(),
+            },
+        )
+    write_env_file(_ENV_PATH, new)
+    _schedule_restart()
+    return templates.TemplateResponse(
+        request, "restarting.html", context={"saved_at": int(time.time())}
+    )
+
+
+@router.get("/profiles", response_class=HTMLResponse)
+async def profiles_page(request: Request):
+    profiles, total = await crud.list_profiles(page=1, page_size=50)
+    for p in profiles:
+        p["cookie_domains"] = cookie_domains(read_state_file(p.get("storage_state_path")))
+    return templates.TemplateResponse(
+        request,
+        "profiles.html",
+        context={
+            "profiles": profiles,
+            "total": total,
+            "format_relative": _format_relative_time,
+        },
+    )
+
+
+def _profile_state_file(storage_state_path: str):
+    return settings.data_dir / storage_state_path
+
+
+@router.post("/profiles/create")
+async def profiles_create(name: str = Form("")):
+    profile = await crud.create_profile(name=(name or None))
+    state_file = _profile_state_file(profile["storage_state_path"])
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"cookies": [], "origins": []}))
+    return RedirectResponse("/profiles", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/edit")
+async def profiles_edit(
+    profile_id: str,
+    name: str = Form(""),
+    new_id: str = Form(""),
+):
+    await crud.update_profile(profile_id, name=(name or None))
+    new_id = (new_id or "").strip()
+    if new_id and new_id != profile_id:
+        existing = await crud.get_profile(profile_id)
+        try:
+            renamed = await crud.rename_profile(profile_id, new_id)
+        except ValueError as exc:
+            return HTMLResponse(f"Cannot rename profile: {exc}", status_code=400)
+        if renamed and existing and existing.get("storage_state_path"):
+            old_file = _profile_state_file(existing["storage_state_path"])
+            new_file = _profile_state_file(renamed["storage_state_path"])
+            if old_file.exists():
+                new_file.parent.mkdir(parents=True, exist_ok=True)
+                old_file.replace(new_file)
+    return RedirectResponse("/profiles", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/delete")
+async def profiles_delete(profile_id: str):
+    profile = await crud.get_profile(profile_id)
+    await crud.delete_profile_cascade(profile_id)
+    if profile and profile.get("storage_state_path"):
+        _profile_state_file(profile["storage_state_path"]).unlink(missing_ok=True)
+    return RedirectResponse("/profiles", status_code=303)
+
+
+@router.get("/sse/sessions")
+async def sse_sessions(request: Request):
+    async def event_generator() -> AsyncGenerator[dict[str, str], None]:
+        while True:
+            if await request.is_disconnected():
+                break
+            sessions, total = await crud.list_sessions(page=1, page_size=50)
+            rows_html = templates.get_template("_session_rows.html").render(
+                sessions=sessions,
+                format_duration=_format_duration,
+                format_relative=_format_relative_time,
+                model_provider=model_provider,
+            )
+            yield {"event": "sessions", "data": rows_html}
+            await asyncio.sleep(2)
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/sse/live-grid")
+async def sse_live_grid(request: Request):
+    async def event_generator() -> AsyncGenerator[dict[str, str], None]:
+        while True:
+            if await request.is_disconnected():
+                break
+            sessions, _ = await crud.list_sessions(page=1, page_size=50)
+            payload = [
+                {
+                    "id": s["id"],
+                    "liveUrl": s.get("live_url"),
+                    "model": s.get("model"),
+                    "status": s.get("status"),
+                }
+                for s in _live_sessions(sessions)
+            ]
+            yield {"event": "live-grid", "data": json.dumps(payload)}
+            await asyncio.sleep(2)
+
+    return EventSourceResponse(event_generator())
+
+
+_MESSAGES_POLL_INTERVAL_S = 1.0
+_STATUS_POLL_INTERVAL_S = 0.25
+
+
+@router.get("/sse/session/{session_id}/messages")
+async def sse_session_messages(request: Request, session_id: str):
+    async def event_generator() -> AsyncGenerator[dict[str, str], None]:
+        # @nonobvious(forced-by): a dropped connection starts a fresh generator,
+        # so a cursor that began at None would replay the whole session into the
+        # feed. EventSource replays the last id it saw, which is where to resume.
+        last_id: str | None = request.headers.get("last-event-id") or None
+        last_status_payload: str | None = None
+        last_messages_at = 0.0
+        while True:
+            if await request.is_disconnected():
+                break
+            now = time.monotonic()
+            if now - last_messages_at >= _MESSAGES_POLL_INTERVAL_S:
+                last_messages_at = now
+                new_msgs, _ = await crud.list_messages(session_id, after=last_id, limit=500)
+                if new_msgs:
+                    last_id = new_msgs[-1]["id"]
+                    html = templates.get_template("_message_rows.html").render(
+                        messages=new_msgs,
+                        format_relative=_format_relative_time,
+                    )
+                    yield {"event": "messages", "id": last_id, "data": html}
+            session = await crud.get_session(session_id)
+            if session:
+                payload = json.dumps({
+                    "status": session["status"],
+                    "liveUrl": session.get("live_url"),
+                    "stepCount": session.get("step_count", 0),
+                    "totalInputTokens": session.get("total_input_tokens", 0),
+                    "totalOutputTokens": session.get("total_output_tokens", 0),
+                    "llmCostUsd": str(session.get("llm_cost_usd", 0)),
+                    "capsolverCostUsd": str(session.get("capsolver_cost_usd", 0)),
+                    "totalCostUsd": str(session.get("total_cost_usd", 0)),
+                    "provider": model_provider(session.get("model")),
+                    "output": session.get("output") or "",
+                    "activity": get_activity(session_id),
+                    "isTaskSuccessful": session.get("is_task_successful"),
+                    "browserLive": live.is_live(session_id),
+                })
+                if payload != last_status_payload:
+                    last_status_payload = payload
+                    yield {"event": "status", "data": payload}
+            await asyncio.sleep(_STATUS_POLL_INTERVAL_S)
+
+    return EventSourceResponse(event_generator())
+
+
+_CODEVIEW_HTML = """<!doctype html>
+<title>Code</title>
+<body style="margin:0;min-height:100vh;background:#0d1117;color:#e6edf3;font-family:ui-monospace,monospace">
+<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;background:#161b22;border-bottom:1px solid #30363d">
+  <span id="fn" style="color:#8b949e">script.py</span>
+  <span id="st" style="margin-left:auto;padding:3px 12px;border-radius:12px;background:#1f6feb;color:#fff;font-size:13px">Writing&hellip;</span>
+  <span id="sp" style="display:none;width:16px;height:16px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:s .8s linear infinite"></span>
+</div>
+<style>@keyframes s{to{transform:rotate(360deg)}} .caret{display:inline-block;width:8px;background:#58a6ff;animation:b 1s steps(1) infinite} @keyframes b{50%{opacity:0}}</style>
+<pre style="margin:0;padding:20px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word"><span id="c"></span><span id="caret" class="caret">&nbsp;</span></pre>
+<script>
+window.__setCode = function(name, code, status){
+  document.getElementById('fn').textContent = name;
+  document.getElementById('c').textContent = code;
+  var st = document.getElementById('st');
+  var running = status === 'Running';
+  st.textContent = running ? 'Running\\u2026' : 'Writing\\u2026';
+  st.style.background = running ? '#238636' : '#1f6feb';
+  document.getElementById('sp').style.display = running ? 'inline-block' : 'none';
+  document.getElementById('caret').style.display = running ? 'none' : 'inline-block';
+  window.scrollTo(0, document.body.scrollHeight);
+};
+</script>
+</body>"""
+
+
+@vnc_router.get("/codeview")
+async def codeview() -> HTMLResponse:
+    """The IDE shell shown in the code tab.
+
+    @nonobvious(deliberately-missing): no auth dependency — the shell is static
+    and contentless; script text only ever arrives via CDP pushes from the
+    platform, so there is nothing here to protect.
+    """
+    return HTMLResponse(_CODEVIEW_HTML)
+
+
+_VNC_VIEW_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>live view</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}div#screen{position:fixed;inset:0;cursor:default;pointer-events:none}div#screen canvas{display:block;cursor:default!important}.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#8a8a8a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}.overlay.hidden{display:none}.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:#60a5fa;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.ended-icon{opacity:.85}</style></head>
+<body>
+  <div id="screen"></div>
+  <div id="loading" class="overlay"><div class="spinner"></div><div>Connecting to live view…</div></div>
+  <div id="ended" class="overlay hidden">
+    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="5" width="18" height="12" rx="2"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/></svg>
+    <div>Stream ended</div>
+  </div>
+  <script type="module">
+    import RFB from './core/rfb.js';
+    function qv(n, d){ const m = location.href.match(new RegExp('[?&]' + n + '=([^&]*)')); return m ? decodeURIComponent(m[1]) : d; }
+    const path = qv('path', 'websockify');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = proto + '://' + location.host + '/' + path;
+    const loading = document.getElementById('loading');
+    const ended = document.getElementById('ended');
+    try {
+      const rfb = new RFB(document.getElementById('screen'), url);
+      rfb.viewOnly = true;
+      rfb.showDotCursor = false;
+      rfb.scaleViewport = true;
+      rfb.addEventListener('connect', () => loading.classList.add('hidden'));
+      rfb.addEventListener('disconnect', () => { loading.classList.add('hidden'); ended.classList.remove('hidden'); });
+    } catch (e) {
+      loading.classList.add('hidden');
+      ended.classList.remove('hidden');
+    }
+  </script>
+</body></html>"""
+
+
+@vnc_router.get("/vnc/{session_id}/view")
+async def vnc_view(request: Request, session_id: str):
+    if not dashboard_auth_ok(request.headers.get("authorization"), request):
+        return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
+    await _ensure_vnc_for_session(session_id)
+    return HTMLResponse(_VNC_VIEW_HTML)
+
+
+@vnc_router.get("/vnc/{session_id}/{asset:path}")
+async def vnc_asset(request: Request, session_id: str, asset: str):
+    if not dashboard_auth_ok(request.headers.get("authorization"), request):
+        return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
+    port = await _novnc_port_for_session(session_id)
+    if port is None:
+        return Response(status_code=404)
+    if not await _ensure_vnc_for_session(session_id):
+        return Response(status_code=502)
+    target = asset or "vnc.html"
+    async with httpx.AsyncClient() as client:
+        try:
+            upstream = await client.get(f"http://127.0.0.1:{port}/{target}", timeout=10.0)
+        except httpx.HTTPError:
+            return Response(status_code=502)
+    headers = {}
+    content_type = upstream.headers.get("content-type")
+    if content_type:
+        headers["content-type"] = content_type
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=headers,
+    )
+
+
+async def _bridge(client_ws: WebSocket, upstream: Any) -> None:
+    async def client_to_upstream() -> None:
+        try:
+            while True:
+                msg = await client_ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                if msg.get("bytes") is not None:
+                    await upstream.send(msg["bytes"])
+                elif msg.get("text") is not None:
+                    await upstream.send(msg["text"])
+        except Exception:
+            pass
+        finally:
+            try:
+                await upstream.close()
+            except Exception:
+                pass
+
+    async def upstream_to_client() -> None:
+        try:
+            async for message in upstream:
+                if isinstance(message, (bytes, bytearray)):
+                    await client_ws.send_bytes(bytes(message))
+                else:
+                    await client_ws.send_text(message)
+        except Exception:
+            pass
+        finally:
+            try:
+                await client_ws.close()
+            except Exception:
+                pass
+
+    await asyncio.gather(client_to_upstream(), upstream_to_client(), return_exceptions=True)
+
+
+@vnc_router.websocket("/vnc/{session_id}/{ws_path:path}")
+async def vnc_ws(websocket: WebSocket, session_id: str, ws_path: str):
+    if not dashboard_auth_ok(websocket.headers.get("authorization"), websocket):
+        await websocket.close(code=1008)
+        return
+    port = await _novnc_port_for_session(session_id)
+    if port is None:
+        await websocket.close(code=1011)
+        return
+    if not await _ensure_vnc_for_session(session_id):
+        await websocket.close(code=1011)
+        return
+    requested = websocket.headers.get("sec-websocket-protocol", "")
+    protocols = [p.strip() for p in requested.split(",") if p.strip()]
+    subprotocol = "binary" if "binary" in protocols else None
+    try:
+        async with websockets.connect(
+            f"ws://127.0.0.1:{port}/websockify",
+            subprotocols=["binary"],
+            max_size=None,
+            open_timeout=10,
+        ) as upstream:
+            await websocket.accept(subprotocol=subprotocol)
+            await _bridge(websocket, upstream)
+    except Exception:
+        logger.warning("VNC bridge error for session %s", session_id, exc_info=True)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass

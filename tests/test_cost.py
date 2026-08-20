@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from app.agent import cost
+from openbrowse.agent import cost
 
 
 def _usage(

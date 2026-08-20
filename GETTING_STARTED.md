@@ -28,15 +28,29 @@ sudo apt install -y xvfb x11vnc novnc websockify \
   libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libgtk-3-0
 ```
 
-Then install [uv](https://docs.astral.sh/uv/) if you do not have it, clone, and
-start the server:
+Then install [uv](https://docs.astral.sh/uv/) if you do not have it, and install
+OpenBrowse itself:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+uv tool install openbrowse
+openbrowse start
+```
+
+`openbrowse start` registers OpenBrowse as a systemd service, so it is running
+now and starts again on every boot. `openbrowse stop --disable` undoes that, and
+`openbrowse status` and `openbrowse restart` manage it in between. On a machine
+without systemd it runs in the foreground instead, which is also what
+`openbrowse serve` does anywhere.
+
+To work on OpenBrowse rather than only run it, clone the repository and run it
+from the checkout:
+
+```bash
 git clone git@github.com:lujstn/openbrowse.git
 cd openbrowse && uv sync
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8420
+uv run openbrowse serve
 ```
 
 Open `http://<your-host>:8420`. A fresh install serves a one-time setup screen at
@@ -47,7 +61,7 @@ picked up.
 
 Your first session downloads the stealth Chromium build, so expect it to take
 several minutes longer than every run after it. To get that out of the way before
-you start:
+you start, from a checkout:
 
 ```bash
 uv run python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())"
@@ -61,15 +75,34 @@ which a Raspberry Pi ships with compiled out. One idempotent command does both,
 plus the sudoers entry the dashboard's tuning button needs:
 
 ```bash
-sudo bash scripts/host_tune.sh --share most --dry-run   # show the plan
-sudo bash scripts/host_tune.sh --share most             # apply it
+openbrowse tune --share most --dry-run   # show the plan
+openbrowse tune --share most             # apply it
 ```
+
+The script needs root, so `openbrowse tune` asks for your password. Run it again
+after upgrading: the sudoers grant it writes names the script by its full path,
+which moves when the package does, and the dashboard's tuning buttons depend on
+that grant.
+
+## Updating
+
+The server checks PyPI for new releases in the background and shows an **Update
+available** badge in the dashboard when one exists. Installing it is one click on
+the Settings page, and the server restarts itself afterwards. From a shell:
+
+```bash
+openbrowse check-update
+openbrowse update
+```
+
+Set `UPDATE_CHECK_HOURS` in your `.env` to change how often it looks, or `0` to
+switch the background check off.
 
 ## Then read
 
 | Topic | Page |
 | --- | --- |
-| Running it under systemd, sizing it for your machine, and the full environment variable list | <https://openbrowse.co/docs/installation> |
+| Sizing it for your machine, and the full environment variable list | <https://openbrowse.co/docs/installation> |
 | Writing tasks, which changes results more than model choice does | <https://openbrowse.co/docs/tasks> |
 | Structured output and the validated answer store | <https://openbrowse.co/docs/structured-output> |
 | What a run costs, capping it, and how the cap behaves on a conversation | <https://openbrowse.co/docs/cost> |
