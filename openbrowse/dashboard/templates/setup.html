@@ -1,111 +1,1402 @@
-{% extends "base.html" %}
-{% block title %}Set up OpenBrowse{% endblock %}
-{# /setup is the one page served before any credential exists, and /api/update
-   answers 401 with WWW-Authenticate, which pops a browser password box. #}
-{% block update_badge %}{% endblock %}
-{% block content %}
-{% if done %}
-  <h1>OpenBrowse is configured</h1>
-  <p>Your <code>.env</code> has been written. Copy your API key now; it is shown only once:</p>
-  <p><code style="font-size:1.1em; user-select: all;">{{ api_key }}</code></p>
-  {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
-  {% if hw_checklist %}
-  <h2>Host tuning</h2>
-  <ul>
-    {% for row in hw_checklist %}
-    <li>
-      <strong>{{ row.label }}</strong>
-      {% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}(recommended){% endif %}
-      &mdash; {{ row.detail }}
-    </li>
-    {% endfor %}
-  </ul>
-  {% if actions %}
-  <p>Apply the recommended items with one command on this machine:</p>
-  <pre>sudo bash scripts/host_tune.sh --share {{ share }}</pre>
-  <p>It is safe to re-run, and it also enables the dashboard to apply future tuning changes at the click of a button.</p>
-  {% endif %}
-  {% endif %}
-  {% if hw_systemd %}
-  <p>Restart to apply the configuration:</p>
-  <form method="post" action="/setup/restart">
-    <button type="submit">Restart now</button>
-  </form>
-  {% else %}
-  <p>Restart the server to apply the configuration:</p>
-  <pre>sudo systemctl restart openbrowse.service
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% if done %}OpenBrowse is configured{% else %}Set up OpenBrowse{% endif %}</title>
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="/static/openbrowse.ico" />
+    <link rel="stylesheet" href="/static/openbrowse.css" />
+    <style>
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url("/static/jetbrains-mono-500-latin.woff2") format("woff2");
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--ob-bg);
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: var(--ob-bg);
+        color: var(--ob-text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 20px;
+      }
+      a {
+        color: var(--ob-accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 0.9em;
+        background: var(--ob-surface-raised);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+      pre {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 12px;
+        line-height: 1.7;
+        background: var(--ob-bg);
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-sm);
+        padding: 12px 14px;
+        overflow-x: auto;
+        margin: 10px 0;
+      }
+
+      /* ---------- intro ---------- */
+      .intro {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        width: 100%;
+      }
+      .intro-anim {
+        width: min(640px, 92vw);
+        height: clamp(120px, 24vw, 200px);
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .intro-anim > div,
+      .intro-anim svg {
+        width: min(640px, 92vw);
+        aspect-ratio: 16 / 9;
+        flex: none;
+      }
+      .intro-fallback {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        color: #fff;
+      }
+      .intro-fallback span {
+        font-family: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+        font-weight: 500;
+        font-size: 34px;
+        letter-spacing: -0.02em;
+      }
+      .intro-below {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 26px;
+        opacity: 0;
+        transform: translateY(10px);
+        transition:
+          opacity 0.5s var(--ob-ease-out),
+          transform 0.5s var(--ob-ease-out);
+      }
+      .intro-below.is-in {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .intro-tagline {
+        color: var(--ob-text-dim);
+        font-size: 15px;
+        max-width: 440px;
+        line-height: 1.6;
+      }
+      .intro-steps {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .intro-steps li {
+        list-style: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: var(--ob-surface);
+        border: 1px solid var(--ob-border);
+        border-radius: 999px;
+        padding: 6px 14px 6px 8px;
+        font-size: 12.5px;
+        color: var(--ob-text-muted);
+      }
+      .intro-steps li i {
+        font-style: normal;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--ob-surface-raised);
+        border: 1px solid var(--ob-border-strong);
+        font-size: 10px;
+        color: var(--ob-text-dim);
+      }
+
+      /* ---------- buttons ---------- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: none;
+        border-radius: var(--ob-radius-md);
+        font: inherit;
+        font-weight: 600;
+        font-size: 14px;
+        padding: 10px 24px;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          transform 0.12s var(--ob-ease-out),
+          opacity 0.15s ease;
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn-primary {
+        background: var(--ob-accent);
+        color: #0a0a0a;
+      }
+      .btn-primary:hover {
+        background: #7db8fb;
+      }
+      .btn-primary:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .btn-primary:disabled:hover {
+        background: var(--ob-accent);
+      }
+      .btn-ghost {
+        background: transparent;
+        color: var(--ob-text-dim);
+        border: 1px solid var(--ob-border-strong);
+      }
+      .btn-ghost:hover {
+        color: var(--ob-text);
+        border-color: #444;
+      }
+      .btn-small {
+        font-size: 12px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: var(--ob-radius-sm);
+      }
+
+      /* ---------- wizard shell ---------- */
+      .shell {
+        width: min(580px, 100%);
+        display: none;
+        flex-direction: column;
+        gap: 22px;
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      .shell.is-in {
+        display: flex;
+        animation: shell-in 0.45s var(--ob-ease-out) forwards;
+      }
+      @keyframes shell-in {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .shell-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #fff;
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: -0.02em;
+      }
+      .stepper {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin-left: auto;
+      }
+      .stepper .step-dot {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 11.5px;
+        color: var(--ob-text-faint);
+        transition: color 0.25s ease;
+      }
+      .stepper .step-dot i {
+        font-style: normal;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 1px solid var(--ob-border-strong);
+        background: var(--ob-surface);
+        font-size: 10.5px;
+        transition:
+          background 0.25s ease,
+          border-color 0.25s ease,
+          color 0.25s ease;
+      }
+      .stepper .step-line {
+        width: 18px;
+        height: 1px;
+        background: var(--ob-border-strong);
+        margin: 0 6px;
+        transition: background 0.25s ease;
+      }
+      .stepper .step-dot.is-current {
+        color: var(--ob-text);
+      }
+      .stepper .step-dot.is-current i {
+        border-color: var(--ob-accent);
+        color: var(--ob-accent);
+      }
+      .stepper .step-dot.is-done i {
+        background: var(--ob-accent);
+        border-color: var(--ob-accent);
+        color: #0a0a0a;
+      }
+      .stepper .step-line.is-done {
+        background: var(--ob-accent);
+      }
+      .stepper .step-label {
+        display: none;
+      }
+      @media (min-width: 560px) {
+        .stepper .step-dot.is-current .step-label {
+          display: inline;
+        }
+      }
+
+      .card {
+        background: var(--ob-surface);
+        border: 1px solid var(--ob-border);
+        border-radius: 12px;
+        padding: 26px 26px 24px;
+      }
+      .step {
+        display: none;
+      }
+      .step.is-active {
+        display: block;
+        animation: step-in 0.32s var(--ob-ease-out);
+      }
+      @keyframes step-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .step h1 {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .step .step-sub {
+        color: var(--ob-text-dim);
+        font-size: 13px;
+        line-height: 1.6;
+        margin-bottom: 20px;
+      }
+      .step-nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 22px;
+      }
+      .step-nav .spacer {
+        flex: 1;
+      }
+
+      /* ---------- fields ---------- */
+      .field {
+        display: block;
+        margin-bottom: 14px;
+      }
+      .field-label {
+        display: block;
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--ob-text-muted);
+        margin-bottom: 6px;
+      }
+      .field input[type="text"],
+      .field input[type="password"] {
+        width: 100%;
+        background: var(--ob-bg);
+        border: 1px solid #2a2a2a;
+        border-radius: var(--ob-radius-sm);
+        color: var(--ob-text);
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 13px;
+        padding: 10px 12px;
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      .field input:focus {
+        outline: none;
+        border-color: var(--ob-accent);
+        box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+      }
+      .field-hint {
+        display: block;
+        font-size: 11.5px;
+        color: var(--ob-text-faint);
+        margin-top: 5px;
+        line-height: 1.5;
+      }
+      .field-hint.is-ok {
+        color: var(--ob-success);
+      }
+      .field-hint.is-bad {
+        color: var(--ob-danger);
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+      .pw-row {
+        position: relative;
+      }
+      .pw-reveal {
+        position: absolute;
+        right: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent;
+        border: none;
+        color: var(--ob-text-faint);
+        cursor: pointer;
+        padding: 5px;
+        display: inline-flex;
+        border-radius: 4px;
+      }
+      .pw-reveal:hover {
+        color: var(--ob-text);
+      }
+
+      /* ---------- provider cards ---------- */
+      .provider {
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-md);
+        background: var(--ob-bg);
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        transition: border-color 0.2s ease;
+      }
+      .provider.is-valid {
+        border-color: rgba(52, 211, 153, 0.5);
+      }
+      .provider.is-invalid {
+        border-color: rgba(248, 113, 113, 0.55);
+        animation: provider-shake 0.3s ease;
+      }
+      @keyframes provider-shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-4px); }
+        75% { transform: translateX(4px); }
+      }
+      .provider-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 9px;
+      }
+      .provider-name {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .provider-tag {
+        font-size: 10.5px;
+        font-weight: 500;
+        color: var(--ob-text-faint);
+        border: 1px solid var(--ob-border-strong);
+        border-radius: 999px;
+        padding: 1px 8px;
+      }
+      .provider-tag.is-rec {
+        color: var(--ob-accent);
+        border-color: rgba(96, 165, 250, 0.4);
+      }
+      .provider-status {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        color: var(--ob-text-faint);
+        min-height: 16px;
+      }
+      .provider-status .ok {
+        color: var(--ob-success);
+      }
+      .provider-status .bad {
+        color: var(--ob-danger);
+      }
+      .provider input {
+        width: 100%;
+        background: var(--ob-surface);
+        border: 1px solid #2a2a2a;
+        border-radius: var(--ob-radius-sm);
+        color: var(--ob-text);
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 12.5px;
+        padding: 9px 11px;
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      .provider input:focus {
+        outline: none;
+        border-color: var(--ob-accent);
+        box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+      }
+      .provider-msg {
+        font-size: 11.5px;
+        margin-top: 7px;
+        line-height: 1.5;
+        color: var(--ob-text-faint);
+      }
+      .provider-msg.is-bad {
+        color: var(--ob-danger);
+      }
+      .provider-msg.is-warn {
+        color: #fbbf24;
+      }
+      .provider-msg .keep-anyway {
+        margin-left: 6px;
+      }
+      .providers-gate {
+        font-size: 11.5px;
+        color: var(--ob-text-faint);
+        margin-top: 4px;
+      }
+
+      /* ---------- capacity ---------- */
+      .share-cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      @media (max-width: 520px) {
+        .share-cards {
+          grid-template-columns: 1fr;
+        }
+      }
+      .share-card {
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-md);
+        background: var(--ob-bg);
+        padding: 12px 13px;
+        cursor: pointer;
+        transition:
+          border-color 0.15s ease,
+          background 0.15s ease;
+      }
+      .share-card:hover {
+        border-color: var(--ob-border-strong);
+      }
+      .share-card.is-selected {
+        border-color: var(--ob-accent);
+        background: rgba(96, 165, 250, 0.06);
+      }
+      .share-card input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .share-card .share-title {
+        font-size: 12.5px;
+        font-weight: 600;
+        margin-bottom: 3px;
+      }
+      .share-card .share-desc {
+        font-size: 11px;
+        color: var(--ob-text-faint);
+        line-height: 1.45;
+      }
+      .detected {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        color: var(--ob-text-muted);
+        background: var(--ob-bg);
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-md);
+        padding: 10px 13px;
+        margin-bottom: 16px;
+      }
+      .detected strong {
+        color: var(--ob-text);
+        font-weight: 600;
+      }
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin: 6px 0 4px;
+      }
+      .slider-row input[type="range"] {
+        flex: 1;
+        accent-color: var(--ob-accent);
+      }
+      .slider-row output {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--ob-text);
+        min-width: 28px;
+        text-align: center;
+        background: var(--ob-surface-raised);
+        border: 1px solid var(--ob-border-strong);
+        border-radius: var(--ob-radius-sm);
+        padding: 4px 8px;
+      }
+      .toggle-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-md);
+        background: var(--ob-bg);
+        padding: 12px 13px;
+        margin-top: 14px;
+        cursor: pointer;
+      }
+      .toggle-row input {
+        accent-color: var(--ob-accent);
+        margin-top: 2px;
+      }
+      .toggle-row .toggle-title {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .toggle-row .toggle-desc {
+        font-size: 11px;
+        color: var(--ob-text-faint);
+        line-height: 1.5;
+        margin-top: 3px;
+      }
+
+      /* ---------- api key step ---------- */
+      .keybox {
+        position: relative;
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: var(--ob-bg);
+        border: 1px solid #2a2a2a;
+        border-radius: var(--ob-radius-md);
+        padding: 16px 46px 16px 16px;
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 13.5px;
+        color: var(--ob-text);
+        word-break: break-all;
+        line-height: 1.6;
+        cursor: pointer;
+        transition:
+          border-color 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+      .keybox:hover {
+        border-color: var(--ob-border-strong);
+      }
+      .keybox.is-copied {
+        border-color: rgba(52, 211, 153, 0.5);
+        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
+      }
+      .keybox .copy-icon {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        color: var(--ob-text-faint);
+        transition: color 0.2s ease;
+      }
+      .keybox:hover .copy-icon {
+        color: var(--ob-text);
+      }
+      .keybox.is-copied .copy-icon {
+        color: var(--ob-success);
+      }
+      .copied-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        color: var(--ob-success);
+        margin-top: 8px;
+        opacity: 0;
+        transform: translateY(2px);
+        transition:
+          opacity 0.25s var(--ob-ease-out),
+          transform 0.25s var(--ob-ease-out);
+      }
+      .copied-pill.is-in {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .confirm-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        margin-top: 18px;
+        font-size: 12.5px;
+        color: var(--ob-text-muted);
+        line-height: 1.5;
+        cursor: pointer;
+      }
+      .confirm-row input {
+        accent-color: var(--ob-accent);
+        margin-top: 2px;
+      }
+      .confirm-row input:disabled {
+        opacity: 0.4;
+      }
+
+      /* ---------- done ---------- */
+      .done-wrap {
+        width: min(580px, 100%);
+      }
+      .done-wrap h1 {
+        font-size: 19px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .done-wrap h1 .done-tick {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: rgba(52, 211, 153, 0.15);
+        color: var(--ob-success);
+        font-size: 13px;
+      }
+      .done-wrap h2 {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ob-text-dim);
+        margin: 22px 0 10px;
+      }
+      .done-wrap p {
+        font-size: 13px;
+        color: var(--ob-text-muted);
+        line-height: 1.65;
+        margin: 8px 0;
+      }
+      .checklist {
+        list-style: none;
+      }
+      .checklist li {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-size: 12.5px;
+        color: var(--ob-text-muted);
+        line-height: 1.55;
+        padding: 7px 0;
+        border-bottom: 1px solid #161616;
+      }
+      .checklist li:last-child {
+        border-bottom: none;
+      }
+      .checklist .state {
+        flex: none;
+        margin-top: 1px;
+        width: 16px;
+        text-align: center;
+      }
+      .checklist .state.ok {
+        color: var(--ob-success);
+      }
+      .checklist .state.action {
+        color: #fbbf24;
+      }
+      .checklist strong {
+        color: var(--ob-text);
+        font-weight: 600;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .shell.is-in,
+        .step.is-active,
+        .provider.is-invalid {
+          animation: none;
+        }
+        .shell.is-in {
+          opacity: 1;
+          transform: none;
+        }
+        .intro-below {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    {% if done %}
+    <div class="done-wrap">
+      <div class="card">
+        <h1><span class="done-tick">&#10003;</span> OpenBrowse is configured</h1>
+        <p>Your <code>.env</code> has been written with your API key, provider keys and capacity settings.</p>
+        {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
+        {% if hw_checklist %}
+        <h2>Host tuning</h2>
+        <ul class="checklist">
+          {% for row in hw_checklist %}
+          <li>
+            <span class="state {{ row.state }}">{% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9675;{% endif %}</span>
+            <span><strong>{{ row.label }}</strong>{% if row.state == "action" %} (recommended){% endif %} &mdash; {{ row.detail }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if actions %}
+        <p>Apply the recommended items with one command on this machine:</p>
+        <pre>sudo bash scripts/host_tune.sh --share {{ share }}</pre>
+        <p>It is safe to re-run, and it also enables the dashboard to apply future tuning changes at the click of a button.</p>
+        {% endif %}
+        {% endif %}
+        {% if hw_systemd %}
+        <p>Restart to apply the configuration, then sign in as <code>admin</code> with your dashboard password.</p>
+        <form method="post" action="/setup/restart" style="margin-top: 14px">
+          <button type="submit" class="btn btn-primary">Restart now</button>
+        </form>
+        {% else %}
+        <p>Restart the server to apply the configuration:</p>
+        <pre>sudo systemctl restart openbrowse.service
 # or, if you run it manually, stop and re-run uvicorn</pre>
-  {% endif %}
-  <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password (or the API key if you left the password blank), and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with the API key above.</p>
-  <h2>Reach it from anywhere (optional)</h2>
-  <p>To use OpenBrowse from outside this machine without opening ports, install <a href="https://tailscale.com/">Tailscale</a>:</p>
-  <pre># private access from your own devices
+        <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password, and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with your API key.</p>
+        {% endif %}
+        <h2>Reach it from anywhere (optional)</h2>
+        <p>To use OpenBrowse from outside this machine without opening ports, install <a href="https://tailscale.com/">Tailscale</a>:</p>
+        <pre># private access from your own devices
 tailscale up
 
 # or expose the API publicly over TLS with Tailscale Funnel
 sudo tailscale funnel --bg 8420</pre>
-{% else %}
-  <h1>Welcome to OpenBrowse</h1>
-  <p>This instance has no authentication configured yet. This screen writes your <code>.env</code> once; after a restart it disappears.</p>
-  <form method="post" action="/setup">
-    <label>API key (generated for you; this is what SDK clients send)
-      <input name="api_key" value="{{ generated_key }}" required spellcheck="false" />
-    </label>
-    <label>Anthropic API key (for claude-* models, recommended)
-      <input name="anthropic_api_key" placeholder="sk-ant-..." spellcheck="false" />
-    </label>
-    <label>OpenAI API key (for gpt-* models, optional)
-      <input name="openai_api_key" placeholder="sk-proj-..." spellcheck="false" />
-    </label>
-    <label>CapSolver API key (CAPTCHA solving, optional)
-      <input name="capsolver_api_key" placeholder="CAP-..." spellcheck="false" />
-    </label>
-    <label>Dashboard password (optional; defaults to the API key)
-      <input name="dashboard_password" type="password" />
-    </label>
-    {% if hw_complete %}
-    <fieldset id="capacity">
-      <legend>Capacity</legend>
-      <p>Detected: <strong>{{ hw_summary }}</strong></p>
-      <p>How much of this machine can OpenBrowse use?</p>
-      <label><input type="radio" name="share" value="all" data-rec="{{ hw_recs.all }}" /> All of it &mdash; nothing else important runs here</label>
-      <label><input type="radio" name="share" value="most" checked data-rec="{{ hw_recs.most }}" /> Most of it &mdash; leave some headroom</label>
-      <label><input type="radio" name="share" value="shared" data-rec="{{ hw_recs.shared }}" /> Share it &mdash; other services matter too</label>
-      <label>Concurrent sessions (1&ndash;{{ hw_hard_max }})
-        <input type="range" name="max_concurrent_sessions" id="mcs-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_recs.most }}" />
-        <output id="mcs-value">{{ hw_recs.most }}</output>
-      </label>
-      <small id="mcs-note">Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session.</small>
-      <label style="margin-top:10px"><input type="checkbox" name="chrome_light_flags" value="1" {% if hw_light_recommended %}checked{% endif %} /> Lighter browser{% if hw_light_recommended %} &mdash; recommended for this machine{% endif %}</label>
-      <small>Runs each browser without a GPU process and with capped helper processes and JavaScript memory. On small machines with no GPU to help this is faster and lighter, especially with several sessions at once; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</small>
-    </fieldset>
+      </div>
+    </div>
     {% else %}
-    <label>Max concurrent sessions on this device
-      <input name="max_concurrent_sessions" value="1" inputmode="numeric" pattern="[0-9]*" />
-      <small>Each session runs a full browser: budget roughly 2GB RAM and one CPU core per session. 2 suits ~4GB/2 cores, 5 suits ~8&ndash;16GB/4 cores, 20 needs ~40GB/16+ cores.</small>
-    </label>
-    <label><input type="checkbox" name="chrome_light_flags" value="1" /> Lighter browser
-      <small>Runs each browser without a GPU process and with capped helper processes and JavaScript memory. Worth enabling on small machines with no GPU; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</small>
-    </label>
-    {% endif %}
-    <button type="submit">Save configuration</button>
-  </form>
-  {% if hw_complete %}
-  <script>
-    (function () {
-      var slider = document.getElementById("mcs-slider");
-      var value = document.getElementById("mcs-value");
-      document.querySelectorAll('input[name="share"]').forEach(function (radio) {
-        radio.addEventListener("change", function () {
-          slider.value = radio.dataset.rec;
-          value.textContent = radio.dataset.rec;
+
+    <noscript>
+      <div style="max-width: 520px; text-align: center; font-size: 13px; color: #9ca3af; line-height: 1.7">
+        The setup wizard needs JavaScript. Alternatively, create a <code>.env</code> next to the install by hand with
+        <code>API_KEY</code>, <code>DASHBOARD_PASSWORD</code> and a provider key such as <code>ANTHROPIC_API_KEY</code>, then restart.
+      </div>
+    </noscript>
+
+    <!-- ========== intro ========== -->
+    <div class="intro" id="intro">
+      <div class="intro-anim" id="intro-anim">
+        <div id="lottie-holder"></div>
+      </div>
+      <div class="intro-below" id="intro-below">
+        <p class="intro-tagline">Self-hosted AI browser automation on your own hardware. A couple of minutes of setup and this machine is ready to browse for you.</p>
+        <ul class="intro-steps">
+          <li><i>1</i> Password</li>
+          <li><i>2</i> Providers</li>
+          <li><i>3</i> Capacity</li>
+          <li><i>4</i> Your API key</li>
+        </ul>
+        <button type="button" class="btn btn-primary" id="start-btn">Start setup</button>
+      </div>
+    </div>
+
+    <!-- ========== wizard ========== -->
+    <div class="shell" id="shell">
+      <div class="shell-head">
+        <svg width="21" height="21" viewBox="0 0 512 512" fill="none" aria-hidden="true">
+          <g fill="none" stroke="#fff" stroke-width="31.847" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M290.705 369.914C290.705 369.914 210.213 396.956 210.213 396.956C206.233 398.293 201.92 398.257 197.962 396.856C148.001 379.164 115.992 340.272 102.051 289.137C88.11 238.002 100.116 183.282 134.184 142.681"></path>
+            <path d="M323.368 335.617C323.368 335.617 323.368 197.851 323.368 197.851C323.368 189.565 317.701 182.353 309.65 180.395C309.65 180.395 209.618 156.063 209.618 156.063C198.308 153.312 187.407 161.879 187.407 173.519C187.407 173.519 187.407 386.246 187.407 386.246"></path>
+            <path d="M227.468 87.842C290.827 75.641 355.374 102.279 391.688 155.613C428.002 208.947 429.129 278.765 394.556 333.244"></path>
+            <path d="M297.945 429.25C324.428 425.197 350.031 416.68 373.665 404.061"></path>
+          </g>
+        </svg>
+        OpenBrowse
+        <div class="stepper" id="stepper" aria-hidden="true">
+          <span class="step-dot" data-dot="1"><i>1</i><span class="step-label">Password</span></span>
+          <span class="step-line" data-line="1"></span>
+          <span class="step-dot" data-dot="2"><i>2</i><span class="step-label">Providers</span></span>
+          <span class="step-line" data-line="2"></span>
+          <span class="step-dot" data-dot="3"><i>3</i><span class="step-label">Capacity</span></span>
+          <span class="step-line" data-line="3"></span>
+          <span class="step-dot" data-dot="4"><i>4</i><span class="step-label">Your API key</span></span>
+        </div>
+      </div>
+
+      <form method="post" action="/setup" id="setup-form" autocomplete="on">
+        <input type="hidden" name="api_key" value="{{ generated_key }}" />
+        <input class="visually-hidden" type="text" name="username" value="admin" autocomplete="username" readonly tabindex="-1" aria-hidden="true" />
+
+        <!-- step 1: password -->
+        <section class="card step is-active" data-step="1">
+          <h1>Set a dashboard password</h1>
+          <p class="step-sub">You will sign in to this dashboard as <code>admin</code> with this password. It is stored on this machine only.</p>
+          <label class="field">
+            <span class="field-label">Password</span>
+            <span class="pw-row">
+              <input type="password" name="dashboard_password" id="pw" minlength="{{ min_password_length }}" autocomplete="new-password" spellcheck="false" required />
+              <button type="button" class="pw-reveal" id="pw-reveal" title="Show password" aria-label="Show password">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </span>
+            <span class="field-hint" id="pw-hint">At least {{ min_password_length }} characters.</span>
+          </label>
+          <label class="field">
+            <span class="field-label">Confirm password</span>
+            <input type="password" id="pw-confirm" minlength="{{ min_password_length }}" autocomplete="new-password" spellcheck="false" required />
+            <span class="field-hint" id="pw-confirm-hint"></span>
+          </label>
+          <button type="button" class="btn btn-ghost btn-small" id="pw-generate">Generate password</button>
+          <div class="step-nav">
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-primary" data-next disabled>Continue</button>
+          </div>
+        </section>
+
+        <!-- step 2: providers -->
+        <section class="card step" data-step="2">
+          <h1>Connect a model provider</h1>
+          <p class="step-sub">Sessions think with a language model. Add at least one provider key; each key is checked live against its provider before you continue.</p>
+
+          <div class="provider" data-provider="anthropic">
+            <div class="provider-head">
+              <span class="provider-name">Anthropic</span>
+              <span class="provider-tag is-rec">Recommended</span>
+              <span class="provider-status"></span>
+            </div>
+            <input type="text" name="anthropic_api_key" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" aria-label="Anthropic API key" />
+            <div class="provider-msg">Powers <code>claude-*</code> models. Get a key at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>.</div>
+          </div>
+
+          <div class="provider" data-provider="openai">
+            <div class="provider-head">
+              <span class="provider-name">OpenAI</span>
+              <span class="provider-tag">Optional</span>
+              <span class="provider-status"></span>
+            </div>
+            <input type="text" name="openai_api_key" placeholder="sk-proj-..." autocomplete="off" spellcheck="false" aria-label="OpenAI API key" />
+            <div class="provider-msg">Powers <code>gpt-*</code> models.</div>
+          </div>
+
+          <div class="provider" data-provider="capsolver">
+            <div class="provider-head">
+              <span class="provider-name">CapSolver</span>
+              <span class="provider-tag">Optional</span>
+              <span class="provider-status"></span>
+            </div>
+            <input type="text" name="capsolver_api_key" placeholder="CAP-..." autocomplete="off" spellcheck="false" aria-label="CapSolver API key" />
+            <div class="provider-msg">Solves CAPTCHAs that block a session. Does not count towards the provider requirement.</div>
+          </div>
+
+          <p class="providers-gate" id="providers-gate">Add a valid Anthropic or OpenAI key to continue.</p>
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-primary" data-next disabled>Continue</button>
+          </div>
+        </section>
+
+        <!-- step 3: capacity -->
+        <section class="card step" data-step="3">
+          <h1>How much of this machine can OpenBrowse use?</h1>
+          <p class="step-sub">Each session runs a full browser: budget roughly 2GB of RAM and one CPU core per session.</p>
+          {% if hw_complete %}
+          <div class="detected">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+            Detected: <strong>{{ hw_summary }}</strong>
+          </div>
+          <div class="share-cards" id="share-cards">
+            <label class="share-card">
+              <input type="radio" name="share" value="all" data-rec="{{ hw_recs.all }}" />
+              <div class="share-title">All of it</div>
+              <div class="share-desc">Nothing else important runs here.</div>
+            </label>
+            <label class="share-card is-selected">
+              <input type="radio" name="share" value="most" checked data-rec="{{ hw_recs.most }}" />
+              <div class="share-title">Most of it</div>
+              <div class="share-desc">Leave some headroom.</div>
+            </label>
+            <label class="share-card">
+              <input type="radio" name="share" value="shared" data-rec="{{ hw_recs.shared }}" />
+              <div class="share-title">Share it</div>
+              <div class="share-desc">Other services matter too.</div>
+            </label>
+          </div>
+          <span class="field-label">Concurrent sessions (1&ndash;{{ hw_hard_max }})</span>
+          <div class="slider-row">
+            <input type="range" name="max_concurrent_sessions" id="mcs-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_recs.most }}" />
+            <output id="mcs-value">{{ hw_recs.most }}</output>
+          </div>
+          <label class="toggle-row">
+            <input type="checkbox" name="chrome_light_flags" value="1" {% if hw_light_recommended %}checked{% endif %} />
+            <span>
+              <span class="toggle-title">Lighter browser{% if hw_light_recommended %} &mdash; recommended for this machine{% endif %}</span>
+              <span class="toggle-desc">Runs each browser without a GPU process and with capped helper processes and JavaScript memory. On small machines with no GPU to help this is faster and lighter, especially with several sessions at once; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</span>
+            </span>
+          </label>
+          {% else %}
+          <label class="field">
+            <span class="field-label">Max concurrent sessions on this device</span>
+            <input type="text" name="max_concurrent_sessions" value="1" inputmode="numeric" pattern="[0-9]*" />
+            <span class="field-hint">2 suits ~4GB/2 cores, 5 suits ~8&ndash;16GB/4 cores, 20 needs ~40GB/16+ cores.</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" name="chrome_light_flags" value="1" />
+            <span>
+              <span class="toggle-title">Lighter browser</span>
+              <span class="toggle-desc">Runs each browser without a GPU process and with capped helper processes and JavaScript memory. Worth enabling on small machines with no GPU; an unusually heavy web app may prefer it off. Change any time in Settings via <code>CHROME_LIGHT_FLAGS</code>.</span>
+            </span>
+          </label>
+          {% endif %}
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-primary" data-next>Continue</button>
+          </div>
+        </section>
+
+        <!-- step 4: api key -->
+        <section class="card step" data-step="4">
+          <h1>Your API key</h1>
+          <p class="step-sub">SDK clients authenticate with this key, and it was generated for you just now. Click it to copy; it is shown only during setup.</p>
+          <button type="button" class="keybox" id="keybox" aria-label="Copy API key">
+            <span id="keybox-text">{{ generated_key }}</span>
+            <span class="copy-icon" id="copy-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </span>
+          </button>
+          <span class="copied-pill" id="copied-pill">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            Copied to clipboard
+          </span>
+          <label class="confirm-row">
+            <input type="checkbox" id="key-confirm" disabled />
+            <span>I have copied this key and stored it somewhere safe. I understand it will not be shown again after setup.</span>
+          </label>
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-primary" id="finish-btn" disabled>Finish setup</button>
+          </div>
+        </section>
+      </form>
+    </div>
+
+    <script src="/static/lottie.min.js"></script>
+    <script>
+      (function () {
+        "use strict";
+
+        var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+        /* ---------- intro animation ---------- */
+        var below = document.getElementById("intro-below");
+        var revealed = false;
+        function revealIntro() {
+          if (revealed) return;
+          revealed = true;
+          below.classList.add("is-in");
+        }
+        function fallbackLogo() {
+          document.getElementById("intro-anim").innerHTML =
+            '<span class="intro-fallback">' +
+            '<svg width="44" height="44" viewBox="0 0 512 512" fill="none" aria-hidden="true"><g fill="none" stroke="#fff" stroke-width="31.847" stroke-linecap="round" stroke-linejoin="round"><path d="M290.705 369.914C290.705 369.914 210.213 396.956 210.213 396.956C206.233 398.293 201.92 398.257 197.962 396.856C148.001 379.164 115.992 340.272 102.051 289.137C88.11 238.002 100.116 183.282 134.184 142.681"></path><path d="M323.368 335.617C323.368 335.617 323.368 197.851 323.368 197.851C323.368 189.565 317.701 182.353 309.65 180.395C309.65 180.395 209.618 156.063 209.618 156.063C198.308 153.312 187.407 161.879 187.407 173.519C187.407 173.519 187.407 386.246 187.407 386.246"></path><path d="M227.468 87.842C290.827 75.641 355.374 102.279 391.688 155.613C428.002 208.947 429.129 278.765 394.556 333.244"></path><path d="M297.945 429.25C324.428 425.197 350.031 416.68 373.665 404.061"></path></g></svg>' +
+            "<span>openbrowse</span></span>";
+          revealIntro();
+        }
+        function startAnimation() {
+          if (typeof lottie === "undefined") {
+            fallbackLogo();
+            return;
+          }
+          fetch("/static/openbrowse-logo.lottie.json")
+            .then(function (r) {
+              if (!r.ok) throw new Error("http " + r.status);
+              return r.json();
+            })
+            .then(function (data) {
+              var anim = lottie.loadAnimation({
+                container: document.getElementById("lottie-holder"),
+                renderer: "svg",
+                loop: false,
+                autoplay: false,
+                animationData: data,
+              });
+              anim.addEventListener("data_failed", fallbackLogo);
+              anim.addEventListener("DOMLoaded", function () {
+                if (reduceMotion) {
+                  anim.goToAndStop(Math.max(anim.totalFrames - 1, 0), true);
+                  revealIntro();
+                } else {
+                  anim.play();
+                }
+              });
+              anim.addEventListener("complete", revealIntro);
+              /* the CTA must never be hostage to the animation */
+              setTimeout(revealIntro, 4000);
+            })
+            .catch(fallbackLogo);
+        }
+        var animationStarted = false;
+        function startAnimationOnce() {
+          if (animationStarted) return;
+          animationStarted = true;
+          startAnimation();
+        }
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(startAnimationOnce);
+          setTimeout(startAnimationOnce, 1500);
+        } else {
+          startAnimationOnce();
+        }
+
+        /* ---------- wizard navigation ---------- */
+        var intro = document.getElementById("intro");
+        var shell = document.getElementById("shell");
+        var steps = Array.prototype.slice.call(document.querySelectorAll(".step"));
+        var current = 1;
+
+        document.getElementById("start-btn").addEventListener("click", function () {
+          intro.style.display = "none";
+          shell.classList.add("is-in");
+          var pw = document.getElementById("pw");
+          if (pw) pw.focus();
         });
-      });
-      slider.addEventListener("input", function () {
-        value.textContent = slider.value;
-      });
-    })();
-  </script>
-  {% endif %}
-{% endif %}
-{% endblock %}
+
+        function syncStepper() {
+          steps.forEach(function (s) {
+            s.classList.toggle("is-active", Number(s.dataset.step) === current);
+          });
+          document.querySelectorAll(".step-dot").forEach(function (d) {
+            var n = Number(d.dataset.dot);
+            d.classList.toggle("is-current", n === current);
+            d.classList.toggle("is-done", n < current);
+            if (n < current) d.querySelector("i").innerHTML = "&#10003;";
+            else d.querySelector("i").textContent = String(n);
+          });
+          document.querySelectorAll(".step-line").forEach(function (l) {
+            l.classList.toggle("is-done", Number(l.dataset.line) < current);
+          });
+        }
+        function goTo(n) {
+          current = n;
+          syncStepper();
+          var active = document.querySelector('.step[data-step="' + n + '"]');
+          var first = active.querySelector("input:not([type=hidden]):not([type=radio]):not([type=checkbox])");
+          if (first) first.focus();
+        }
+        syncStepper();
+        document.querySelectorAll("[data-next]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            goTo(current + 1);
+          });
+        });
+        document.querySelectorAll("[data-back]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            goTo(current - 1);
+          });
+        });
+        /* Enter inside a step advances instead of submitting the whole form early */
+        document.getElementById("setup-form").addEventListener("keydown", function (e) {
+          if (e.key !== "Enter" || e.target.tagName === "BUTTON" || e.target.tagName === "TEXTAREA") return;
+          if (current < 4) {
+            e.preventDefault();
+            var next = document.querySelector('.step[data-step="' + current + '"] [data-next]');
+            if (next && !next.disabled) next.click();
+          }
+        });
+
+        /* ---------- step 1: password ---------- */
+        var pw = document.getElementById("pw");
+        var pwConfirm = document.getElementById("pw-confirm");
+        var pwHint = document.getElementById("pw-hint");
+        var pwConfirmHint = document.getElementById("pw-confirm-hint");
+        var pwNext = document.querySelector('.step[data-step="1"] [data-next]');
+        var minLen = {{ min_password_length }};
+
+        function syncPassword() {
+          var okLen = pw.value.length >= minLen;
+          var match = pwConfirm.value.length > 0 && pw.value === pwConfirm.value;
+          pwHint.textContent = okLen ? "Looks good." : "At least " + minLen + " characters.";
+          pwHint.className = "field-hint" + (okLen ? " is-ok" : pw.value ? " is-bad" : "");
+          if (!pwConfirm.value) {
+            pwConfirmHint.textContent = "";
+            pwConfirmHint.className = "field-hint";
+          } else {
+            pwConfirmHint.textContent = match ? "Passwords match." : "Passwords do not match yet.";
+            pwConfirmHint.className = "field-hint" + (match ? " is-ok" : " is-bad");
+          }
+          pwNext.disabled = !(okLen && match);
+        }
+        pw.addEventListener("input", syncPassword);
+        pwConfirm.addEventListener("input", syncPassword);
+
+        document.getElementById("pw-reveal").addEventListener("click", function () {
+          var to = pw.type === "password" ? "text" : "password";
+          pw.type = to;
+          pwConfirm.type = to;
+        });
+
+        document.getElementById("pw-generate").addEventListener("click", function () {
+          var alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_";
+          var out = "";
+          var buf = new Uint32Array(16);
+          crypto.getRandomValues(buf);
+          for (var i = 0; i < 16; i++) out += alphabet[buf[i] % alphabet.length];
+          pw.value = out;
+          pwConfirm.value = out;
+          pw.type = "text";
+          pwConfirm.type = "text";
+          syncPassword();
+          pwHint.textContent = "Generated. Save it in your password manager before continuing.";
+          pwHint.className = "field-hint is-ok";
+        });
+
+        /* ---------- step 2: providers ---------- */
+        var provNext = document.querySelector('.step[data-step="2"] [data-next]');
+        var gate = document.getElementById("providers-gate");
+        var providerState = { anthropic: "empty", openai: "empty", capsolver: "empty" };
+        var checkSeq = { anthropic: 0, openai: 0, capsolver: 0 };
+
+        function syncProviders() {
+          var ok =
+            providerState.anthropic === "valid" ||
+            providerState.openai === "valid" ||
+            providerState.anthropic === "kept" ||
+            providerState.openai === "kept";
+          provNext.disabled = !ok;
+          gate.style.display = ok ? "none" : "";
+        }
+
+        function setStatus(card, html) {
+          card.querySelector(".provider-status").innerHTML = html;
+        }
+        function spinnerHtml() {
+          var blades = "";
+          for (var i = 0; i < 8; i++) {
+            blades +=
+              '<i style="transform:rotate(' + i * 45 + 'deg);animation-delay:' + -(7 - i) * 100 + 'ms"></i>';
+          }
+          return '<span class="ob-spin">' + blades + "</span>";
+        }
+        function setMsg(card, cls, html) {
+          var msg = card.querySelector(".provider-msg");
+          if (!card.dataset.defaultMsg) card.dataset.defaultMsg = msg.innerHTML;
+          msg.className = "provider-msg" + (cls ? " " + cls : "");
+          msg.innerHTML = html || card.dataset.defaultMsg;
+        }
+
+        function validateProvider(card) {
+          var name = card.dataset.provider;
+          var input = card.querySelector("input");
+          var key = input.value.trim();
+          var seq = ++checkSeq[name];
+          card.classList.remove("is-valid", "is-invalid");
+          if (!key) {
+            providerState[name] = "empty";
+            setStatus(card, "");
+            setMsg(card, "", "");
+            syncProviders();
+            return;
+          }
+          providerState[name] = "checking";
+          setStatus(card, spinnerHtml() + " Checking&hellip;");
+          setMsg(card, "", "");
+          syncProviders();
+          fetch("/setup/validate-key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: name, key: key }),
+          })
+            .then(function (r) {
+              if (!r.ok) throw new Error("http " + r.status);
+              return r.json();
+            })
+            .then(function (res) {
+              if (seq !== checkSeq[name]) return;
+              if (res.ok === true) {
+                providerState[name] = "valid";
+                card.classList.add("is-valid");
+                setStatus(card, '<span class="ok">&#10003; Key verified</span>');
+                setMsg(card, "", "");
+              } else if (res.ok === false) {
+                providerState[name] = "invalid";
+                card.classList.add("is-invalid");
+                setStatus(card, '<span class="bad">Invalid key</span>');
+                setMsg(card, "is-bad", res.reason + " Check for a stray space or a revoked key, then paste it again.");
+                input.focus();
+              } else {
+                providerState[name] = "unreachable";
+                setStatus(card, "");
+                setMsg(
+                  card,
+                  "is-warn",
+                  res.reason +
+                    ' The key could not be checked from here.<button type="button" class="btn btn-ghost btn-small keep-anyway">Keep it anyway</button>'
+                );
+                var keep = card.querySelector(".keep-anyway");
+                if (keep)
+                  keep.addEventListener("click", function () {
+                    providerState[name] = "kept";
+                    card.classList.add("is-valid");
+                    setStatus(card, '<span class="ok">&#10003; Kept unchecked</span>');
+                    setMsg(card, "", "");
+                    syncProviders();
+                  });
+              }
+              syncProviders();
+            })
+            .catch(function () {
+              if (seq !== checkSeq[name]) return;
+              providerState[name] = "unreachable";
+              setStatus(card, "");
+              setMsg(
+                card,
+                "is-warn",
+                'The check itself failed; the key was not verified.<button type="button" class="btn btn-ghost btn-small keep-anyway">Keep it anyway</button>'
+              );
+              var keep = card.querySelector(".keep-anyway");
+              if (keep)
+                keep.addEventListener("click", function () {
+                  providerState[name] = "kept";
+                  card.classList.add("is-valid");
+                  setStatus(card, '<span class="ok">&#10003; Kept unchecked</span>');
+                  setMsg(card, "", "");
+                  syncProviders();
+                });
+              syncProviders();
+            });
+        }
+
+        document.querySelectorAll(".provider").forEach(function (card) {
+          var input = card.querySelector("input");
+          var timer = null;
+          input.addEventListener("input", function () {
+            clearTimeout(timer);
+            card.classList.remove("is-valid", "is-invalid");
+            providerState[card.dataset.provider] = input.value.trim() ? "typing" : "empty";
+            setStatus(card, "");
+            setMsg(card, "", "");
+            syncProviders();
+            if (input.value.trim()) {
+              timer = setTimeout(function () {
+                validateProvider(card);
+              }, 700);
+            }
+          });
+          input.addEventListener("blur", function () {
+            var st = providerState[card.dataset.provider];
+            if (st === "typing") {
+              clearTimeout(timer);
+              validateProvider(card);
+            }
+          });
+        });
+
+        /* ---------- step 3: capacity ---------- */
+        var slider = document.getElementById("mcs-slider");
+        if (slider) {
+          var out = document.getElementById("mcs-value");
+          document.querySelectorAll('#share-cards input[name="share"]').forEach(function (radio) {
+            radio.addEventListener("change", function () {
+              document.querySelectorAll("#share-cards .share-card").forEach(function (c) {
+                c.classList.toggle("is-selected", c.contains(radio));
+              });
+              slider.value = radio.dataset.rec;
+              out.textContent = radio.dataset.rec;
+            });
+          });
+          slider.addEventListener("input", function () {
+            out.textContent = slider.value;
+          });
+        }
+
+        /* ---------- step 4: api key ---------- */
+        var keybox = document.getElementById("keybox");
+        var keyConfirm = document.getElementById("key-confirm");
+        var finishBtn = document.getElementById("finish-btn");
+        var copiedPill = document.getElementById("copied-pill");
+        var copied = false;
+
+        function copyKey() {
+          var text = document.getElementById("keybox-text").textContent;
+          function mark() {
+            copied = true;
+            keybox.classList.add("is-copied");
+            copiedPill.classList.add("is-in");
+            document.getElementById("copy-icon").innerHTML =
+              '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+            keyConfirm.disabled = false;
+            syncFinish();
+          }
+          /* clipboard API needs a secure context, and a Pi on plain http is not one */
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(mark, function () {
+              legacyCopy(text) && mark();
+            });
+          } else {
+            if (legacyCopy(text)) mark();
+          }
+        }
+        function legacyCopy(text) {
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          var ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch (e) {}
+          document.body.removeChild(ta);
+          return ok;
+        }
+        keybox.addEventListener("click", copyKey);
+        function syncFinish() {
+          finishBtn.disabled = !(copied && keyConfirm.checked);
+        }
+        keyConfirm.addEventListener("change", syncFinish);
+      })();
+    </script>
+    {% endif %}
+  </body>
+</html>
