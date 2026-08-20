@@ -117,6 +117,19 @@ def test_busy_host_tempers_recommendation(tmp_path, monkeypatch):
     assert "busy" in summary(info)
 
 
+def test_marketing_4gb_board_still_allows_two_sessions(tmp_path, monkeypatch):
+    """A board sold as 4GB reports ~3.8GiB usable after the kernel and firmware
+    take their cut; the slider ceiling must not collapse to a single session."""
+    _fake_host(
+        tmp_path, monkeypatch,
+        cores=4,
+        meminfo=_meminfo(3_884_000, 1_500_000),
+        pi_model="Raspberry Pi 5 Model B Rev 1.0",
+    )
+    info = probe()
+    assert hard_max(info) == 2
+
+
 def test_ram_bound_beats_core_bound(tmp_path, monkeypatch):
     _fake_host(
         tmp_path, monkeypatch,

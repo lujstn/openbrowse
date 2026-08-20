@@ -706,6 +706,9 @@
         color: var(--ob-success);
         font-size: 13px;
       }
+      .done-wrap .btn {
+        text-decoration: none;
+      }
       .done-wrap h2 {
         font-size: 13px;
         font-weight: 600;
@@ -774,36 +777,51 @@
     <div class="done-wrap">
       <div class="card">
         <h1><span class="done-tick">&#10003;</span> OpenBrowse is configured</h1>
-        <p>Your <code>.env</code> has been written with your API key, provider keys and capacity settings.</p>
-        {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
-        {% if hw_checklist %}
-        <h2>Host tuning</h2>
-        <ul class="checklist">
+        <p>Your <code>.env</code> has been written with your API key, provider keys and capacity settings. Sign in to the dashboard as <code>admin</code> with your dashboard password, and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with your API key.</p>
+        {% if hw_systemd %}
+        <p>Restarting the service loads your capacity settings (session limit and browser profile) and takes a few seconds. You can also skip it and restart later; the dashboard works either way.</p>
+        <div style="display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap">
+          <form method="post" action="/setup/restart" style="margin: 0">
+            <button type="submit" class="btn btn-primary">Restart now</button>
+          </form>
+          <a href="/" class="btn btn-ghost">Skip for now &mdash; open the dashboard</a>
+        </div>
+        <p style="font-size: 11.5px; color: #666; margin-top: 10px">If you skip, your capacity settings apply on the next restart.</p>
+        {% else %}
+        <p>Restart the server when convenient to load your capacity settings:</p>
+        <pre>sudo systemctl restart openbrowse.service
+# or, if you run it manually, stop and re-run uvicorn</pre>
+        <a href="/" class="btn btn-ghost" style="margin-top: 6px">Open the dashboard</a>
+        {% endif %}
+      </div>
+
+      {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
+      {% if hw_checklist %}
+      <div class="card" style="margin-top: 16px">
+        <h1 style="font-size: 15px; margin-bottom: 6px">Optional: tune the host</h1>
+        <p style="font-size: 12.5px; color: var(--ob-text-muted); line-height: 1.6; margin-bottom: 4px">Entirely optional, and nothing here blocks you. These host-level tweaks help this machine run browser sessions smoothly; you can apply them now, later from Settings, or never.</p>
+        <ul class="checklist" id="tuning-checklist">
           {% for row in hw_checklist %}
-          <li>
+          <li data-key="{{ row.key }}">
             <span class="state {{ row.state }}">{% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9675;{% endif %}</span>
-            <span><strong>{{ row.label }}</strong>{% if row.state == "action" %} (recommended){% endif %} &mdash; {{ row.detail }}</span>
+            <span><strong>{{ row.label }}</strong>{% if row.state == "action" %} (suggested){% endif %} &mdash; {{ row.detail }}</span>
           </li>
           {% endfor %}
         </ul>
         {% if actions %}
-        <p>Apply the recommended items with one command on this machine:</p>
-        <pre>sudo bash scripts/host_tune.sh --share {{ share }}</pre>
-        <p>It is safe to re-run, and it also enables the dashboard to apply future tuning changes at the click of a button.</p>
+        <p style="font-size: 12.5px; color: var(--ob-text-muted); margin-top: 10px">To apply the suggested items, run this in a terminal on this machine, then re-check:</p>
+        <pre>{{ tune_command }}</pre>
+        <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px">
+          <button type="button" class="btn btn-ghost btn-small" id="tuning-recheck">I&rsquo;ve run it &mdash; re-check</button>
+          <span id="tuning-recheck-status" style="font-size: 11.5px; color: var(--ob-text-faint)"></span>
+        </div>
+        <p style="font-size: 11.5px; color: #666; margin-top: 10px">It is safe to re-run, and running it once also lets the Settings page apply future tuning changes at the click of a button.</p>
         {% endif %}
-        {% endif %}
-        {% if hw_systemd %}
-        <p>Restart to apply the configuration, then sign in as <code>admin</code> with your dashboard password.</p>
-        <form method="post" action="/setup/restart" style="margin-top: 14px">
-          <button type="submit" class="btn btn-primary">Restart now</button>
-        </form>
-        {% else %}
-        <p>Restart the server to apply the configuration:</p>
-        <pre>sudo systemctl restart openbrowse.service
-# or, if you run it manually, stop and re-run uvicorn</pre>
-        <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password, and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with your API key.</p>
-        {% endif %}
-        <h2>Reach it from anywhere (optional)</h2>
+      </div>
+      {% endif %}
+
+      <div class="card" style="margin-top: 16px">
+        <h2 style="margin-top: 0">Reach it from anywhere (optional)</h2>
         <p>To use OpenBrowse from outside this machine without opening ports, install <a href="https://tailscale.com/">Tailscale</a>:</p>
         <pre># private access from your own devices
 tailscale up
@@ -812,6 +830,41 @@ tailscale up
 sudo tailscale funnel --bg 8420</pre>
       </div>
     </div>
+    <script>
+      (function () {
+        try {
+          sessionStorage.removeItem("ob-setup-state");
+        } catch (e) {}
+        var btn = document.getElementById("tuning-recheck");
+        if (!btn) return;
+        var status = document.getElementById("tuning-recheck-status");
+        btn.addEventListener("click", function () {
+          status.textContent = "Checking\u2026";
+          fetch("/setup/tuning-status", { credentials: "same-origin" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("http " + r.status);
+              return r.json();
+            })
+            .then(function (res) {
+              res.checklist.forEach(function (row) {
+                var li = document.querySelector('#tuning-checklist li[data-key="' + row.key + '"]');
+                if (!li) return;
+                var state = li.querySelector(".state");
+                state.className = "state " + row.state;
+                state.innerHTML = row.state === "ok" ? "&#10003;" : row.state === "action" ? "&#9679;" : "&#9675;";
+              });
+              status.style.color = res.actions_remaining === 0 ? "var(--ob-success)" : "var(--ob-text-faint)";
+              status.textContent =
+                res.actions_remaining === 0
+                  ? "All applied. A restart (and one reboot, if PSI was enabled) finishes the job."
+                  : res.actions_remaining + " suggested item(s) still to apply.";
+            })
+            .catch(function () {
+              status.textContent = "Could not re-check just now.";
+            });
+        });
+      })();
+    </script>
     {% else %}
 
     <noscript>
@@ -1094,9 +1147,12 @@ sudo tailscale funnel --bg 8420</pre>
         var steps = Array.prototype.slice.call(document.querySelectorAll(".step"));
         var current = 1;
 
+        var started = false;
         document.getElementById("start-btn").addEventListener("click", function () {
+          started = true;
           intro.style.display = "none";
           shell.classList.add("is-in");
+          saveState();
           var pw = document.getElementById("pw");
           if (pw) pw.focus();
         });
@@ -1119,6 +1175,7 @@ sudo tailscale funnel --bg 8420</pre>
         function goTo(n) {
           current = n;
           syncStepper();
+          saveState();
           var active = document.querySelector('.step[data-step="' + n + '"]');
           var first = active.querySelector("input:not([type=hidden]):not([type=radio]):not([type=checkbox])");
           if (first) first.focus();
@@ -1356,17 +1413,19 @@ sudo tailscale funnel --bg 8420</pre>
         var copiedPill = document.getElementById("copied-pill");
         var copied = false;
 
+        function markCopied() {
+          copied = true;
+          keybox.classList.add("is-copied");
+          copiedPill.classList.add("is-in");
+          document.getElementById("copy-icon").innerHTML =
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+          keyConfirm.disabled = false;
+          syncFinish();
+          saveState();
+        }
         function copyKey() {
           var text = document.getElementById("keybox-text").textContent;
-          function mark() {
-            copied = true;
-            keybox.classList.add("is-copied");
-            copiedPill.classList.add("is-in");
-            document.getElementById("copy-icon").innerHTML =
-              '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-            keyConfirm.disabled = false;
-            syncFinish();
-          }
+          var mark = markCopied;
           /* clipboard API needs a secure context, and a Pi on plain http is not one */
           if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(text).then(mark, function () {
@@ -1395,6 +1454,96 @@ sudo tailscale funnel --bg 8420</pre>
           finishBtn.disabled = !(copied && keyConfirm.checked);
         }
         keyConfirm.addEventListener("change", syncFinish);
+
+        /* ---------- progress survives a refresh ----------
+           Values (the password included) sit in per-tab sessionStorage: this
+           page exists only before the instance has credentials, on the owner's
+           own machine, and the finish screen clears the entry. */
+        var STORAGE_KEY = "ob-setup-state";
+        function saveState() {
+          try {
+            var shareChecked = document.querySelector('input[name="share"]:checked');
+            var mcsInput = document.querySelector('input[name="max_concurrent_sessions"]');
+            var lightInput = document.querySelector('input[name="chrome_light_flags"]');
+            sessionStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify({
+                started: started,
+                step: current,
+                apiKey: document.querySelector('input[name="api_key"]').value,
+                pw: pw.value,
+                anthropic: document.querySelector('input[name="anthropic_api_key"]').value,
+                openai: document.querySelector('input[name="openai_api_key"]').value,
+                capsolver: document.querySelector('input[name="capsolver_api_key"]').value,
+                share: shareChecked ? shareChecked.value : null,
+                mcs: mcsInput ? mcsInput.value : null,
+                light: lightInput ? lightInput.checked : null,
+                copied: copied,
+                confirmed: keyConfirm.checked,
+              })
+            );
+          } catch (e) {}
+        }
+        document.getElementById("setup-form").addEventListener("input", saveState);
+        document.getElementById("setup-form").addEventListener("change", saveState);
+
+        function restoreState() {
+          var raw = null;
+          try {
+            raw = sessionStorage.getItem(STORAGE_KEY);
+          } catch (e) {}
+          if (!raw) return;
+          var st;
+          try {
+            st = JSON.parse(raw);
+          } catch (e) {
+            return;
+          }
+          if (st.apiKey) {
+            document.querySelector('input[name="api_key"]').value = st.apiKey;
+            document.getElementById("keybox-text").textContent = st.apiKey;
+          }
+          if (st.pw) {
+            pw.value = st.pw;
+            pwConfirm.value = st.pw;
+          }
+          [["anthropic_api_key", st.anthropic], ["openai_api_key", st.openai], ["capsolver_api_key", st.capsolver]].forEach(function (pair) {
+            if (pair[1]) document.querySelector('input[name="' + pair[0] + '"]').value = pair[1];
+          });
+          if (st.share) {
+            var radio = document.querySelector('input[name="share"][value="' + st.share + '"]');
+            if (radio) {
+              radio.checked = true;
+              document.querySelectorAll("#share-cards .share-card").forEach(function (c) {
+                c.classList.toggle("is-selected", c.contains(radio));
+              });
+            }
+          }
+          var mcsInput = document.querySelector('input[name="max_concurrent_sessions"]');
+          if (st.mcs && mcsInput) {
+            mcsInput.value = st.mcs;
+            var out = document.getElementById("mcs-value");
+            if (out) out.textContent = st.mcs;
+          }
+          var lightInput = document.querySelector('input[name="chrome_light_flags"]');
+          if (lightInput && st.light !== null && st.light !== undefined) lightInput.checked = st.light;
+          syncPassword();
+          if (st.copied) markCopied();
+          if (st.confirmed) {
+            keyConfirm.checked = true;
+            syncFinish();
+          }
+          document.querySelectorAll(".provider").forEach(function (card) {
+            if (card.querySelector("input").value.trim()) validateProvider(card);
+          });
+          if (st.started) {
+            started = true;
+            intro.style.display = "none";
+            shell.classList.add("is-in");
+            goTo(Math.min(Math.max(st.step || 1, 1), 4));
+          }
+        }
+        restoreState();
       })();
     </script>
     {% endif %}

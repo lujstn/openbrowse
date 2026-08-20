@@ -31,6 +31,9 @@ async def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "openbrowse.dashboard.setup_routes._env_path", tmp_path / ".env"
     )
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes._completed_this_process", False
+    )
     await init_db()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -59,11 +62,74 @@ async def test_setup_writes_env(client):
     )
     assert resp.status_code == 200
     assert "OpenBrowse is configured" in resp.text
+    assert "scripts/host_tune.sh" not in resp.text
     env = (tmp_path / ".env").read_text()
     assert "API_KEY=generated-abc123" in env
     assert "ANTHROPIC_API_KEY=sk-ant-test" in env
     assert "DASHBOARD_PASSWORD=hunter2-hunter2" in env
     assert "OPENAI_API_KEY" not in env
+
+
+async def test_setup_adopts_credentials_without_restart(client):
+    from openbrowse.dashboard import setup_routes
+
+    c, _ = client
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "adopted-key",
+            "anthropic_api_key": "sk-ant-test",
+            "dashboard_password": "long-enough-pw",
+        },
+    )
+    assert resp.status_code == 200
+    assert setup_routes.settings.api_key == "adopted-key"
+    assert setup_routes.settings.dashboard_password == "long-enough-pw"
+    assert setup_routes.settings.anthropic_api_key == "sk-ant-test"
+
+    resp = await c.get("/setup", follow_redirects=False)
+    assert resp.status_code == 303
+
+    resp = await c.get("/setup/tuning-status")
+    assert resp.status_code == 200
+    assert "checklist" in resp.json()
+
+
+async def test_setup_restart_still_works_after_completion(client, monkeypatch):
+    c, _ = client
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "anthropic_api_key": "sk-ant-test",
+            "dashboard_password": "long-enough-pw",
+        },
+    )
+    assert resp.status_code == 200
+    called = []
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes.schedule_restart", lambda: called.append(1)
+    )
+    resp = await c.post("/setup/restart")
+    assert resp.status_code == 200
+    assert called == [1]
+
+
+async def test_setup_finish_screen_offers_a_skip(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "anthropic_api_key": "sk-ant-test",
+            "dashboard_password": "long-enough-pw",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Skip for now" in resp.text
+    assert "Optional: tune the host" in resp.text
+    assert "Restart now" in resp.text
 
 
 async def test_setup_requires_a_dashboard_password(client):
@@ -159,6 +225,9 @@ async def test_setup_refuses_to_clobber_existing_env(client):
 
 
 async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes._completed_this_process", False
+    )
     test_settings = replace(
         settings,
         db_path=tmp_path / "test.db",
@@ -185,6 +254,8 @@ async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
             json={"provider": "anthropic", "key": "sk-ant-x"},
             follow_redirects=False,
         )
+        assert resp.status_code == 403
+        resp = await c.get("/setup/tuning-status", follow_redirects=False)
         assert resp.status_code == 403
 
 
@@ -234,7 +305,7 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert "MAX_CONCURRENT_SESSIONS=4" in (tmp_path / ".env").read_text()
-    assert "host_tune.sh --share all" in resp.text
+    assert "sudo openbrowse tune --share all" in resp.text
     assert "Restart now" in resp.text
 
 
