@@ -2868,6 +2868,116 @@ async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
     assert "own browser work" in stamped[0]
 
 
+def _stagger_harness(monkeypatch):
+    async def read_one(
+        session, url, tid, url_contains, claimed, baseline, allow_sole_candidate=False,
+        sibling_urls=None,
+    ):
+        return {"url": url, "text": f"body of {url} " * 30, "jsonld": None, "links": []}
+
+    tools_mod, order, session = _wave_fakes(monkeypatch, read_one)
+    pauses: list[float] = []
+
+    async def fake_pause(seconds):
+        pauses.append(seconds)
+
+    monkeypatch.setattr(tools_mod, "_stagger_pause", fake_pause)
+    return tools_mod, session, pauses
+
+
+async def test_wave_stagger_zero_when_solo(monkeypatch) -> None:
+    tools_mod, session, pauses = _stagger_harness(monkeypatch)
+    monkeypatch.setattr(tools_mod.system_metrics, "stall_fraction", lambda: 1.0)
+    monkeypatch.setattr(tools_mod.activity, "active_session_count", lambda: 1)
+    await tools_mod._read_pages_impl(session, [f"https://x.com/{i}" for i in range(3)], None, {})
+    assert pauses == []
+
+
+async def test_wave_stagger_zero_when_calm(monkeypatch) -> None:
+    tools_mod, session, pauses = _stagger_harness(monkeypatch)
+    monkeypatch.setattr(tools_mod.system_metrics, "stall_fraction", lambda: 0.02)
+    monkeypatch.setattr(tools_mod.activity, "active_session_count", lambda: 3)
+    await tools_mod._read_pages_impl(session, [f"https://x.com/{i}" for i in range(3)], None, {})
+    assert pauses == []
+
+
+async def test_wave_stagger_paces_between_spawns_under_contention(monkeypatch) -> None:
+    tools_mod, session, pauses = _stagger_harness(monkeypatch)
+    monkeypatch.setattr(tools_mod.system_metrics, "stall_fraction", lambda: 0.5)
+    monkeypatch.setattr(tools_mod.activity, "active_session_count", lambda: 2)
+    progress_msgs: list[str] = []
+
+    async def progress(msg):
+        progress_msgs.append(msg)
+
+    await tools_mod._read_pages_impl(
+        session, [f"https://x.com/{i}" for i in range(3)], None, {}, progress=progress
+    )
+    assert pauses == [pytest.approx(0.4), pytest.approx(0.4)]
+    assert any("paced 400ms/tab" in m for m in progress_msgs), progress_msgs
+
+
+async def test_wave_stagger_total_is_capped(monkeypatch) -> None:
+    tools_mod, session, pauses = _stagger_harness(monkeypatch)
+    monkeypatch.setattr(tools_mod.system_metrics, "stall_fraction", lambda: 1.0)
+    monkeypatch.setattr(tools_mod.activity, "active_session_count", lambda: 2)
+    urls = [f"https://x.com/{i}" for i in range(8)]
+    await tools_mod._read_pages_impl(session, urls, None, {}, concurrency=8)
+    assert len(pauses) == 7
+    assert sum(pauses) <= tools_mod._STAGGER_TOTAL_MAX_S + 1e-9
+    assert all(p == pytest.approx(tools_mod._STAGGER_PER_TAB_MAX_S) for p in pauses)
+
+
+async def test_wave_stagger_skips_single_url_waves(monkeypatch) -> None:
+    tools_mod, session, pauses = _stagger_harness(monkeypatch)
+    monkeypatch.setattr(tools_mod.system_metrics, "stall_fraction", lambda: 1.0)
+    monkeypatch.setattr(tools_mod.activity, "active_session_count", lambda: 4)
+    await tools_mod._read_pages_impl(session, ["https://x.com/1"], None, {})
+    assert pauses == []
+
+
+def test_psi_parse_and_stall_fraction(tmp_path, monkeypatch) -> None:
+    import app.system_metrics as sm
+
+    psi = tmp_path / "cpu"
+    psi.write_text(
+        "some avg10=23.50 avg60=10.00 avg300=3.00 total=123456\n"
+        "full avg10=1.00 avg60=0.50 avg300=0.10 total=6543\n"
+    )
+    monkeypatch.setattr(sm, "_PSI_CPU_PATH", str(psi))
+    assert sm._psi_cpu_some_avg10() == 23.5
+    assert sm.stall_fraction() == pytest.approx(0.235)
+    assert sm.sample()["cpuStallPct"] == 23.5
+
+    level, _ = sm.pressure()
+    assert level == "elevated"
+    assert "% stall" in sm.pressure_note()
+
+    psi.write_text("some avg10=45.00 avg60=20.00 avg300=5.00 total=1\n")
+    assert sm.pressure()[0] == "saturated"
+
+    psi.write_text("some avg10=2.00 avg60=1.00 avg300=0.00 total=1\n")
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (9.0, 9.0, 9.0))
+    assert sm.pressure()[0] == "ok"
+
+
+def test_stall_fraction_loadavg_fallback(tmp_path, monkeypatch) -> None:
+    import app.system_metrics as sm
+
+    monkeypatch.setattr(sm, "_PSI_CPU_PATH", str(tmp_path / "missing"))
+    monkeypatch.setattr(sm.os, "cpu_count", lambda: 4)
+
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (2.0, 2.0, 2.0))
+    assert sm.stall_fraction() == 0.0
+
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (6.0, 6.0, 6.0))
+    assert sm.stall_fraction() == pytest.approx(0.5)
+
+    monkeypatch.setattr(sm.os, "getloadavg", lambda: (12.0, 12.0, 12.0))
+    assert sm.stall_fraction() == 1.0
+    assert sm.sample()["cpuStallPct"] is None
+
+
 async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
     import app.agent.tools as tools_mod
     from browser_use import Tools

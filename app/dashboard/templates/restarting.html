@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Restarting · OpenBrowse</title>
     <link rel="icon" href="/static/openbrowse.ico" />
-    <meta http-equiv="refresh" content="10;url=/settings?restarted={{ saved_at }}" />
+    <meta http-equiv="refresh" content="10;url={{ next_url or ('/settings?restarted=' ~ saved_at) }}" />
     <style>
       body {
         margin: 0;
@@ -70,7 +70,7 @@
     <div class="bar"><span></span></div>
     <script>
       setTimeout(function () {
-        window.location.href = "/settings?restarted={{ saved_at }}";
+        window.location.href = "{{ next_url or ('/settings?restarted=' ~ saved_at) }}";
       }, 10000);
     </script>
   </body>

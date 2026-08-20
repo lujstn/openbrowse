@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -77,7 +77,7 @@ async def test_sessions_page_still_serves(client):
     assert resp.status_code == 200
 
 
-@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+@patch("app.dashboard.routes.pool.submit_nowait")
 async def test_run_creates_and_dispatches(mock_submit, client):
     import asyncio
 
@@ -345,6 +345,58 @@ async def test_settings_save_updates_and_removes_values(client, tmp_path, monkey
     assert "NEW_VAR=hello" in text
 
 
+async def test_settings_save_refused_while_sessions_running(client, tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=supersecret\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    restarts = []
+    monkeypatch.setattr(
+        "app.dashboard.routes._schedule_restart", lambda: restarts.append(1)
+    )
+    monkeypatch.setattr(
+        "app.dashboard.routes.pool", type("P", (), {"active_count": 1})()
+    )
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={"key": ["API_KEY", "NEW_VAR"], "value": ["supersecret", "hello"]},
+    )
+    assert resp.status_code == 200
+    assert "Not saved" in resp.text
+    assert "restart anyway" in resp.text
+    assert "hello" in resp.text
+    assert restarts == []
+    assert "NEW_VAR" not in env.read_text()
+
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={
+            "key": ["API_KEY", "NEW_VAR"],
+            "value": ["supersecret", "hello"],
+            "force": "1",
+        },
+    )
+    assert resp.status_code == 200
+    assert restarts == [1]
+    assert "NEW_VAR=hello" in env.read_text()
+
+
+async def test_settings_save_atomic_leaves_no_tmp(client, tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=supersecret\n")
+    monkeypatch.setattr("app.dashboard.routes._ENV_PATH", env)
+    monkeypatch.setattr("app.dashboard.routes._schedule_restart", lambda: None)
+    resp = await client.post(
+        "/settings",
+        headers=_basic("admin", "secret-key"),
+        data={"key": ["API_KEY"], "value": ["supersecret"]},
+    )
+    assert resp.status_code == 200
+    assert not (tmp_path / ".env.tmp").exists()
+    assert env.read_text() == "API_KEY=supersecret\n"
+
+
 async def test_settings_requires_auth(client):
     resp = await client.get("/settings")
     assert resp.status_code == 401
@@ -385,8 +437,8 @@ async def test_followup_message_redispatches_idle_keepalive_session(
 
     from app.db import crud
 
-    submit = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    submit = MagicMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
 
@@ -412,7 +464,7 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
 
     from app.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
     plain = await crud.create_session(task="t", keep_alive=False)
     await crud.update_session(plain["id"], status="idle")
     resp = await client.post(
@@ -432,7 +484,7 @@ async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
     assert resp.status_code == 409
 
 
-@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+@patch("app.dashboard.routes.pool.submit_nowait")
 async def test_dashboard_run_budget_not_scaled(mock_submit, client, setup, monkeypatch):
     import asyncio
 
@@ -478,11 +530,11 @@ def _clear_live_sessions():
 
 
 async def test_run_records_what_the_user_asked(client, monkeypatch):
-    from unittest.mock import AsyncMock
+    from unittest.mock import MagicMock
 
     from app.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
     resp = await client.post(
         "/run",
         headers=_basic("admin", "secret-key"),
@@ -500,13 +552,13 @@ async def test_run_records_what_the_user_asked(client, monkeypatch):
 
 async def test_followup_continues_a_parked_session_without_a_new_run(client, monkeypatch):
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import MagicMock
 
     from app.agent import live
     from app.db import crud
 
-    submit = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    submit = MagicMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
     entry = live.register(session["id"], SimpleNamespace())
@@ -528,12 +580,12 @@ async def test_followup_continues_a_parked_session_without_a_new_run(client, mon
 
 
 async def test_followup_starts_a_fresh_run_once_the_browser_is_gone(client, monkeypatch):
-    from unittest.mock import AsyncMock
+    from unittest.mock import MagicMock
 
     from app.db import crud
 
-    submit = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    submit = MagicMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="stopped")
 
@@ -551,13 +603,13 @@ async def test_followup_starts_a_fresh_run_once_the_browser_is_gone(client, monk
 
 async def test_followup_rejected_while_the_agent_is_mid_task(client, monkeypatch):
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import MagicMock
 
     from app.agent import live
     from app.db import crud
 
-    submit = AsyncMock()
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", submit)
+    submit = MagicMock()
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", submit)
     session = await crud.create_session(task="first task", keep_alive=True)
     await crud.update_session(session["id"], status="idle")
     live.register(session["id"], SimpleNamespace())
@@ -574,7 +626,7 @@ async def test_followup_rejected_while_the_agent_is_mid_task(client, monkeypatch
 
 async def test_stop_releases_a_parked_session(client, monkeypatch):
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import MagicMock
 
     from app.agent import live
     from app.db import crud
@@ -619,7 +671,7 @@ async def test_followup_message_tops_the_session_budget_back_up(client, monkeypa
 
     from app.db import crud
 
-    monkeypatch.setattr("app.dashboard.routes.pool.submit", AsyncMock())
+    monkeypatch.setattr("app.dashboard.routes.pool.submit_nowait", MagicMock())
     session = await crud.create_session(
         task="first task", keep_alive=True, max_cost_usd=1.5, default_max_cost_usd=1.5
     )
@@ -635,7 +687,7 @@ async def test_followup_message_tops_the_session_budget_back_up(client, monkeypa
     assert (await crud.get_session(session["id"]))["max_cost_usd"] == 2.7
 
 
-@patch("app.dashboard.routes.pool.submit", new_callable=AsyncMock)
+@patch("app.dashboard.routes.pool.submit_nowait")
 async def test_a_dashboard_run_records_the_allowance_it_was_given(mock_submit, client):
     """Without the allowance on the row there is nothing to top a follow-up up by."""
     import asyncio
@@ -1027,3 +1079,79 @@ async def test_a_finished_run_hides_its_copy_button_until_it_is_opened(client):
     assert '<div class="cc-out"><button class="cc-copy"' in body
     assert ".completion-card.collapsed .cc-out" in body
     assert "COPY_ICON" in body and "COPIED_ICON" in body
+
+
+def _capacity_info(**over):
+    from dataclasses import replace as _replace
+
+    from app.hostinfo import HostInfo
+
+    base = HostInfo(
+        cores=4, mem_total_kb=16 * 1024 * 1024, mem_available_kb=13 * 1024 * 1024,
+        load1_per_core=0.1, psi_available=False, is_raspberry_pi=True,
+        systemd=True, cgroup_memory=True, root_on_sd=True,
+        resource_limits_set=False,
+    )
+    return _replace(base, **over)
+
+
+async def test_settings_capacity_card_renders(client, monkeypatch):
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 200
+    assert "Capacity" in resp.text
+    assert 'max="4"' in resp.text
+    assert "host_tune.sh --share most" in resp.text
+    assert "Apply recommended tuning" not in resp.text
+
+
+async def test_settings_capacity_button_when_sudo_granted(client, monkeypatch):
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: True)
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+    assert "Apply recommended tuning" in resp.text
+
+
+async def test_settings_host_tune_runs_script_and_shows_output(client, monkeypatch):
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: True)
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _subprocess.CompletedProcess(cmd, 0, stdout="doing: wrote override\ndone\n", stderr="")
+
+    monkeypatch.setattr("app.dashboard.routes.subprocess.run", fake_run)
+    resp = await client.post(
+        "/settings/host-tune",
+        headers=_basic("admin", "secret-key"),
+        data={"share": "shared"},
+    )
+    assert resp.status_code == 200
+    assert "Host tuning applied" in resp.text
+    assert "wrote override" in resp.text
+    assert any("--share" in c and "shared" in c for c in calls)
+
+
+async def test_settings_host_tune_rejects_bad_share(client, monkeypatch):
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("app.hostinfo.probe", _capacity_info)
+    monkeypatch.setattr("app.dashboard.routes._host_tune_available", lambda: False)
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return _subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
+
+    monkeypatch.setattr("app.dashboard.routes.subprocess.run", fake_run)
+    resp = await client.post(
+        "/settings/host-tune",
+        headers=_basic("admin", "secret-key"),
+        data={"share": "everything"},
+    )
+    assert resp.status_code == 200
+    assert any("most" in c for c in seen)

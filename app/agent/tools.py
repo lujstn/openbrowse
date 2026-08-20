@@ -37,6 +37,7 @@ from app.agent.output_store import (
     _peel_optional,
     elide_long_values,
 )
+from app.agent import activity
 from app.agent.textguard import guard_key
 from app import system_metrics
 
@@ -449,6 +450,11 @@ _READ_PAGES_TEXT_CAP = 60_000
 # app/agent/runner.py — read_pages must stop itself before the outer caps fire.
 _READ_PAGES_BUDGET_S = 420.0
 _READ_PAGES_MIN_WAVE_S = 30.0
+# @nonobvious(must-hold): a wave's total stagger must stay below
+# _READ_PAGES_MIN_WAVE_S, the reserve _out_of_budget already keeps — that is
+# what lets pacing add no budget accounting of its own.
+_STAGGER_PER_TAB_MAX_S = 0.8
+_STAGGER_TOTAL_MAX_S = 8.0
 # @nonobvious(means): measured live — heavy pages need ~15s to render an embed.
 _PAGE_READY_TIMEOUT_S = 25.0
 _FRAME_MATCH_GRACE_S = 6.0
@@ -459,6 +465,23 @@ _PANEL_EVIDENCE_EXTRA_S = 8.0
 _MIN_PAGE_TEXT_CHARS = 200
 _JUDGE_ANSWER_CAP = 8000
 _JSONLD_GRACE_S = 3.0
+
+
+def _wave_stagger_gap_s(wave_len: int) -> float:
+    """Per-tab navigation gap for one wave, sampled once at wave start so a wave
+    never lengthens itself by measuring the load it is creating. Zero unless
+    another session is live and the host is actually stalling.
+    """
+    if wave_len < 2 or activity.active_session_count() < 2:
+        return 0.0
+    stall = system_metrics.stall_fraction()
+    if stall < 0.05:
+        return 0.0
+    return min(_STAGGER_PER_TAB_MAX_S * stall, _STAGGER_TOTAL_MAX_S / (wave_len - 1))
+
+
+async def _stagger_pause(seconds: float) -> None:
+    await asyncio.sleep(seconds)
 
 
 async def _read_one_page(
@@ -833,10 +856,17 @@ async def _read_pages_impl(
     loop = asyncio.get_running_loop()
     budget_deadline = loop.time() + _READ_PAGES_BUDGET_S
 
+    last_wave_gap_s = 0.0
+
     async def _run_wave(wave: list[str]) -> None:
+        nonlocal last_wave_gap_s
+        gap_s = _wave_stagger_gap_s(len(wave))
+        last_wave_gap_s = gap_s
         pairs: list[tuple[str, str]] = []
         try:
-            for u in wave:
+            for idx, u in enumerate(wave):
+                if idx and gap_s:
+                    await _stagger_pause(gap_s)
                 tid = await _spawn_tab(browser_session, u)
                 if tid is None:
                     results[u] = {"url": u, "error": "could not open a tab"}
@@ -903,10 +933,15 @@ async def _read_pages_impl(
                     frame_note = ", read directly on the panel provider's site"
                 else:
                     frame_note = ", no embedded panels attached yet"
+            paced = (
+                f", paced {last_wave_gap_s * 1000:.0f}ms/tab for a concurrent session"
+                if last_wave_gap_s
+                else ""
+            )
             await _emit_progress(
                 progress,
                 f"read_pages wave {wave_no}/{total_waves}: {ok} of {len(done)} "
-                f"pages ok{frame_note} ({loop.time() - wave_started:.0f}s)",
+                f"pages ok{frame_note} ({loop.time() - wave_started:.0f}s{paced})",
             )
 
         retry = [u for u in urls if results.get(u, {}).get("error")]

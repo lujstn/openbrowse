@@ -136,7 +136,6 @@ async def worker_env(tmp_path, monkeypatch):
         "display_manager",
         SimpleNamespace(allocate=_allocate, release=_noop),
     )
-    monkeypatch.setattr(runner_mod, "wait_for_novnc", _noop)
     monkeypatch.setattr(runner_mod, "launch_chrome", _launch)
     monkeypatch.setattr(runner_mod, "stop_chrome", _noop)
     monkeypatch.setattr(runner_mod, "BrowserSession", _FakeBrowserSession)

@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
-from app import system_metrics
+from app import hostinfo, system_metrics
 from app.agent.activity import get_activity
 from app.agent import live
 from app.agent.pool import pool
@@ -35,7 +35,9 @@ from app.agent.runner import (
 )
 from app.api.sessions import _to_session_response
 from app.auth import dashboard_auth_ok, require_dashboard_auth
+from app.browser.factory import display_manager
 from app.config import settings
+from app.dashboard.lifecycle import schedule_restart
 from app.db import crud
 from app.profiles.storage import cookie_domains, read_state_file
 
@@ -351,14 +353,28 @@ def _novnc_port_for_display(display_num: int) -> int:
     return settings.novnc_base_port + (display_num - settings.xvfb_base_display)
 
 
-async def _novnc_port_for_session(session_id: str) -> int | None:
+async def _display_num_for_session(session_id: str) -> int | None:
     session = await crud.get_session(session_id)
     if not session:
         return None
     display_num = session.get("display_num")
     if display_num is None:
         return None
-    return _novnc_port_for_display(int(display_num))
+    return int(display_num)
+
+
+async def _novnc_port_for_session(session_id: str) -> int | None:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return None
+    return _novnc_port_for_display(display_num)
+
+
+async def _ensure_vnc_for_session(session_id: str) -> bool:
+    display_num = await _display_num_for_session(session_id)
+    if display_num is None:
+        return False
+    return await display_manager.ensure_vnc(display_num)
 
 
 def _live_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -495,9 +511,7 @@ async def run_task(
         summary=task[:2000],
         count_step=False,
     )
-    dispatched = asyncio.create_task(pool.submit(session["id"]))
-    _dispatched_tasks.add(dispatched)
-    dispatched.add_done_callback(_dispatched_tasks.discard)
+    pool.submit_nowait(session["id"])
     return RedirectResponse(f"/session/{session['id']}", status_code=303)
 
 
@@ -651,9 +665,7 @@ async def session_followup(session_id: str, task: str = Form(...)):
         )
         return JSONResponse({"ok": True, "continued": True})
     await crud.update_session(session_id, task=text, status="created", **topped_up)
-    dispatched = asyncio.create_task(pool.submit(session_id))
-    _dispatched_tasks.add(dispatched)
-    dispatched.add_done_callback(_dispatched_tasks.discard)
+    pool.submit_nowait(session_id)
     return JSONResponse({"ok": True, "continued": False})
 
 
@@ -691,6 +703,39 @@ async def dashboard_stop_session(session_id: str):
     return JSONResponse({"ok": True, "action": "stop"})
 
 
+_HOST_TUNE_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "host_tune.sh"
+
+
+def _host_tune_available() -> bool:
+    """True when the sudoers grant from a previous host_tune.sh run lets the
+    dashboard re-run it without a password, turning suggestions into buttons.
+    """
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--dry-run"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _capacity_context() -> dict[str, Any]:
+    info = hostinfo.probe()
+    rows = hostinfo.checklist(info)
+    has_actions = any(r["state"] == "action" for r in rows)
+    return {
+        "hw_summary": hostinfo.summary(info),
+        "hw_complete": info.complete,
+        "hw_hard_max": hostinfo.hard_max(info) if info.complete else None,
+        "hw_recs": hostinfo.recommendations(info),
+        "hw_checklist": rows,
+        "hw_tune_button": has_actions and info.systemd and _host_tune_available(),
+        "hw_current": settings.max_concurrent_sessions,
+    }
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     entries = _read_env_file()
@@ -721,28 +766,69 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(
         request,
         "settings.html",
-        context={"groups": groups, "restart_failed": restart_failed},
+        context={
+            "groups": groups,
+            "restart_failed": restart_failed,
+            **_capacity_context(),
+        },
+    )
+
+
+@router.post("/settings/host-tune")
+async def settings_host_tune(request: Request, share: str = Form("most")):
+    if share not in hostinfo.SHARE_PRESETS:
+        share = "most"
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--share", share],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = (result.stdout + result.stderr).strip()
+        ok = result.returncode == 0
+    except Exception as e:
+        output = str(e)
+        ok = False
+    entries = _read_env_file()
+    groups = [
+        {
+            "title": title,
+            "rows": [
+                {
+                    "key": k,
+                    "value": entries.get(k, ""),
+                    "present": k in entries,
+                    "secret": _is_secret_var(k),
+                }
+                for k in keys
+            ],
+        }
+        for title, keys in _ENV_GROUPS
+    ]
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        context={
+            "groups": groups,
+            "restart_failed": False,
+            "host_tune_output": output,
+            "host_tune_ok": ok,
+            **_capacity_context(),
+        },
     )
 
 
 def _schedule_restart() -> None:
-    async def _go() -> None:
-        await asyncio.sleep(0.7)
-        try:
-            subprocess.Popen(
-                ["sudo", "-n", "systemctl", "restart", "browser-use.service"]
-            )
-        except Exception:
-            logger.warning("systemctl restart failed", exc_info=True)
-        # @nonobvious(forced-by): under systemd a non-zero exit revives the
-        # service even where sudo is unavailable; without systemd the process
-        # simply stops, which is what "restart" honestly means there.
-        await asyncio.sleep(5)
-        os._exit(1)
+    schedule_restart()
 
-    task = asyncio.get_running_loop().create_task(_go())
-    _dispatched_tasks.add(task)
-    task.add_done_callback(_dispatched_tasks.discard)
+
+def write_env_file(path: Path, entries: dict[str, str]) -> None:
+    """Atomic .env replacement — a crash mid-write must never truncate the only
+    copy of the host's secrets."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(f"{k}={v}" for k, v in entries.items()) + "\n")
+    os.replace(tmp, path)
 
 
 @router.post("/settings")
@@ -753,7 +839,42 @@ async def settings_save(request: Request):
         k, v = str(k).strip(), str(v).strip()
         if k and v:
             new[k] = v
-    _ENV_PATH.write_text("\n".join(f"{k}={v}" for k, v in new.items()) + "\n")
+    if pool.active_count > 0 and not form.get("force"):
+        grouped_keys: set[str] = set()
+        groups = []
+        for title, keys in _ENV_GROUPS:
+            grouped_keys.update(keys)
+            groups.append(
+                {
+                    "title": title,
+                    "rows": [
+                        {
+                            "key": k,
+                            "value": new.get(k, ""),
+                            "present": k in new,
+                            "secret": _is_secret_var(k),
+                        }
+                        for k in keys
+                    ],
+                }
+            )
+        other = [
+            {"key": k, "value": v, "present": True, "secret": _is_secret_var(k)}
+            for k, v in new.items()
+            if k not in grouped_keys
+        ]
+        if other:
+            groups.append({"title": "Other", "rows": other})
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            context={
+                "groups": groups,
+                "restart_failed": False,
+                "active_sessions": pool.active_count,
+            },
+        )
+    write_env_file(_ENV_PATH, new)
     _schedule_restart()
     return templates.TemplateResponse(
         request, "restarting.html", context={"saved_at": int(time.time())}
@@ -988,6 +1109,7 @@ _VNC_VIEW_HTML = """<!doctype html>
 async def vnc_view(request: Request, session_id: str):
     if not dashboard_auth_ok(request.headers.get("authorization"), request):
         return Response(status_code=401, headers={"WWW-Authenticate": "Basic"})
+    await _ensure_vnc_for_session(session_id)
     return HTMLResponse(_VNC_VIEW_HTML)
 
 
@@ -998,6 +1120,8 @@ async def vnc_asset(request: Request, session_id: str, asset: str):
     port = await _novnc_port_for_session(session_id)
     if port is None:
         return Response(status_code=404)
+    if not await _ensure_vnc_for_session(session_id):
+        return Response(status_code=502)
     target = asset or "vnc.html"
     async with httpx.AsyncClient() as client:
         try:
@@ -1059,6 +1183,9 @@ async def vnc_ws(websocket: WebSocket, session_id: str, ws_path: str):
         return
     port = await _novnc_port_for_session(session_id)
     if port is None:
+        await websocket.close(code=1011)
+        return
+    if not await _ensure_vnc_for_session(session_id):
         await websocket.close(code=1011)
         return
     requested = websocket.headers.get("sec-websocket-protocol", "")

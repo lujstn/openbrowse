@@ -150,6 +150,56 @@
     to apply the changes.
   </div>
   {% endif %}
+  {% if active_sessions %}
+  <div class="failed-banner">
+    Not saved: {{ active_sessions }} session{{ "s" if active_sessions != 1 else "" }}
+    currently running would be killed by the restart. Wait for
+    {{ "them" if active_sessions != 1 else "it" }} to finish, or tick
+    "restart anyway" below to save and restart regardless.
+  </div>
+  {% endif %}
+  {% if host_tune_output %}
+  <div class="failed-banner" style="{% if host_tune_ok %}border-color:#14532d;background:#0f1c12;color:#4ade80;{% endif %}">
+    <strong>Host tuning {{ "applied" if host_tune_ok else "failed" }}.</strong>
+    <pre style="margin:8px 0 0;white-space:pre-wrap;font-size:12px;color:inherit;">{{ host_tune_output }}</pre>
+  </div>
+  {% endif %}
+  {% if hw_complete %}
+  <div class="settings-card" id="capacity-card">
+    <div class="group-title">Capacity</div>
+    <p class="settings-note" style="margin-top:0">Detected: <strong style="color:#cbd5e1">{{ hw_summary }}</strong></p>
+    <p class="settings-note">How much of this machine can OpenBrowse use?</p>
+    <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
+      <label class="settings-note"><input type="radio" name="hw-share" value="all" data-rec="{{ hw_recs.all }}" /> All of it &mdash; nothing else important runs here</label>
+      <label class="settings-note"><input type="radio" name="hw-share" value="most" checked data-rec="{{ hw_recs.most }}" /> Most of it &mdash; leave some headroom</label>
+      <label class="settings-note"><input type="radio" name="hw-share" value="shared" data-rec="{{ hw_recs.shared }}" /> Share it &mdash; other services matter too</label>
+    </div>
+    <label class="settings-note" style="display:block; margin-bottom:10px;">
+      Concurrent sessions (1&ndash;{{ hw_hard_max }}, currently {{ hw_current }})
+      <input type="range" id="hw-slider" min="1" max="{{ hw_hard_max }}" value="{{ hw_current }}" style="width:220px; vertical-align:middle;" />
+      <output id="hw-value">{{ hw_current }}</output>
+    </label>
+    <p class="settings-note">Moving the slider updates <code>MAX_CONCURRENT_SESSIONS</code> below; save to apply.</p>
+    {% if hw_checklist %}
+    <div class="group-title" style="margin-top:14px">Host tuning</div>
+    {% for row in hw_checklist %}
+    <p class="settings-note" style="margin:4px 0">
+      {% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9432;{% endif %}
+      <strong style="color:#cbd5e1">{{ row.label }}</strong> &mdash; {{ row.detail }}
+    </p>
+    {% endfor %}
+    {% if hw_tune_button %}
+    <form method="post" action="/settings/host-tune" style="margin-top:8px">
+      <input type="hidden" name="share" id="hw-share-hidden" value="most" />
+      <button class="save-btn" type="submit">Apply recommended tuning</button>
+    </form>
+    {% elif hw_checklist | selectattr("state", "equalto", "action") | list %}
+    <p class="settings-note">Apply the recommended items once from a shell on this machine (this also enables the button for next time):</p>
+    <pre style="font-size:12px">sudo bash scripts/host_tune.sh --share most</pre>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
   <form id="settings-form" method="post" action="/settings">
     {% for group in groups %}
     <div class="settings-card">
@@ -191,7 +241,12 @@
         Values are written to .env; clearing a value removes the variable.
         Saving restarts the server, which interrupts any sessions currently running.
       </span>
-      <button class="save-btn" type="submit" disabled>Save and restart</button>
+      {% if active_sessions %}
+      <label class="settings-note" style="white-space: nowrap">
+        <input type="checkbox" name="force" value="1" /> restart anyway
+      </label>
+      {% endif %}
+      <button class="save-btn" type="submit" {% if not active_sessions %}disabled{% endif %}>Save and restart</button>
     </div>
   </form>
 </div>
@@ -218,6 +273,37 @@
     }
     form.addEventListener("input", function () {
       save.disabled = !dirty();
+    });
+  })();
+  (function () {
+    var slider = document.getElementById("hw-slider");
+    if (!slider) return;
+    var out = document.getElementById("hw-value");
+    var hidden = document.getElementById("hw-share-hidden");
+    var form = document.getElementById("settings-form");
+    function mcsInput() {
+      var keys = form.querySelectorAll('input[name="key"]');
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i].value === "MAX_CONCURRENT_SESSIONS") {
+          return keys[i].parentElement.querySelector('input[name="value"]');
+        }
+      }
+      return null;
+    }
+    slider.addEventListener("input", function () {
+      out.textContent = slider.value;
+      var target = mcsInput();
+      if (target) {
+        target.value = slider.value;
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    document.querySelectorAll('input[name="hw-share"]').forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        slider.value = radio.dataset.rec;
+        slider.dispatchEvent(new Event("input"));
+        if (hidden) hidden.value = radio.value;
+      });
     });
   })();
 </script>

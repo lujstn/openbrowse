@@ -27,7 +27,14 @@ from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 from app.agent import cost, live
 from app import system_metrics
 from app.agent.code_stream import CodeStreamObserver
-from app.agent.activity import clear_activity, set_activity
+from app.agent.activity import (
+    clear_activity,
+    release_profile,
+    session_ended,
+    session_started,
+    set_activity,
+    try_claim_profile,
+)
 from app.agent.leak_repair import (
     is_missing_action_error,
     mistyped_action_params,
@@ -51,7 +58,6 @@ from app.agent.tools import (
     register_tab_tools,
 )
 from app.browser.factory import display_manager, launch_chrome, stop_chrome
-from app.browser.vnc import wait_for_novnc
 from app.config import settings
 from app.db import crud
 
@@ -1902,6 +1908,8 @@ async def run_agent_session(session_id: str) -> None:
 
     # Load profile storage state path
     storage_state_path: str | None = None
+    claimed_profile_id: str | None = None
+    profile = None
     if session.get("profile_id"):
         profile = await crud.get_profile(session["profile_id"])
         if profile and profile.get("storage_state_path"):
@@ -1913,12 +1921,31 @@ async def run_agent_session(session_id: str) -> None:
                 last_used_at=datetime.now(timezone.utc).isoformat(),
             )
 
+    if profile:
+        holder = try_claim_profile(profile["id"], session_id)
+        if holder is not None:
+            if north_star_task is not None and not north_star_task.done():
+                north_star_task.cancel()
+            await crud.update_session(session_id, status="error")
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="browser_action_error",
+                summary=(
+                    f"Profile is in use by running session {holder} — two "
+                    "concurrent sessions on one profile would overwrite each "
+                    "other's cookies. Retry when that session finishes."
+                ),
+            )
+            return
+        claimed_profile_id = profile["id"]
+
+    session_started(session_id)
     slot = None
     browser_session = None
     entry: live.LiveSession | None = None
     try:
         slot = await display_manager.allocate()
-        await wait_for_novnc(slot.novnc_port)
         cdp_url = await launch_chrome(slot)
 
         live_url = f"/vnc/{session_id}/view?path=vnc/{session_id}/websockify"
@@ -2516,6 +2543,9 @@ async def run_agent_session(session_id: str) -> None:
             data=traceback.format_exc(),
         )
     finally:
+        session_ended(session_id)
+        if claimed_profile_id:
+            release_profile(claimed_profile_id, session_id)
         clear_activity(session_id)
         live.unregister(entry)
         if north_star_task is not None and not north_star_task.done():

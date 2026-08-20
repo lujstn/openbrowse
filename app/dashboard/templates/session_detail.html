@@ -827,7 +827,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const QUEUED_HTML =
     '<div class="no-live queued"><span class="queued-dot"></span><div class="queued-title">Queued</div>' +
     '<div class="queued-sub">Waiting for a free browser slot. Up to ' +
-    (document.getElementById("browser-panel").dataset.maxConcurrent || "5") +
+    (document.getElementById("browser-panel").dataset.maxConcurrent || "1") +
     " sessions run at once; this one starts automatically when a slot frees up.</div></div>";
 
   const followupForm = document.getElementById("followup-form");

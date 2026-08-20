@@ -40,7 +40,7 @@ async def client():
         yield c
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_create_session_with_task(mock_submit, client):
     resp = await client.post(
         "/v3/sessions",
@@ -58,6 +58,37 @@ async def test_create_session_with_task(mock_submit, client):
     assert [m["summary"] for m in messages if m["type"] == "user_message"] == [
         "Go to google.com"
     ]
+
+
+async def test_start_returns_while_pool_is_full(client, monkeypatch):
+    import asyncio
+
+    import app.agent.pool as pool_mod
+    from app.agent.pool import SessionPool
+
+    release = asyncio.Event()
+
+    async def fake_run(session_id: str) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
+    busy_pool = SessionPool(max_concurrent=1)
+    monkeypatch.setattr("app.api.sessions.pool", busy_pool)
+
+    first = await client.post("/v3/sessions", json={"task": "one"})
+    assert first.status_code == 200
+    await asyncio.sleep(0)
+    assert busy_pool.active_count == 1
+
+    second = await asyncio.wait_for(
+        client.post("/v3/sessions", json={"task": "two"}), timeout=5
+    )
+    assert second.status_code == 200
+    assert busy_pool.queued_count == 1
+
+    release.set()
+    await asyncio.sleep(0.01)
+    await busy_pool.shutdown()
 
 
 async def test_create_session_without_task(client):
@@ -293,7 +324,7 @@ async def test_rejects_non_finite_budget(client):
         assert resp.status_code == 422, raw
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_rerun_keeps_settings_the_caller_omitted(
     mock_submit, client, setup, monkeypatch
 ):
@@ -327,7 +358,7 @@ async def test_rerun_keeps_settings_the_caller_omitted(
     assert stored["system_prompt_extension"] == "be brief"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_rerun_scales_a_budget_the_caller_resends(
     mock_submit, client, setup, monkeypatch
 ):
@@ -351,7 +382,7 @@ def _clear_live_sessions():
     live._live.clear()
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_followup_continues_a_parked_session(mock_submit, client):
     from types import SimpleNamespace
 
@@ -377,7 +408,7 @@ async def test_followup_continues_a_parked_session(mock_submit, client):
     ]
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_followup_changing_the_model_starts_over(mock_submit, client):
     from types import SimpleNamespace
 
@@ -414,7 +445,7 @@ async def test_followup_changing_the_model_starts_over(mock_submit, client):
     mock_submit.assert_called_once()
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_differently(
     mock_submit, client
 ):
@@ -445,7 +476,7 @@ async def test_followup_keeps_the_agent_when_the_model_is_only_spelled_different
     mock_submit.assert_not_called()
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_followup_accepted_after_a_keepalive_session_was_released(
     mock_submit, client
 ):
@@ -462,7 +493,7 @@ async def test_followup_accepted_after_a_keepalive_session_was_released(
     mock_submit.assert_called_once()
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_followup_rejected_on_a_plain_stopped_session(mock_submit, client):
     from app.db import crud
 
@@ -512,7 +543,7 @@ async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
     assert (await crud.get_session(session["id"]))["status"] == "stopped"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
     mock_submit, client, setup, monkeypatch
 ):
@@ -532,7 +563,7 @@ async def test_a_follow_up_tops_the_budget_up_by_the_session_allowance(
     assert again.json()["maxCostUsd"] == "5.4"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
     mock_submit, client, setup, monkeypatch
 ):
@@ -551,7 +582,7 @@ async def test_a_named_budget_on_a_follow_up_is_an_absolute_ceiling(
     assert again.json()["maxCostUsd"] == "2.0"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_a_named_budget_does_not_become_the_session_allowance(
     mock_submit, client, setup, monkeypatch
 ):
@@ -572,7 +603,7 @@ async def test_a_named_budget_does_not_become_the_session_allowance(
     assert third.json()["maxCostUsd"] == "4.0"
 
 
-@patch("app.api.sessions.pool.submit", new_callable=AsyncMock)
+@patch("app.api.sessions.pool.submit_nowait")
 async def test_a_session_created_without_a_budget_stays_unbudgeted(
     mock_submit, client
 ):

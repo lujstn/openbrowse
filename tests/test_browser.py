@@ -20,7 +20,53 @@ async def test_allocate_display(mock_popen, manager):
     assert slot.display_num == settings.xvfb_base_display
     assert slot.vnc_port == settings.vnc_base_port + settings.xvfb_base_display
     assert slot.cdp_port == settings.cdp_base_port + 0
-    assert mock_popen.call_count == 3  # Xvfb, x11vnc, websockify
+    assert mock_popen.call_count == 1  # Xvfb only; VNC starts lazily on first view
+    assert slot.vnc_proc is None
+    assert slot.novnc_proc is None
+
+
+@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("app.browser.factory.subprocess.Popen")
+async def test_ensure_vnc_starts_once_and_is_idempotent(mock_popen, mock_wait, manager):
+    mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
+    mock_wait.return_value = True
+    slot = await manager.allocate()
+    assert mock_popen.call_count == 1
+
+    assert await manager.ensure_vnc(slot.display_num) is True
+    assert mock_popen.call_count == 3  # + x11vnc, websockify
+    assert slot.vnc_proc is not None
+    assert slot.novnc_proc is not None
+
+    assert await manager.ensure_vnc(slot.display_num) is True
+    assert mock_popen.call_count == 3
+    mock_wait.assert_awaited_once()
+
+
+@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("app.browser.factory.subprocess.Popen")
+async def test_ensure_vnc_false_for_released_slot(mock_popen, mock_wait, manager):
+    mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
+    mock_wait.return_value = True
+    with patch("app.browser.factory.stop_chrome", new=AsyncMock()):
+        slot = await manager.allocate()
+        await manager.release(slot.display_num)
+    assert await manager.ensure_vnc(slot.display_num) is False
+    mock_wait.assert_not_awaited()
+
+
+@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
+@patch("app.browser.factory.subprocess.Popen")
+async def test_ensure_vnc_restarts_dead_processes(mock_popen, mock_wait, manager):
+    mock_popen.side_effect = lambda *a, **k: MagicMock(poll=MagicMock(return_value=None))
+    mock_wait.return_value = True
+    slot = await manager.allocate()
+    await manager.ensure_vnc(slot.display_num)
+    assert mock_popen.call_count == 3
+
+    slot.vnc_proc.poll.return_value = 1  # x11vnc died
+    await manager.ensure_vnc(slot.display_num)
+    assert mock_popen.call_count == 4
 
 
 @patch("app.browser.factory.subprocess.Popen")
@@ -39,21 +85,23 @@ async def test_allocate_multiple(mock_popen, manager, monkeypatch):
     assert s1.cdp_port != s2.cdp_port
 
 
+@patch("app.browser.vnc.wait_for_novnc", new_callable=AsyncMock)
 @patch("app.browser.factory.subprocess.Popen")
-async def test_release_terminates_all_processes(mock_popen, manager):
+async def test_release_terminates_all_processes(mock_popen, mock_wait, manager):
     mock_proc = MagicMock(poll=MagicMock(return_value=None))
     mock_popen.return_value = mock_proc
+    mock_wait.return_value = True
 
     mock_chrome_proc = AsyncMock()
     mock_chrome_proc.returncode = None
 
     with patch("app.browser.factory.stop_chrome", new=AsyncMock()) as mock_stop:
         slot = await manager.allocate()
+        await manager.ensure_vnc(slot.display_num)
         slot.chrome_proc = mock_chrome_proc
         await manager.release(slot.display_num)
         mock_stop.assert_called_once_with(slot)
 
-    # Display processes still terminated
     assert mock_proc.terminate.call_count == 3
 
 
@@ -106,6 +154,36 @@ async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
 
     # Verify wait_for_cdp was called with the port
     mock_wait_cdp.assert_called_once_with(9222)
+
+
+@patch("app.browser.factory.asyncio.create_subprocess_exec", new_callable=AsyncMock)
+@patch("app.browser.factory.wait_for_cdp", new_callable=AsyncMock)
+async def test_launch_chrome_light_flags_env_gated(mock_wait_cdp, mock_create_subproc, monkeypatch):
+    from dataclasses import replace
+
+    import app.browser.factory as factory_mod
+
+    mock_wait_cdp.return_value = None
+    mock_proc = AsyncMock()
+    mock_proc.returncode = None
+    mock_create_subproc.return_value = mock_proc
+
+    mock_cloak = MagicMock()
+    mock_cloak.ensure_binary.return_value = "/usr/bin/cloakbrowser"
+    mock_cloak.get_default_stealth_args.return_value = []
+
+    slot = DisplaySlot(display_num=10, vnc_port=5910, novnc_port=6080, cdp_port=9222)
+    monkeypatch.setattr(
+        factory_mod, "settings", replace(settings, chrome_light_flags=True)
+    )
+    with patch.dict("sys.modules", {"cloakbrowser": mock_cloak}):
+        await launch_chrome(slot)
+
+    args_str = " ".join(mock_create_subproc.call_args.args)
+    assert "--disable-gpu" in args_str
+    assert "--renderer-process-limit=4" in args_str
+    assert "--enable-low-end-device-mode" in args_str
+    assert "site-per-process" not in args_str
 
 
 async def test_stop_chrome_terminates():

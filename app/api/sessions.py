@@ -334,7 +334,7 @@ async def create_session(
             count_step=False,
         )
         if outcome != live.DELIVERED:
-            await pool.submit(body.sessionId)
+            pool.submit_nowait(body.sessionId)
         return _to_session_response(session)
 
     budget = _local_budget(body.maxCostUsd)
@@ -359,7 +359,7 @@ async def create_session(
             summary=body.task[:2000],
             count_step=False,
         )
-        await pool.submit(session["id"])
+        pool.submit_nowait(session["id"])
 
     return _to_session_response(session)
 

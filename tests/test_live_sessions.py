@@ -204,30 +204,32 @@ async def test_pool_submit_reclaims_the_slot_from_a_parked_session(monkeypatch):
     from app.agent import pool as pool_mod
 
     started: list[str] = []
+    entries: dict[str, object] = {}
 
     async def fake_run(session_id: str) -> None:
         started.append(session_id)
+        if session_id == "parked":
+            entry = live.register("parked", SimpleNamespace())
+            entries["parked"] = entry
+            live.park(entry)
+            await entry.release.wait()
+            live.unregister(entry)
 
     monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
     sessions = pool_mod.SessionPool(max_concurrent=1)
 
     # the only slot is held by a session parked between follow-ups
-    await sessions._semaphore.acquire()
-    parked = live.register("parked", SimpleNamespace())
-    live.park(parked)
-
-    async def worker():
-        await parked.release.wait()
-        live.unregister(parked)
-        sessions._semaphore.release()
-
-    holder = asyncio.create_task(worker())
-    await asyncio.wait_for(sessions.submit("fresh"), timeout=1)
-    await holder
+    sessions.submit_nowait("parked")
     for _ in range(100):
-        if started:
+        if "parked" in entries:
             break
         await asyncio.sleep(0.01)
 
-    assert parked.release.is_set()
-    assert started == ["fresh"]
+    sessions.submit_nowait("fresh")
+    for _ in range(100):
+        if started == ["parked", "fresh"]:
+            break
+        await asyncio.sleep(0.01)
+
+    assert entries["parked"].release.is_set()
+    assert started == ["parked", "fresh"]
