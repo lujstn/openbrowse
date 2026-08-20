@@ -243,6 +243,25 @@ def test_canonical_stored_effort_maps_legacy_off():
     assert _canonical_stored_effort("high") == "high"
 
 
+def test_effort_when_unset_prefers_our_pick_over_the_providers():
+    """resolve_default_effort documents what the provider does unprompted;
+    effort_when_unset is what we actually send. They differ where a benchmark
+    said so, and both doors into the app must use the latter."""
+    from openbrowse.agent.runner import effort_when_unset, recommended_effort
+
+    assert resolve_default_effort("gpt-5.6-terra") == "medium"
+    assert recommended_effort("gpt-5.6-terra") == "none"
+    assert effort_when_unset("gpt-5.6-terra") == "none"
+
+    # no recommendation of our own, so the provider's default stands
+    assert recommended_effort("claude-opus-4-8") is None
+    assert effort_when_unset("claude-opus-4-8") == resolve_default_effort("claude-opus-4-8")
+
+    # version punctuation and the [1m] suffix resolve to the same base model
+    assert effort_when_unset("gpt-5-6-terra") == "none"
+    assert effort_when_unset("claude-opus-4-8[1m]") == effort_when_unset("claude-opus-4-8")
+
+
 def test_resolve_default_effort_per_generation():
     assert resolve_default_effort("claude-sonnet-5") == "high"
     assert resolve_default_effort("claude-opus-5") == "high"

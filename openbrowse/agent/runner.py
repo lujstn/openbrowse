@@ -1165,8 +1165,32 @@ def valid_efforts(model: str) -> list[str]:
     return out
 
 
+# @nonobvious(mirrors): the benchmark-backed picks from the README's
+# recommended-models section. Kept here rather than in the dashboard because the
+# API resolves an omitted reasoningEffort through the same table, so the same
+# request run through either door reasons the same way.
+_RECOMMENDED_EFFORT: dict[str, str] = {
+    "claude-sonnet-5": "high",
+    "claude-opus-5": "none",
+    "gpt-5.6-terra": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-luna": "max",
+}
+
+
 def resolve_default_effort(model: str) -> str:
+    """What the provider does when no effort is sent. Not what we send."""
     return model_reasoning(model).default
+
+
+def recommended_effort(model: str) -> str | None:
+    _, model_id = _resolve_model(model)
+    return _RECOMMENDED_EFFORT.get(model_id)
+
+
+def effort_when_unset(model: str) -> str:
+    """The effort a request that named none actually runs at."""
+    return recommended_effort(model) or resolve_default_effort(model)
 
 
 def validate_effort(model: str, effort: str | None) -> str:

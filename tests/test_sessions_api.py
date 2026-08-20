@@ -99,6 +99,9 @@ async def test_create_session_without_task(client):
 
 
 async def test_create_session_resolves_reasoning_default(client):
+    """An omitted reasoningEffort runs at the benchmark-backed pick the dashboard
+    preselects, not at whatever the provider does unprompted, so the same request
+    behaves the same through either door."""
     resp = await client.post("/v3/sessions", json={"model": "claude-sonnet-5"})
     assert resp.status_code == 200
     assert resp.json()["reasoningEffort"] == "high"
@@ -107,13 +110,37 @@ async def test_create_session_resolves_reasoning_default(client):
     assert resp.json()["reasoningEffort"] == "none"
 
     resp = await client.post("/v3/sessions", json={"model": "gpt-5.6-terra"})
-    assert resp.json()["reasoningEffort"] == "medium"
+    assert resp.json()["reasoningEffort"] == "none"
+
+    resp = await client.post("/v3/sessions", json={"model": "gpt-5.6-luna"})
+    assert resp.json()["reasoningEffort"] == "max"
+
+
+async def test_create_session_without_a_model_uses_the_configured_default(client, monkeypatch):
+    """DEFAULT_MODEL has to mean the same thing through the API as it does on the
+    dashboard, effort included, or it is a setting that only half works."""
+    from dataclasses import replace
+
+    import openbrowse.api.sessions as sessions_mod
+    from openbrowse.config import settings as real_settings
+
+    resp = await client.post("/v3/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "gpt-5.6-terra"
+    assert resp.json()["reasoningEffort"] == "none"
+
+    monkeypatch.setattr(
+        sessions_mod, "settings", replace(real_settings, default_model="claude-sonnet-5")
+    )
+    resp = await client.post("/v3/sessions", json={})
+    assert resp.json()["model"] == "claude-sonnet-5"
+    assert resp.json()["reasoningEffort"] == "high"
 
 
 async def test_create_session_accepts_either_version_punctuation(client):
     resp = await client.post("/v3/sessions", json={"model": "gpt-5-6-terra"})
     assert resp.status_code == 200
-    assert resp.json()["reasoningEffort"] == "medium"
+    assert resp.json()["reasoningEffort"] == "none"
 
     resp = await client.post(
         "/v3/sessions",

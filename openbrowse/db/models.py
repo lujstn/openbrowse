@@ -10,7 +10,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'created',
-    model TEXT NOT NULL DEFAULT 'claude-sonnet-5',
+    model TEXT NOT NULL,
     task TEXT,
     title TEXT,
     output TEXT,

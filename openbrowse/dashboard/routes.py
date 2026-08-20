@@ -30,7 +30,8 @@ from openbrowse.agent.pool import pool
 from openbrowse.agent.runner import (
     _category_for,
     model_reasoning,
-    resolve_default_effort,
+    effort_when_unset,
+    recommended_effort,
     validate_effort,
 )
 from openbrowse.api.sessions import _to_session_response
@@ -326,20 +327,9 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-4-6[1m]", "Claude Sonnet 4.6 (1M)"),
 ]
 
-# @nonobvious(mirrors): the benchmark-backed picks from the README's
-# recommended-models section; the dropdown preselects these.
-_RECOMMENDED_EFFORT: dict[str, str] = {
-    "claude-sonnet-5": "high",
-    "claude-opus-5": "none",
-    "gpt-5.6-terra": "none",
-    "gpt-5.6-sol": "none",
-    "gpt-5.6-luna": "max",
-}
-
-
 def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     spec = model_reasoning(model_value)
-    recommended = _RECOMMENDED_EFFORT.get(model_value)
+    recommended = recommended_effort(model_value)
 
     def decorate(value: str, label: str) -> str:
         marks = []
@@ -484,17 +474,18 @@ async def run_page(request: Request):
 @router.post("/run")
 async def run_task(
     task: str = Form(...),
-    model: str = Form("claude-sonnet-5"),
+    model: str = Form(""),
     profile_id: str = Form(""),
     max_cost_usd: float = Form(0.50),
     keep_alive: bool = Form(False),
     reasoning_effort: str = Form("default"),
     output_schema: str = Form(""),
 ):
+    model = model or settings.default_model
     try:
         effort = validate_effort(model, reasoning_effort)
         if effort == "default":
-            effort = resolve_default_effort(model)
+            effort = effort_when_unset(model)
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
 

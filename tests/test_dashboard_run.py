@@ -218,3 +218,13 @@ def test_message_display_result_snippet_card():
     }
     md = message_display(row)
     assert md["result_snippet"].startswith("Read 14 of 14 pages")
+
+
+def test_recommendation_table_covers_only_real_models():
+    """A typo here silently downgrades a model to the provider default rather
+    than failing, so every key must resolve."""
+    from openbrowse.agent.runner import _RECOMMENDED_EFFORT, _resolve_model, valid_efforts
+
+    for model, effort in _RECOMMENDED_EFFORT.items():
+        assert _resolve_model(model)[1]
+        assert effort in valid_efforts(model), f"{model} cannot run at {effort}"

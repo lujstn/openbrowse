@@ -11,6 +11,7 @@ from typing import Any
 
 import aiosqlite
 
+from openbrowse.config import settings
 from openbrowse.db.models import get_db
 
 _SESSION_COLUMNS = {
@@ -60,7 +61,7 @@ def topped_up_budget(session: dict[str, Any]) -> float | None:
 async def create_session(
     *,
     task: str | None = None,
-    model: str = "claude-sonnet-5",
+    model: str | None = None,
     profile_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     sensitive_data: dict[str, str] | None = None,
@@ -72,6 +73,7 @@ async def create_session(
 ) -> dict[str, Any]:
     session_id = _new_id()
     now = _now()
+    model = model or settings.default_model
     db = await get_db()
     try:
         await db.execute(

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from openbrowse.agent import live
 from openbrowse.agent.pool import pool
-from openbrowse.agent.runner import _resolve_model, resolve_default_effort, validate_effort
+from openbrowse.agent.runner import _resolve_model, effort_when_unset, validate_effort
 from openbrowse.auth import require_api_key
 from openbrowse.config import settings
 from openbrowse.db import crud
@@ -33,7 +33,7 @@ _THINKING_LEVEL_MAP = {
 
 class RunTaskRequest(BaseModel):
     task: str | None = None
-    model: str = "claude-sonnet-5"
+    model: str = Field(default_factory=lambda: settings.default_model)
     sessionId: str | None = None
     keepAlive: bool = False
     maxCostUsd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
@@ -154,7 +154,7 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
     return SessionResponse(
         id=row["id"],
         status=row["status"],
-        model=row.get("model", "claude-sonnet-4.6"),
+        model=row.get("model") or settings.default_model,
         title=row.get("title"),
         output=output,
         outputSchema=output_schema,
@@ -206,7 +206,7 @@ def _resolved_effort(model: str, requested: str | None) -> str:
         effort = validate_effort(model, requested or "default")
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return resolve_default_effort(model) if effort == "default" else effort
+    return effort_when_unset(model) if effort == "default" else effort
 
 
 def _same_model(asked: str, stored: str | None) -> bool:

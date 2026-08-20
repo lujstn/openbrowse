@@ -95,6 +95,27 @@ async def test_run_creates_and_dispatches(mock_submit, client):
         await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
 
 
+@patch("openbrowse.dashboard.routes.pool.submit_nowait")
+async def test_run_without_a_model_uses_the_configured_default(mock_submit, client):
+    """The run form always posts a model, but the fallback behind it must be the
+    configured default rather than a literal that drifts from it."""
+    import asyncio
+
+    from openbrowse.dashboard import routes
+    from openbrowse.db import crud
+
+    resp = await client.post(
+        "/run", data={"task": "Go to example.com"}, headers=_basic("admin", "secret-key")
+    )
+    assert resp.status_code == 303
+    session_id = resp.headers["location"].rsplit("/", 1)[-1]
+    stored = await crud.get_session(session_id)
+    assert stored["model"] == "gpt-5.6-terra"
+    assert stored["reasoning_effort"] == "none"
+    if routes._dispatched_tasks:
+        await asyncio.gather(*routes._dispatched_tasks, return_exceptions=True)
+
+
 async def test_vnc_asset_requires_auth(client):
     resp = await client.get("/vnc/some-session-id/vnc.html")
     assert resp.status_code == 401
