@@ -1119,7 +1119,7 @@ async def test_settings_performance_card_renders(client, monkeypatch):
     assert "Performance" in resp.text
     assert "Detected" in resp.text
     assert "detected-chips" in resp.text
-    assert "Suggested for this machine: 4" in resp.text
+    assert "Maximum concurrency suggested for this machine: 4" in resp.text
     assert 'value="MAX_CONCURRENT_SESSIONS"' in resp.text
     assert 'type="number"' in resp.text
     # host tuning and the share presets belong to onboarding, not settings
