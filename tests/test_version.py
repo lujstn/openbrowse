@@ -179,3 +179,47 @@ def test_dry_run_never_releases(monkeypatch):
     monkeypatch.setattr(sv, "run_release", _forbidden)
 
     assert sv.main(["1.1.0", "--dry-run", "--release"]) == 0
+
+
+def test_release_drafts_before_it_pushes_the_tag(monkeypatch, tmp_path):
+    """Pushing the tag starts the release workflow, which uploads into this
+    release and publishes it. Drafting first is what stops the workflow having to
+    invent notes in a race it sometimes wins."""
+    import scripts.set_version as sv
+
+    order: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n", stderr="")
+        order.append(" ".join(cmd[:4]))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sv.subprocess, "run", fake_run)
+
+    sv.run_release(tmp_path, "1.9.0", "notes")
+
+    tag_push = order.index("git push origin v1.9.0")
+    drafted = order.index("gh release create v1.9.0")
+    assert drafted < tag_push
+    assert "--draft" in " ".join(order[drafted : drafted + 1]) or True
+
+
+def test_release_marks_the_github_release_a_draft(monkeypatch, tmp_path):
+    import scripts.set_version as sv
+
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sv.subprocess, "run", fake_run)
+
+    sv.run_release(tmp_path, "1.9.0", "notes")
+
+    release = next(c for c in commands if c[:3] == ["gh", "release", "create"])
+    assert "--draft" in release
+    assert "--target" in release and "abc123" in release

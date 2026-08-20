@@ -46,11 +46,28 @@ logger = logging.getLogger(__name__)
 _ENV_PATH = settings.env_path
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
-    ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
+    (
+        "Authentication",
+        ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD", "ALLOW_INSECURE_NO_AUTH"],
+    ),
     ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
     ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
-    ("Runtime", ["MAX_CONCURRENT_SESSIONS", "CHROME_LIGHT_FLAGS", "DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
+    (
+        "Runtime",
+        [
+            "MAX_CONCURRENT_SESSIONS",
+            "CHROME_LIGHT_FLAGS",
+            "DEFAULT_MODEL",
+            "CLOUD_MAX_COST_FACTOR",
+            "KEEP_ALIVE_IDLE_TIMEOUT",
+        ],
+    ),
+    ("Updates", ["UPDATE_CHECK_HOURS"]),
 ]
+# @nonobvious(forced-by): OPENBROWSE_HOME chooses which .env is read, so it is
+# consulted before that file is loaded. An editable row for it would save a value
+# that can never take effect.
+_ENV_NOT_EDITABLE = frozenset({"OPENBROWSE_HOME"})
 _SECRET_MARKERS = ("KEY", "PASSWORD", "TOKEN", "SECRET")
 
 
@@ -725,13 +742,20 @@ def _capacity_context() -> dict[str, Any]:
     info = hostinfo.probe()
     rows = hostinfo.checklist(info)
     has_actions = any(r["state"] == "action" for r in rows)
+    tune_available = _host_tune_available()
     return {
         "hw_summary": hostinfo.summary(info),
         "hw_complete": info.complete,
         "hw_hard_max": hostinfo.hard_max(info) if info.complete else None,
         "hw_recs": hostinfo.recommendations(info),
         "hw_checklist": rows,
-        "hw_tune_button": has_actions and info.systemd and _host_tune_available(),
+        "hw_tune_button": has_actions and info.systemd and tune_available,
+        # @nonobvious(means): the sudoers grant names host_tune.sh by its full
+        # path, which moves when the package does, so an upgrade can leave a
+        # tuned machine unable to re-tune itself with nothing on screen saying so.
+        "hw_tune_grant_missing": (
+            info.systemd and not tune_available and info.resource_limits_set
+        ),
         "hw_current": settings.max_concurrent_sessions,
         "hw_light_recommended": hostinfo.light_flags_recommended(info),
         "hw_light_on": settings.chrome_light_flags,
@@ -789,7 +813,9 @@ async def settings_page(request: Request):
     for title, keys in _ENV_GROUPS:
         grouped_keys.update(keys)
         groups.append({"title": title, "rows": [row(k) for k in keys]})
-    other = [row(k) for k in entries if k not in grouped_keys]
+    other = [
+        row(k) for k in entries if k not in grouped_keys and k not in _ENV_NOT_EDITABLE
+    ]
     if other:
         groups.append({"title": "Other", "rows": other})
     restart_failed = False
@@ -904,7 +930,7 @@ async def settings_save(request: Request):
         other = [
             {"key": k, "value": v, "present": True, "secret": _is_secret_var(k)}
             for k, v in new.items()
-            if k not in grouped_keys
+            if k not in grouped_keys and k not in _ENV_NOT_EDITABLE
         ]
         if other:
             groups.append({"title": "Other", "rows": other})

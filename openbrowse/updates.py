@@ -15,13 +15,14 @@ import re
 import shutil
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
 from openbrowse import __version__
 from openbrowse.config import settings
+from openbrowse.paths import checkout_root
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +124,15 @@ def detect_install_method() -> tuple[str, list[list[str]] | None]:
     Methods: 'checkout' (git clone), 'uv-tool' (uv tool install), 'pip'
     (pip/uv venv install), 'unknown' (no safe upgrade command).
     """
-    home = settings.home_dir
-    if (home / "pyproject.toml").exists() and (home / ".git").exists():
+    # @nonobvious(must-hold): the upgrade follows the package, never
+    # settings.home_dir. OPENBROWSE_HOME moves the data directory, and keying off
+    # it would aim git pull and uv sync at whatever repository it named.
+    checkout = checkout_root()
+    if checkout is not None and (checkout / ".git").exists():
         uv = _uv_binary()
-        commands: list[list[str]] = [["git", "-C", str(home), "pull", "--ff-only"]]
+        commands: list[list[str]] = [["git", "-C", str(checkout), "pull", "--ff-only"]]
         if uv:
-            commands.append([uv, "sync", "--project", str(home)])
+            commands.append([uv, "sync", "--project", str(checkout)])
         return "checkout", commands
 
     parts = Path(sys.prefix).resolve().parts
@@ -185,6 +189,10 @@ async def install_update() -> tuple[bool, str]:
                     return False, "\n".join(log_parts)
                 except asyncio.TimeoutError:
                     proc.kill()
+                    try:
+                        await proc.wait()
+                    except ProcessLookupError:
+                        pass
                     log_parts.append("timed out after 600s")
                     return False, "\n".join(log_parts)
                 output = raw.decode(errors="replace").strip()

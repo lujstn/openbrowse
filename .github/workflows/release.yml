@@ -19,6 +19,14 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${declared}" >&2
             exit 1
           fi
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Compile check
+        run: PYTHONPATH=. uv run python -m compileall -q openbrowse tests scripts
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests
+        run: PYTHONPATH=. uv run pytest -q
       - name: Build sdist and wheel
         run: uv build
       - uses: actions/upload-artifact@v4
@@ -40,8 +48,12 @@ jobs:
       - name: Publish to PyPI (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
 
-  attach-to-release:
-    needs: build
+  # scripts/set_version.py creates the release as a draft before pushing the tag
+  # that starts this workflow, so the maintainer's notes are already in place and
+  # nothing here has to invent them. Publishing is the last step, which means a
+  # release only ever becomes visible once the tests and the PyPI upload passed.
+  publish-release:
+    needs: [build, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -50,7 +62,14 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Attach artifacts to the GitHub release
+      - name: Attach artifacts and publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" \
+                 --repo "${GITHUB_REPOSITORY}" \
+                 --title "OpenBrowse ${GITHUB_REF_NAME}" \
+                 --verify-tag --draft --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

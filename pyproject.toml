@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openbrowse"
-version = "1.8.2"
+version = "1.8.3"
 description = "Self-hosted AI browser automation server with a live dashboard, built for small machines like the Raspberry Pi"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -45,13 +45,19 @@ Issues = "https://github.com/lujstn/openbrowse/issues"
 openbrowse = "openbrowse.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "httpx"]
+dev = ["pytest", "pytest-asyncio", "httpx", "ruff"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["openbrowse"]
 
 [tool.hatch.build.targets.sdist]
 include = ["openbrowse", "tests", "scripts", "README.md", "LICENSE", "CITATION.cff"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

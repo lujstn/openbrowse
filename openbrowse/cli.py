@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,8 +20,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     uvicorn.run(
         "openbrowse.main:app",
-        host=args.host or settings.host,
-        port=args.port or settings.port,
+        # @nonobvious(must-hold): `is None`, not `or`. Port 0 is the request for
+        # an ephemeral port, and `or` would quietly serve the default instead.
+        host=settings.host if args.host is None else args.host,
+        port=settings.port if args.port is None else args.port,
     )
     return 0
 
@@ -34,8 +37,8 @@ def _cmd_start(args: argparse.Namespace) -> int:
             "registered to start automatically on boot. Running in the "
             "foreground instead (Ctrl+C stops it)."
         )
-        return _cmd_serve(args)
-    ok, message = service.start()
+        return _cmd_serve(argparse.Namespace(host=None, port=None))
+    ok, message = service.start(reinstall=args.reinstall_unit)
     print(message)
     return 0 if ok else 1
 
@@ -109,13 +112,21 @@ def _cmd_update(_: argparse.Namespace) -> int:
 
 
 def _cmd_tune(args: argparse.Namespace) -> int:
+    from openbrowse.hostinfo import UNIT_NAME
+
     script = Path(__file__).resolve().parent / "scripts" / "host_tune.sh"
-    command = ["bash", str(script), "--share", args.share]
+    command = ["bash", str(script), "--share", args.share, "--service", UNIT_NAME]
     if args.dry_run:
         command.append("--dry-run")
     if os.geteuid() != 0:
         command = ["sudo", *command]
-    os.execvp(command[0], command)
+    try:
+        # @nonobvious(forced-by): output is left uncaptured so sudo's password
+        # prompt reaches the terminal.
+        return subprocess.run(command).returncode
+    except OSError as exc:
+        print(f"Could not run {command[0]}: {exc}", file=sys.stderr)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,8 +143,11 @@ def main(argv: list[str] | None = None) -> int:
         "start",
         help="run as a service that starts automatically on boot (systemd)",
     )
-    start.add_argument("--host", default=None, help=argparse.SUPPRESS)
-    start.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
+    start.add_argument(
+        "--reinstall-unit",
+        action="store_true",
+        help="overwrite the existing systemd unit with a freshly generated one",
+    )
     start.set_defaults(func=_cmd_start)
 
     stop = sub.add_parser("stop", help="stop the service")

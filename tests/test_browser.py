@@ -1,10 +1,9 @@
 """Browser factory tests -- only test logic, not actual Xvfb/VNC."""
 
-import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from openbrowse.browser.factory import DisplayManager, DisplaySlot, launch_chrome, stop_chrome, wait_for_cdp
+from openbrowse.browser.factory import DisplayManager, DisplaySlot, launch_chrome, stop_chrome
 from openbrowse.config import settings
 
 

@@ -1439,8 +1439,6 @@ def test_saved_links_skip_offhost_for_no_args_reads() -> None:
 
 
 async def test_read_pages_default_wave_size_is_six(monkeypatch) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     events: list[str] = []
 
     async def progress(msg: str) -> None:
@@ -1786,7 +1784,6 @@ def test_scan_link_map_reports_zero_frames_instead_of_silent_empty() -> None:
 async def test_find_links_retries_then_errors_honestly_when_frame_missing(
     monkeypatch,
 ) -> None:
-    import types as _t
 
     import openbrowse.agent.tools as tools_mod
     from browser_use import Tools
@@ -2441,8 +2438,6 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
 
 
 async def test_lone_frame_fallback_flagged_and_retried(monkeypatch) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     good = "https://x.com/good"
     flaky = "https://x.com/flaky"
     attempts = {"n": 0}
@@ -2496,8 +2491,6 @@ async def test_lone_frame_fallback_flagged_and_retried(monkeypatch) -> None:
 async def test_lone_frame_fallback_fails_honestly_when_unrecoverable(
     monkeypatch,
 ) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     good = "https://x.com/good"
     flaky = "https://x.com/flaky"
 
@@ -2840,7 +2833,6 @@ async def test_pressure_baseline_is_task_scoped(monkeypatch) -> None:
 
 
 async def test_shell_retry_message_carries_pressure_note(monkeypatch) -> None:
-    import openbrowse.agent.tools as tools_mod
     import openbrowse.system_metrics as sm
 
     monkeypatch.setattr(sm, "_psi_cpu_some_avg10", lambda: None)
@@ -3280,8 +3272,6 @@ def test_draft_row_background_upgrades_visual_only_when_richer() -> None:
 async def test_read_pages_targets_sole_embed_host_without_frame_filter(
     monkeypatch,
 ) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     seen_filters: list = []
 
     async def read_one(
@@ -3316,8 +3306,6 @@ async def test_read_pages_targets_sole_embed_host_without_frame_filter(
 
 
 async def test_read_pages_ignores_sole_widget_sized_frame(monkeypatch) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     seen_filters: list = []
 
     async def read_one(
@@ -3342,8 +3330,6 @@ async def test_read_pages_ignores_sole_widget_sized_frame(monkeypatch) -> None:
 
 
 async def test_read_pages_keeps_frameless_when_hosts_ambiguous(monkeypatch) -> None:
-    import openbrowse.agent.tools as tools_mod
-
     seen_filters: list = []
 
     async def read_one(

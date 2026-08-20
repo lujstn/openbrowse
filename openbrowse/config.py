@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import getpass
 import math
 import os
+import pwd
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from openbrowse.paths import checkout_root
+
+
+def invoking_user() -> str:
+    """The human behind this process, seeing through ``sudo``."""
+    return os.environ.get("SUDO_USER", "").strip() or getpass.getuser()
+
+
+def _user_home() -> Path:
+    # @nonobvious(forced-by): under sudo, Path.home() is /root, so an invoking
+    # user's keys and data would be silently replaced by an empty root-owned
+    # copy that the service then runs against.
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if sudo_user:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            pass
+    return Path.home()
 
 
 def _resolve_home() -> Path:
@@ -20,17 +42,19 @@ def _resolve_home() -> Path:
     override = os.environ.get("OPENBROWSE_HOME", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    checkout = Path(__file__).resolve().parent.parent
-    if (checkout / "pyproject.toml").exists():
+    checkout = checkout_root()
+    if checkout is not None:
         return checkout
-    return Path.home() / ".openbrowse"
+    return _user_home() / ".openbrowse"
 
 
 _BASE = _resolve_home()
 ENV_PATH = _BASE / ".env"
 
+# @nonobvious(deliberately-missing): no bare load_dotenv() walking up from the
+# working directory. The console script runs from anywhere, and that walk let an
+# unrelated project's .env supply this server's keys and limits.
 load_dotenv(ENV_PATH)
-load_dotenv()
 
 
 def _update_check_hours() -> float:
@@ -66,7 +90,7 @@ def _cost_factor() -> float:
 
 def _keep_alive_idle_timeout() -> int:
     """Seconds a finished keep-alive session waits, browser still open, for the
-    next follow-up before it closes itself. 0 parks indefinitely — until the
+    next follow-up before it closes itself. 0 parks indefinitely, until the
     session is stopped or its display slot is claimed by a new session.
     """
     raw = os.environ.get("KEEP_ALIVE_IDLE_TIMEOUT", "").strip()
@@ -132,7 +156,9 @@ class Settings:
         default_factory=lambda: os.environ.get("CHROME_LIGHT_FLAGS", "").lower()
         in ("1", "true", "yes")
     )
-    default_model: str = "claude-sonnet-5"
+    default_model: str = field(
+        default_factory=lambda: os.environ.get("DEFAULT_MODEL") or "claude-sonnet-5"
+    )
     stale_session_minutes: int = 15
     reconcile_interval_seconds: int = 60
     novnc_base_port: int = 6080

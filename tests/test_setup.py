@@ -210,3 +210,16 @@ async def test_setup_save_omits_the_light_browser_flag_when_opted_out(client, mo
     resp = await c.post("/setup", data={"api_key": "k1"})
     assert resp.status_code == 200
     assert "CHROME_LIGHT_FLAGS" not in (tmp_path / ".env").read_text()
+
+
+async def test_setup_screen_never_asks_for_credentials_that_do_not_exist_yet(client):
+    """/setup is served before any credential exists. A background call to an
+    authenticated endpoint answers 401 with WWW-Authenticate, which pops the
+    browser's own password box over the first screen a new user ever sees."""
+    c, _ = client
+
+    resp = await c.get("/setup")
+
+    assert resp.status_code == 200
+    assert "/api/update" not in resp.text
+    assert 'id="update-badge"' not in resp.text

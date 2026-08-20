@@ -89,11 +89,25 @@ def run_release(root: Path, version: str, notes: str | None) -> None:
     run(["git", "commit", "-S", "-m", f"chore: {tag}"])
     run(["git", "tag", "-s", tag, "-m", f"OpenBrowse {tag}"])
     run(["git", "push", "origin", "HEAD"])
-    run(["git", "push", "origin", tag])
 
-    release_cmd = ["gh", "release", "create", tag, "--title", f"OpenBrowse {tag}", "--notes-file", "-"]
+    # The release is drafted before the tag is pushed, because pushing the tag
+    # starts the release workflow, which uploads the built artifacts into this
+    # release and then publishes it. Drafting first is what stops the workflow
+    # having to invent notes in a race it sometimes wins.
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=True, cwd=root, capture_output=True, text=True
+    ).stdout.strip()
+    release_cmd = [
+        "gh", "release", "create", tag,
+        "--title", f"OpenBrowse {tag}",
+        "--draft",
+        "--target", head,
+        "--notes-file", "-",
+    ]
     print("+ " + " ".join(release_cmd))
     subprocess.run(release_cmd, check=True, cwd=root, input=(notes or ""), text=True)
+
+    run(["git", "push", "origin", tag])
 
 
 def main(argv: list[str] | None = None) -> int:

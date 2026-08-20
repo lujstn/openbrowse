@@ -246,6 +246,9 @@
     {% elif hw_checklist | selectattr("state", "equalto", "action") | list %}
     <p class="settings-note">Apply the recommended items once from a shell on this machine (this also enables the button for next time):</p>
     <pre style="font-size:12px">openbrowse tune --share most</pre>
+    {% elif hw_tune_grant_missing %}
+    <p class="settings-note">This machine is tuned, but the dashboard can no longer re-run the tuner: the sudoers entry names the script by its full path, and that path moves when OpenBrowse is upgraded. Run it once from a shell to restore the button:</p>
+    <pre style="font-size:12px">openbrowse tune --share most</pre>
     {% endif %}
     {% endif %}
   </div>

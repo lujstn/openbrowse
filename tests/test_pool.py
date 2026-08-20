@@ -2,7 +2,6 @@
 
 import asyncio
 
-import pytest
 
 import openbrowse.agent.pool as pool_mod
 from openbrowse.agent.pool import SessionPool

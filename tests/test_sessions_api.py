@@ -548,9 +548,7 @@ async def test_stop_task_strategy_cancels_the_run_and_leaves_the_session_usable(
 
 @patch("openbrowse.api.sessions.pool.cancel", new_callable=AsyncMock)
 async def test_stop_session_strategy_releases_the_browser(mock_cancel, client):
-    from types import SimpleNamespace
 
-    from openbrowse.agent import live
     from openbrowse.db import crud
 
     session = await crud.create_session(task="first task", keep_alive=True)

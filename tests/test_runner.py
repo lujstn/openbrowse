@@ -11,7 +11,6 @@ import pytest
 
 from openbrowse.agent.runner import (
     _THINKING_BUDGETS,
-    _build_llm,
     _canonical_stored_effort,
     _completion_summary,
     _gated_done_output,

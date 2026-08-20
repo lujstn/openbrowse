@@ -99,9 +99,8 @@ async def test_check_once_survives_http_error():
 
 
 def test_detect_checkout(tmp_path, monkeypatch):
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(updates, "settings", SimpleNamespace(home_dir=tmp_path))
+    monkeypatch.setattr(updates, "checkout_root", lambda: tmp_path)
     monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
 
     method, commands = updates.detect_install_method()
@@ -112,7 +111,7 @@ def test_detect_checkout(tmp_path, monkeypatch):
 
 
 def test_detect_uv_tool(tmp_path, monkeypatch):
-    monkeypatch.setattr(updates, "settings", SimpleNamespace(home_dir=tmp_path))
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
     monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         sys, "prefix", str(tmp_path / ".local/share/uv/tools/openbrowse")
@@ -125,7 +124,7 @@ def test_detect_uv_tool(tmp_path, monkeypatch):
 
 
 def test_detect_pip_venv(tmp_path, monkeypatch):
-    monkeypatch.setattr(updates, "settings", SimpleNamespace(home_dir=tmp_path))
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
     monkeypatch.setattr(sys, "base_prefix", "/usr")
 
@@ -138,7 +137,25 @@ def test_detect_pip_venv(tmp_path, monkeypatch):
 
 
 def test_detect_unknown(tmp_path, monkeypatch):
-    monkeypatch.setattr(updates, "settings", SimpleNamespace(home_dir=tmp_path))
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(sys, "prefix", "/usr")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    monkeypatch.setattr(updates, "_in_user_site", lambda: False)
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "unknown"
+    assert commands is None
+
+
+def test_detect_ignores_openbrowse_home(tmp_path, monkeypatch):
+    """OPENBROWSE_HOME moves the data directory. Keying the upgrade off it would
+    run git pull and uv sync against whatever repository it happened to name."""
+    stranger = tmp_path / "someone-elses-project"
+    (stranger / ".git").mkdir(parents=True)
+    (stranger / "pyproject.toml").write_text("[project]\n")
+    monkeypatch.setattr(updates, "settings", SimpleNamespace(home_dir=stranger))
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
     monkeypatch.setattr(sys, "prefix", "/usr")
     monkeypatch.setattr(sys, "base_prefix", "/usr")
     monkeypatch.setattr(updates, "_in_user_site", lambda: False)

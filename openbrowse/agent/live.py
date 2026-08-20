@@ -1,7 +1,7 @@
 """Live session registry — the handle on sessions whose browser is still running.
 
 A keep-alive session does not end when its task ends: the worker in
-``app.agent.runner`` parks with Chrome, the tabs and the agent's own message
+``openbrowse.agent.runner`` parks with Chrome, the tabs and the agent's own message
 history intact, and waits here for the next thing the user says. Every other
 part of the app talks to that parked worker through this module: the dashboard
 and API deliver follow-ups, the pool evicts a parked session when a new one

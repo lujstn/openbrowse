@@ -1,4 +1,8 @@
-"""The openbrowse console entry point."""
+"""The openbrowse console script: argument handling and subcommand wiring."""
+
+import os
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,3 +84,53 @@ def test_update_skips_when_current(monkeypatch, capsys):
     monkeypatch.setattr(updates, "check_once", fake_check)
     assert cli.main(["update"]) == 0
     assert "already the latest" in capsys.readouterr().out
+
+
+def test_serve_binds_the_ephemeral_port_it_was_asked_for(monkeypatch):
+    """`--port 0` asks the OS for a free port. Falsy-or would serve 8420 instead
+    and collide with the running service."""
+    import openbrowse.cli as cli_mod
+
+    bound: list[tuple] = []
+
+    class FakeUvicorn:
+        @staticmethod
+        def run(app, host, port):
+            bound.append((host, port))
+
+    monkeypatch.setitem(sys.modules, "uvicorn", FakeUvicorn)
+    assert cli_mod.main(["serve", "--port", "0"]) == 0
+    assert bound == [("0.0.0.0", 0)]
+
+
+def test_tune_forwards_the_unit_name_and_returns_the_exit_code(monkeypatch):
+    """The CLI and the dashboard must tune the same unit; a drop-in for a unit
+    that is not running is reported as applied and does nothing."""
+    from openbrowse import hostinfo
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda command: seen.append(command) or SimpleNamespace(returncode=3)
+    )
+
+    assert cli.main(["tune", "--share", "most"]) == 3
+    assert ["--service", hostinfo.UNIT_NAME] == seen[0][-2:]
+
+
+def test_tune_without_sudo_reports_rather_than_traces(monkeypatch, capsys):
+    def no_sudo(command):
+        raise FileNotFoundError(2, "No such file or directory", "sudo")
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cli.subprocess, "run", no_sudo)
+
+    assert cli.main(["tune", "--share", "most"]) == 1
+    assert "Could not run sudo" in capsys.readouterr().err
+
+
+def test_start_does_not_offer_flags_it_would_ignore():
+    """`openbrowse start` writes a unit with a plain `ExecStart=... serve`, so a
+    --port it silently dropped would be a promise the service never keeps."""
+    with pytest.raises(SystemExit):
+        cli.main(["start", "--port", "9000"])

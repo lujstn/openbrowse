@@ -1,34 +1,25 @@
 """systemd service management behind openbrowse start/stop/restart/status."""
 
-import getpass
 from types import SimpleNamespace
 
 import pytest
 
-from openbrowse import cli, service
+from openbrowse import cli, config, hostinfo, service
 from openbrowse.config import settings
 
 
-def test_unit_name_defaults_to_openbrowse(tmp_path):
-    assert service.unit_name(tmp_path) == "openbrowse.service"
-
-
-def test_unit_name_keeps_legacy_unit(tmp_path):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
-    assert service.unit_name(tmp_path) == "browser-use.service"
-
-
-def test_unit_name_prefers_new_unit_over_legacy(tmp_path):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
-    (tmp_path / "openbrowse.service").write_text("[Unit]\n")
-    assert service.unit_name(tmp_path) == "openbrowse.service"
+def test_unit_name_is_the_one_hostinfo_derives_the_tuning_path_from():
+    """Two spellings of the unit name is how tuning silently lands on a unit that
+    is not running, so service.py must not carry its own."""
+    assert service.UNIT_NAME == hostinfo.UNIT_NAME
+    assert hostinfo._CAPACITY_OVERRIDE.endswith(f"{service.UNIT_NAME}.d/50-capacity.conf")
 
 
 def test_unit_content_shape(monkeypatch):
     monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/home/pi/.local/bin/openbrowse")
     content = service.unit_content()
 
-    assert f"User={getpass.getuser()}" in content
+    assert f"User={config.invoking_user()}" in content
     assert "ExecStart=/home/pi/.local/bin/openbrowse serve" in content
     assert f"EnvironmentFile=-{settings.env_path}" in content
     assert "WantedBy=multi-user.target" in content
@@ -62,15 +53,67 @@ def test_start_installs_enables_and_says_boot(tmp_path, sudo_calls, monkeypatch)
     assert "Registered OpenBrowse as a systemd service" in message
 
 
-def test_start_reuses_existing_unit(tmp_path, sudo_calls):
-    (tmp_path / "browser-use.service").write_text("[Unit]\n")
+def test_start_leaves_a_customised_unit_alone(tmp_path, sudo_calls, monkeypatch):
+    """Hand-written units carry Tailscale hooks and resource limits this
+    generator knows nothing about; "start" must not quietly discard them."""
+    monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/usr/local/bin/openbrowse")
+    (tmp_path / "openbrowse.service").write_text(
+        "[Service]\nExecStart=/home/pi/openbrowse/.venv/bin/openbrowse serve\n"
+        "ExecStartPost=+/usr/bin/tailscale funnel --bg 8420\n"
+    )
 
     ok, message = service.start(tmp_path)
 
     assert ok is True
+    assert [c for c, _ in sudo_calls] == [["systemctl", "enable", "--now", "openbrowse.service"]]
+    assert "tailscale" in (tmp_path / "openbrowse.service").read_text()
+    assert "/home/pi/openbrowse/.venv/bin/openbrowse serve" in message
+    assert "--reinstall-unit" in message
+
+
+def test_start_reinstall_replaces_the_unit(tmp_path, sudo_calls, monkeypatch):
+    monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/usr/local/bin/openbrowse")
+    (tmp_path / "openbrowse.service").write_text("[Service]\nExecStart=/gone/openbrowse serve\n")
+
+    ok, message = service.start(tmp_path, reinstall=True)
+
+    assert ok is True
     commands = [c for c, _ in sudo_calls]
-    assert commands == [["systemctl", "enable", "--now", "browser-use.service"]]
-    assert "start automatically every time this machine boots" in message
+    assert commands[0] == ["tee", str(tmp_path / "openbrowse.service")]
+    assert sudo_calls[0][1] == service.unit_content()
+    assert "Rewrote" in message
+
+
+def test_start_says_nothing_when_the_existing_unit_already_matches(tmp_path, sudo_calls, monkeypatch):
+    monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/usr/local/bin/openbrowse")
+    (tmp_path / "openbrowse.service").write_text(service.unit_content())
+
+    ok, message = service.start(tmp_path)
+
+    assert ok is True
+    assert "--reinstall-unit" not in message
+
+
+def test_unit_content_names_the_invoking_user_not_root(monkeypatch, tmp_path):
+    """`sudo openbrowse start` must not bake User=root and /root/.openbrowse into
+    the unit, stranding the config the user actually wrote."""
+    monkeypatch.setenv("SUDO_USER", "pi")
+    monkeypatch.setattr(service, "_openbrowse_binary", lambda: "/usr/local/bin/openbrowse")
+
+    assert "User=pi" in service.unit_content()
+
+
+def test_binary_path_is_not_resolved_through_symlinks(monkeypatch, tmp_path):
+    """An upgrade repoints the launcher symlink; a unit holding the resolved
+    target would start a path that the upgrade just removed."""
+    real = tmp_path / "versioned" / "openbrowse"
+    real.parent.mkdir()
+    real.write_text("")
+    link = tmp_path / "openbrowse"
+    link.symlink_to(real)
+    monkeypatch.setattr(service.shutil, "which", lambda name: str(link))
+
+    assert service._openbrowse_binary() == str(link)
 
 
 def test_start_reports_enable_failure(tmp_path, monkeypatch):
@@ -83,16 +126,16 @@ def test_start_reports_enable_failure(tmp_path, monkeypatch):
     assert ok is False
 
 
-def test_stop_keeps_boot_start_by_default(tmp_path, sudo_calls):
-    ok, message = service.stop(disable=False, systemd_dir=tmp_path)
+def test_stop_keeps_boot_start_by_default(sudo_calls):
+    ok, message = service.stop(disable=False)
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [["systemctl", "stop", "openbrowse.service"]]
     assert "still start automatically on the next boot" in message
 
 
-def test_stop_disable_removes_boot_start(tmp_path, sudo_calls):
-    ok, message = service.stop(disable=True, systemd_dir=tmp_path)
+def test_stop_disable_removes_boot_start(sudo_calls):
+    ok, message = service.stop(disable=True)
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [
@@ -101,8 +144,8 @@ def test_stop_disable_removes_boot_start(tmp_path, sudo_calls):
     assert "no longer start on boot" in message
 
 
-def test_restart(tmp_path, sudo_calls):
-    ok, _ = service.restart(tmp_path)
+def test_restart(sudo_calls):
+    ok, _ = service.restart()
 
     assert ok is True
     assert [c for c, _ in sudo_calls] == [["systemctl", "restart", "openbrowse.service"]]
@@ -120,7 +163,7 @@ def test_cli_start_without_systemd_falls_back_to_serve(monkeypatch, capsys):
 
 def test_cli_start_with_systemd_uses_service(monkeypatch, capsys):
     monkeypatch.setattr(service, "systemd_available", lambda: True)
-    monkeypatch.setattr(service, "start", lambda: (True, "boot message"))
+    monkeypatch.setattr(service, "start", lambda reinstall=False: (True, "boot message"))
 
     assert cli.main(["start"]) == 0
     assert "boot message" in capsys.readouterr().out

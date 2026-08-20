@@ -433,7 +433,6 @@ async def test_settings_restart_outcome_banners(client, tmp_path, monkeypatch):
 async def test_followup_message_redispatches_idle_keepalive_session(
     client, monkeypatch
 ):
-    from unittest.mock import AsyncMock
 
     from openbrowse.db import crud
 
@@ -460,7 +459,6 @@ async def test_followup_message_redispatches_idle_keepalive_session(
 
 
 async def test_followup_rejected_for_non_keepalive_or_busy(client, monkeypatch):
-    from unittest.mock import AsyncMock
 
     from openbrowse.db import crud
 
@@ -626,7 +624,6 @@ async def test_followup_rejected_while_the_agent_is_mid_task(client, monkeypatch
 
 async def test_stop_releases_a_parked_session(client, monkeypatch):
     from types import SimpleNamespace
-    from unittest.mock import MagicMock
 
     from openbrowse.agent import live
     from openbrowse.db import crud
@@ -667,7 +664,6 @@ async def test_session_page_offers_a_follow_up_after_the_browser_is_gone(client)
 async def test_followup_message_tops_the_session_budget_back_up(client, monkeypatch):
     """The follow-up box is where keep-alive is actually used, so a conversation
     started from the dashboard must not strangle itself as its pot drains."""
-    from unittest.mock import AsyncMock
 
     from openbrowse.db import crud
 
@@ -1093,6 +1089,24 @@ def _capacity_info(**over):
         resource_limits_set=False,
     )
     return _replace(base, **over)
+
+
+async def test_tuned_machine_says_why_its_tuning_button_vanished(client, monkeypatch):
+    """The sudoers grant names host_tune.sh by full path, so upgrading the
+    package silently revokes it. Reading that as "the upgrade broke tuning" is
+    the natural conclusion unless the page says otherwise."""
+    monkeypatch.setattr(
+        "openbrowse.hostinfo.probe",
+        lambda: _capacity_info(
+            resource_limits_set=True, psi_available=True, root_on_sd=False
+        ),
+    )
+    monkeypatch.setattr("openbrowse.dashboard.routes._host_tune_available", lambda: False)
+
+    resp = await client.get("/settings", headers=_basic("admin", "secret-key"))
+
+    assert "no longer re-run the tuner" in resp.text
+    assert "openbrowse tune --share most" in resp.text
 
 
 async def test_settings_capacity_card_renders(client, monkeypatch):

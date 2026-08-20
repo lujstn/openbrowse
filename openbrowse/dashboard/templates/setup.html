@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Set up OpenBrowse{% endblock %}
+{# /setup is the one page served before any credential exists, and /api/update
+   answers 401 with WWW-Authenticate, which pops a browser password box. #}
+{% block update_badge %}{% endblock %}
 {% block content %}
 {% if done %}
   <h1>OpenBrowse is configured</h1>

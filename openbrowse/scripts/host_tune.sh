@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # @nonobvious(mirrors): percentages must stay in sync with SHARE_PRESETS in
-# app/hostinfo.py — the dashboard shows recommendations computed from those.
+# openbrowse/hostinfo.py — the dashboard shows recommendations computed from those.
 case "$SHARE" in
   all) SHARE_PCT=90 ;;
   most) SHARE_PCT=70 ;;
@@ -97,11 +97,15 @@ fi
 
 SUDOERS_FILE="$SUDOERS_DIR/openbrowse-hosttune"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-SUDOERS_LINE="$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/bash $SCRIPT_PATH *"
-if [[ -f "$SUDOERS_FILE" ]] && grep -qF "$SCRIPT_PATH" "$SUDOERS_FILE"; then
+SYSTEMCTL_PATH="$(command -v systemctl || echo /usr/bin/systemctl)"
+# @nonobvious(must-hold): the dashboard restarts the service with `sudo -n
+# systemctl restart`, which without this line always fails and falls back to
+# exiting so systemd respawns the process.
+SUDOERS_LINE="$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/bash $SCRIPT_PATH *, $SYSTEMCTL_PATH restart $SERVICE"
+if [[ -f "$SUDOERS_FILE" ]] && grep -qF "$SUDOERS_LINE" "$SUDOERS_FILE"; then
   echo "ok: sudoers entry already present ($SUDOERS_FILE)"
 elif [[ $DRY_RUN -eq 1 ]]; then
-  echo "would: write $SUDOERS_FILE allowing $SERVICE_USER to re-run this script"
+  echo "would: write $SUDOERS_FILE allowing $SERVICE_USER to re-run this script and restart $SERVICE"
 else
   printf '%s\n' "$SUDOERS_LINE" > "$SUDOERS_FILE"
   chmod 0440 "$SUDOERS_FILE"
