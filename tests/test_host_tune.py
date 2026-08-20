@@ -24,6 +24,12 @@ def _run(tmp_path, *args, meminfo_kb=16 * 1024 * 1024, pi=True, psi=False):
     psi_file = tmp_path / "psi"
     if psi:
         psi_file.write_text("some avg10=0.00\n")
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir(exist_ok=True)
+    for tool in ("systemctl", "visudo"):
+        stub = stub_bin / tool
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
     env.update(
         HT_SYSTEMD_DIR=str(systemd_dir),
         HT_CMDLINE=str(cmdline),
@@ -31,7 +37,7 @@ def _run(tmp_path, *args, meminfo_kb=16 * 1024 * 1024, pi=True, psi=False):
         HT_MEMINFO=str(meminfo),
         HT_PSI_CPU=str(psi_file),
         HT_DEVICE_TREE_MODEL=str(model),
-        PATH="/usr/bin:/bin",
+        PATH=f"{stub_bin}:/usr/bin:/bin",
     )
     proc = subprocess.run(
         ["bash", str(_SCRIPT), *args], env=env, capture_output=True, text=True
