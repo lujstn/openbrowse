@@ -683,6 +683,54 @@
         opacity: 0.4;
       }
 
+      /* ---------- download gate ---------- */
+      .dl-box {
+        border: 1px solid var(--ob-border);
+        border-radius: var(--ob-radius-md);
+        background: var(--ob-bg);
+        padding: 13px 14px;
+        margin-top: 12px;
+      }
+      .dl-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 9px;
+      }
+      .dl-status {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .dl-status.is-ok {
+        color: var(--ob-success);
+      }
+      .dl-detail {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 11px;
+        color: var(--ob-text-faint);
+      }
+      .dl-bar {
+        height: 5px;
+        border-radius: 3px;
+        background: var(--ob-surface-raised);
+        overflow: hidden;
+      }
+      .dl-bar span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--ob-accent);
+        border-radius: 3px;
+        transition: width 0.4s var(--ob-ease-out);
+      }
+      .dl-bar span.is-done {
+        background: var(--ob-success);
+      }
+      #prefetch-checks {
+        margin-bottom: 2px;
+      }
+
       /* ---------- done ---------- */
       .done-wrap {
         width: min(580px, 100%);
@@ -777,48 +825,20 @@
     <div class="done-wrap">
       <div class="card">
         <h1><span class="done-tick">&#10003;</span> OpenBrowse is configured</h1>
-        <p>Your <code>.env</code> has been written with your API key, provider keys and capacity settings. Sign in to the dashboard as <code>admin</code> with your dashboard password, and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with your API key.</p>
+        <p>Your <code>.env</code> has been written with your API key, provider keys and capacity settings.</p>
         {% if hw_systemd %}
-        <p>Restarting the service loads your capacity settings (session limit and browser profile) and takes a few seconds. You can also skip it and restart later; the dashboard works either way.</p>
-        <div style="display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap">
-          <form method="post" action="/setup/restart" style="margin: 0">
-            <button type="submit" class="btn btn-primary">Restart now</button>
-          </form>
-          <a href="/" class="btn btn-ghost">Skip for now &mdash; open the dashboard</a>
-        </div>
-        <p style="font-size: 11.5px; color: #666; margin-top: 10px">If you skip, your capacity settings apply on the next restart.</p>
+        <p>Restart the service to load the full configuration, then sign in as <code>admin</code> with your dashboard password.</p>
+        <form method="post" action="/setup/restart" style="margin-top: 14px">
+          <button type="submit" class="btn btn-primary">Restart now</button>
+        </form>
         {% else %}
-        <p>Restart the server when convenient to load your capacity settings:</p>
+        <p>Restart the server to load the full configuration:</p>
         <pre>sudo systemctl restart openbrowse.service
 # or, if you run it manually, stop and re-run uvicorn</pre>
+        <p>Then sign in to the dashboard as <code>admin</code> with your dashboard password, and point <code>browser-use-sdk</code> at <code>http://&lt;this-host&gt;:8420/v3</code> with your API key.</p>
         <a href="/" class="btn btn-ghost" style="margin-top: 6px">Open the dashboard</a>
         {% endif %}
       </div>
-
-      {% set actions = hw_checklist | selectattr("state", "equalto", "action") | list %}
-      {% if hw_checklist %}
-      <div class="card" style="margin-top: 16px">
-        <h1 style="font-size: 15px; margin-bottom: 6px">Optional: tune the host</h1>
-        <p style="font-size: 12.5px; color: var(--ob-text-muted); line-height: 1.6; margin-bottom: 4px">Entirely optional, and nothing here blocks you. These host-level tweaks help this machine run browser sessions smoothly; you can apply them now, later from Settings, or never.</p>
-        <ul class="checklist" id="tuning-checklist">
-          {% for row in hw_checklist %}
-          <li data-key="{{ row.key }}">
-            <span class="state {{ row.state }}">{% if row.state == "ok" %}&#10003;{% elif row.state == "action" %}&#9679;{% else %}&#9675;{% endif %}</span>
-            <span><strong>{{ row.label }}</strong>{% if row.state == "action" %} (suggested){% endif %} &mdash; {{ row.detail }}</span>
-          </li>
-          {% endfor %}
-        </ul>
-        {% if actions %}
-        <p style="font-size: 12.5px; color: var(--ob-text-muted); margin-top: 10px">To apply the suggested items, run this in a terminal on this machine, then re-check:</p>
-        <pre>{{ tune_command }}</pre>
-        <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px">
-          <button type="button" class="btn btn-ghost btn-small" id="tuning-recheck">I&rsquo;ve run it &mdash; re-check</button>
-          <span id="tuning-recheck-status" style="font-size: 11.5px; color: var(--ob-text-faint)"></span>
-        </div>
-        <p style="font-size: 11.5px; color: #666; margin-top: 10px">It is safe to re-run, and running it once also lets the Settings page apply future tuning changes at the click of a button.</p>
-        {% endif %}
-      </div>
-      {% endif %}
 
       <div class="card" style="margin-top: 16px">
         <h2 style="margin-top: 0">Reach it from anywhere (optional)</h2>
@@ -831,39 +851,9 @@ sudo tailscale funnel --bg 8420</pre>
       </div>
     </div>
     <script>
-      (function () {
-        try {
-          sessionStorage.removeItem("ob-setup-state");
-        } catch (e) {}
-        var btn = document.getElementById("tuning-recheck");
-        if (!btn) return;
-        var status = document.getElementById("tuning-recheck-status");
-        btn.addEventListener("click", function () {
-          status.textContent = "Checking\u2026";
-          fetch("/setup/tuning-status", { credentials: "same-origin" })
-            .then(function (r) {
-              if (!r.ok) throw new Error("http " + r.status);
-              return r.json();
-            })
-            .then(function (res) {
-              res.checklist.forEach(function (row) {
-                var li = document.querySelector('#tuning-checklist li[data-key="' + row.key + '"]');
-                if (!li) return;
-                var state = li.querySelector(".state");
-                state.className = "state " + row.state;
-                state.innerHTML = row.state === "ok" ? "&#10003;" : row.state === "action" ? "&#9679;" : "&#9675;";
-              });
-              status.style.color = res.actions_remaining === 0 ? "var(--ob-success)" : "var(--ob-text-faint)";
-              status.textContent =
-                res.actions_remaining === 0
-                  ? "All applied. A restart (and one reboot, if PSI was enabled) finishes the job."
-                  : res.actions_remaining + " suggested item(s) still to apply.";
-            })
-            .catch(function () {
-              status.textContent = "Could not re-check just now.";
-            });
-        });
-      })();
+      try {
+        sessionStorage.removeItem("ob-setup-state");
+      } catch (e) {}
     </script>
     {% else %}
 
@@ -885,7 +875,10 @@ sudo tailscale funnel --bg 8420</pre>
           <li><i>1</i> Password</li>
           <li><i>2</i> Providers</li>
           <li><i>3</i> Capacity</li>
-          <li><i>4</i> Your API key</li>
+          <li><i>4</i> API key</li>
+          <li><i>5</i> Tune</li>
+          <li><i>6</i> Download</li>
+          <li><i>7</i> Restart</li>
         </ul>
         <button type="button" class="btn btn-primary" id="start-btn">Start setup</button>
       </div>
@@ -910,7 +903,13 @@ sudo tailscale funnel --bg 8420</pre>
           <span class="step-line" data-line="2"></span>
           <span class="step-dot" data-dot="3"><i>3</i><span class="step-label">Capacity</span></span>
           <span class="step-line" data-line="3"></span>
-          <span class="step-dot" data-dot="4"><i>4</i><span class="step-label">Your API key</span></span>
+          <span class="step-dot" data-dot="4"><i>4</i><span class="step-label">API key</span></span>
+          <span class="step-line" data-line="4"></span>
+          <span class="step-dot" data-dot="5"><i>5</i><span class="step-label">Tune</span></span>
+          <span class="step-line" data-line="5"></span>
+          <span class="step-dot" data-dot="6"><i>6</i><span class="step-label">Download</span></span>
+          <span class="step-line" data-line="6"></span>
+          <span class="step-dot" data-dot="7"><i>7</i><span class="step-label">Restart</span></span>
         </div>
       </div>
 
@@ -1067,7 +1066,64 @@ sudo tailscale funnel --bg 8420</pre>
           <div class="step-nav">
             <button type="button" class="btn btn-ghost" data-back>Back</button>
             <span class="spacer"></span>
-            <button type="submit" class="btn btn-primary" id="finish-btn" disabled>Finish setup</button>
+            <button type="button" class="btn btn-primary" data-next disabled>Continue</button>
+          </div>
+        </section>
+
+        <!-- step 5: host tuning (optional) -->
+        <section class="card step" data-step="5">
+          <h1>Tune the host <span style="font-weight: 400; font-size: 12px; color: var(--ob-text-faint)">optional</span></h1>
+          <p class="step-sub">One command sizes this machine for browser sessions: service resource limits, CPU pressure metrics, and a sudo grant so the Settings page can re-tune later. Run it in a terminal on this machine, or skip it and run it any time from Settings.</p>
+          <pre id="tune-command">openbrowse tune --share most</pre>
+          <p class="field-hint" style="margin: 10px 0 0">The changes need a reboot to fully apply, so reboot this machine soon after finishing setup.</p>
+          <p class="field-hint is-ok" id="tune-marked" style="display: none; margin-top: 8px">&#10003; Marked as run. Remember to reboot soon after setup.</p>
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <span style="display: inline-flex; gap: 10px">
+              <button type="button" class="btn btn-ghost" id="tune-skip">Skip for now</button>
+              <button type="button" class="btn btn-primary" id="tune-ran">I&rsquo;ve run it</button>
+            </span>
+          </div>
+        </section>
+
+        <!-- step 6: browser download gate -->
+        <section class="card step" data-step="6">
+          <h1>Downloading the browser</h1>
+          <p class="step-sub">The stealth Chromium build (~200MB) has been downloading since you started setup. It must finish and verify before OpenBrowse restarts, so your first session starts instantly.</p>
+          <ul class="checklist" id="prefetch-checks"></ul>
+          <div class="dl-box" id="dl-box">
+            <div class="dl-row">
+              <span class="dl-status" id="dl-status">Checking&hellip;</span>
+              <span class="dl-detail" id="dl-detail"></span>
+            </div>
+            <div class="dl-bar"><span id="dl-bar-fill"></span></div>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px">
+            <button type="button" class="btn btn-ghost btn-small" id="dl-retry" style="display: none">Retry download</button>
+            <span class="field-hint is-bad" id="dl-error" style="display: none"></span>
+          </div>
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-primary" data-next disabled>Continue</button>
+          </div>
+        </section>
+
+        <!-- step 7: mandatory restart -->
+        <section class="card step" data-step="7">
+          <h1>Restart to finish</h1>
+          {% if hw_systemd %}
+          <p class="step-sub">Your configuration is written and the browser is ready. One restart of the service loads everything: credentials, capacity settings and the browser profile. It takes a few seconds, then the sign-in screen appears.</p>
+          {% else %}
+          <p class="step-sub">Your configuration will be written now. This machine does not run systemd, so restart the server yourself afterwards; instructions follow on the next screen.</p>
+          {% endif %}
+          <p class="field-hint" id="restart-tune-note" style="display: none; margin-bottom: 10px">You marked host tuning as run: reboot this machine soon so it fully applies.</p>
+          <input type="hidden" name="restart" value="{{ '1' if hw_systemd else '' }}" />
+          <div class="step-nav">
+            <button type="button" class="btn btn-ghost" data-back>Back</button>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-primary" id="finish-btn">{% if hw_systemd %}Finish setup &amp; restart{% else %}Finish setup{% endif %}</button>
           </div>
         </section>
       </form>
@@ -1152,6 +1208,7 @@ sudo tailscale funnel --bg 8420</pre>
           started = true;
           intro.style.display = "none";
           shell.classList.add("is-in");
+          startPrefetch();
           saveState();
           var pw = document.getElementById("pw");
           if (pw) pw.focus();
@@ -1175,6 +1232,9 @@ sudo tailscale funnel --bg 8420</pre>
         function goTo(n) {
           current = n;
           syncStepper();
+          if (n === 5) {
+            document.getElementById("tune-command").textContent = "openbrowse tune --share " + shareValue();
+          }
           saveState();
           var active = document.querySelector('.step[data-step="' + n + '"]');
           var first = active.querySelector("input:not([type=hidden]):not([type=radio]):not([type=checkbox])");
@@ -1194,7 +1254,7 @@ sudo tailscale funnel --bg 8420</pre>
         /* Enter inside a step advances instead of submitting the whole form early */
         document.getElementById("setup-form").addEventListener("keydown", function (e) {
           if (e.key !== "Enter" || e.target.tagName === "BUTTON" || e.target.tagName === "TEXTAREA") return;
-          if (current < 4) {
+          if (current < 7) {
             e.preventDefault();
             var next = document.querySelector('.step[data-step="' + current + '"] [data-next]');
             if (next && !next.disabled) next.click();
@@ -1409,7 +1469,7 @@ sudo tailscale funnel --bg 8420</pre>
         /* ---------- step 4: api key ---------- */
         var keybox = document.getElementById("keybox");
         var keyConfirm = document.getElementById("key-confirm");
-        var finishBtn = document.getElementById("finish-btn");
+        var keyNext = document.querySelector('.step[data-step="4"] [data-next]');
         var copiedPill = document.getElementById("copied-pill");
         var copied = false;
 
@@ -1451,9 +1511,117 @@ sudo tailscale funnel --bg 8420</pre>
         }
         keybox.addEventListener("click", copyKey);
         function syncFinish() {
-          finishBtn.disabled = !(copied && keyConfirm.checked);
+          keyNext.disabled = !(copied && keyConfirm.checked);
         }
         keyConfirm.addEventListener("change", syncFinish);
+
+        /* ---------- step 5: host tuning ---------- */
+        var tuneChoice = null;
+        function shareValue() {
+          var checked = document.querySelector('input[name="share"]:checked');
+          return checked ? checked.value : "most";
+        }
+        function applyTuneChoice() {
+          document.getElementById("tune-marked").style.display = tuneChoice === "ran" ? "" : "none";
+          document.getElementById("restart-tune-note").style.display = tuneChoice === "ran" ? "" : "none";
+        }
+        document.getElementById("tune-ran").addEventListener("click", function () {
+          tuneChoice = "ran";
+          applyTuneChoice();
+          saveState();
+          goTo(6);
+        });
+        document.getElementById("tune-skip").addEventListener("click", function () {
+          tuneChoice = "skipped";
+          applyTuneChoice();
+          saveState();
+          goTo(6);
+        });
+
+        /* ---------- step 6: browser download gate ---------- */
+        var dlNext = document.querySelector('.step[data-step="6"] [data-next]');
+        var dlPollTimer = null;
+        function startPrefetch() {
+          fetch("/setup/prefetch", { method: "POST", credentials: "same-origin" }).catch(function () {});
+          if (!dlPollTimer) {
+            pollPrefetch();
+            dlPollTimer = setInterval(pollPrefetch, 2000);
+          }
+        }
+        function renderChecks(checks) {
+          var ul = document.getElementById("prefetch-checks");
+          ul.innerHTML = "";
+          var allOk = true;
+          (checks || []).forEach(function (check) {
+            if (!check.ok) allOk = false;
+            var li = document.createElement("li");
+            var state = document.createElement("span");
+            state.className = "state " + (check.ok ? "ok" : "action");
+            state.innerHTML = check.ok ? "&#10003;" : "&#9679;";
+            var body = document.createElement("span");
+            var label = document.createElement("strong");
+            label.textContent = check.label;
+            body.appendChild(label);
+            body.appendChild(document.createTextNode(" \u2014 " + check.detail));
+            li.appendChild(state);
+            li.appendChild(body);
+            ul.appendChild(li);
+          });
+          return allOk;
+        }
+        function pollPrefetch() {
+          fetch("/setup/prefetch-status", { credentials: "same-origin" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("http " + r.status);
+              return r.json();
+            })
+            .then(function (res) {
+              var checksOk = renderChecks(res.checks);
+              var statusEl = document.getElementById("dl-status");
+              var detailEl = document.getElementById("dl-detail");
+              var fill = document.getElementById("dl-bar-fill");
+              var retry = document.getElementById("dl-retry");
+              var error = document.getElementById("dl-error");
+              retry.style.display = "none";
+              error.style.display = "none";
+              statusEl.classList.remove("is-ok");
+              fill.classList.remove("is-done");
+              if (res.state === "ready") {
+                statusEl.textContent = "Downloaded and verified";
+                statusEl.classList.add("is-ok");
+                detailEl.textContent = "";
+                fill.style.width = "100%";
+                fill.classList.add("is-done");
+                clearInterval(dlPollTimer);
+                dlPollTimer = null;
+              } else if (res.state === "error") {
+                statusEl.textContent = "Download failed";
+                detailEl.textContent = "";
+                fill.style.width = "0";
+                retry.style.display = "";
+                error.style.display = "";
+                error.textContent = res.detail || "The download did not complete.";
+              } else if (res.state === "downloading") {
+                statusEl.textContent = "Downloading\u2026 " + (res.percent || 0) + "%";
+                detailEl.textContent = res.detail || "";
+                fill.style.width = (res.percent || 0) + "%";
+              } else if (res.state === "extracting") {
+                statusEl.textContent = "Unpacking\u2026";
+                detailEl.textContent = "";
+                fill.style.width = "100%";
+              } else {
+                statusEl.textContent = "Preparing\u2026";
+                detailEl.textContent = "";
+              }
+              dlNext.disabled = !(res.state === "ready" && checksOk);
+            })
+            .catch(function () {});
+        }
+        document.getElementById("dl-retry").addEventListener("click", function () {
+          document.getElementById("dl-status").textContent = "Retrying\u2026";
+          startPrefetch();
+          if (!dlPollTimer) dlPollTimer = setInterval(pollPrefetch, 2000);
+        });
 
         /* ---------- progress survives a refresh ----------
            Values (the password included) sit in per-tab sessionStorage: this
@@ -1480,6 +1648,7 @@ sudo tailscale funnel --bg 8420</pre>
                 light: lightInput ? lightInput.checked : null,
                 copied: copied,
                 confirmed: keyConfirm.checked,
+                tuneChoice: tuneChoice,
               })
             );
           } catch (e) {}
@@ -1533,6 +1702,10 @@ sudo tailscale funnel --bg 8420</pre>
             keyConfirm.checked = true;
             syncFinish();
           }
+          if (st.tuneChoice) {
+            tuneChoice = st.tuneChoice;
+            applyTuneChoice();
+          }
           document.querySelectorAll(".provider").forEach(function (card) {
             if (card.querySelector("input").value.trim()) validateProvider(card);
           });
@@ -1540,7 +1713,8 @@ sudo tailscale funnel --bg 8420</pre>
             started = true;
             intro.style.display = "none";
             shell.classList.add("is-in");
-            goTo(Math.min(Math.max(st.step || 1, 1), 4));
+            startPrefetch();
+            goTo(Math.min(Math.max(st.step || 1, 1), 7));
           }
         }
         restoreState();

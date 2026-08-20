@@ -90,9 +90,9 @@ async def test_setup_adopts_credentials_without_restart(client):
     resp = await c.get("/setup", follow_redirects=False)
     assert resp.status_code == 303
 
-    resp = await c.get("/setup/tuning-status")
+    resp = await c.get("/setup/prefetch-status")
     assert resp.status_code == 200
-    assert "checklist" in resp.json()
+    assert "state" in resp.json()
 
 
 async def test_setup_restart_still_works_after_completion(client, monkeypatch):
@@ -115,21 +115,85 @@ async def test_setup_restart_still_works_after_completion(client, monkeypatch):
     assert called == [1]
 
 
-async def test_setup_finish_screen_offers_a_skip(client, monkeypatch):
+async def test_wizard_has_tune_download_and_restart_stages(client, monkeypatch):
     c, _ = client
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
+    resp = await c.get("/setup")
+    assert resp.status_code == 200
+    assert "openbrowse tune --share" in resp.text
+    assert "sudo openbrowse tune" not in resp.text
+    assert "Downloading the browser" in resp.text
+    assert "Finish setup" in resp.text
+    assert 'name="restart"' in resp.text
+
+
+async def test_setup_save_with_restart_restarts_under_systemd(client, monkeypatch):
+    c, tmp_path = client
+    monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
+    called = []
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes.schedule_restart", lambda: called.append(1)
+    )
     resp = await c.post(
         "/setup",
         data={
             "api_key": "k1",
             "anthropic_api_key": "sk-ant-test",
             "dashboard_password": "long-enough-pw",
+            "restart": "1",
         },
     )
     assert resp.status_code == 200
-    assert "Skip for now" in resp.text
-    assert "Optional: tune the host" in resp.text
-    assert "Restart now" in resp.text
+    assert "Restarting OpenBrowse" in resp.text
+    assert called == [1]
+    assert "API_KEY=k1" in (tmp_path / ".env").read_text()
+
+
+async def test_setup_save_without_systemd_falls_back_to_instructions(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(
+        "openbrowse.hostinfo.probe", lambda: _fixed_info(systemd=False)
+    )
+    called = []
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes.schedule_restart", lambda: called.append(1)
+    )
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "anthropic_api_key": "sk-ant-test",
+            "dashboard_password": "long-enough-pw",
+            "restart": "1",
+        },
+    )
+    assert resp.status_code == 200
+    assert "OpenBrowse is configured" in resp.text
+    assert "systemctl restart" in resp.text
+    assert called == []
+
+
+async def test_prefetch_endpoints_serve_the_wizard(client, monkeypatch):
+    c, _ = client
+    started = []
+    monkeypatch.setattr("openbrowse.prefetch.start", lambda: started.append(1))
+    monkeypatch.setattr(
+        "openbrowse.prefetch.status",
+        lambda: {"state": "downloading", "detail": "97/198 MB", "percent": 49},
+    )
+    monkeypatch.setattr(
+        "openbrowse.prefetch.host_checks",
+        lambda: [{"key": "disk", "label": "Disk space", "ok": True, "detail": "ok"}],
+    )
+    resp = await c.post("/setup/prefetch")
+    assert resp.status_code == 200
+    assert started == [1]
+    resp = await c.get("/setup/prefetch-status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "downloading"
+    assert body["percent"] == 49
+    assert body["checks"][0]["key"] == "disk"
 
 
 async def test_setup_requires_a_dashboard_password(client):
@@ -255,7 +319,9 @@ async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
             follow_redirects=False,
         )
         assert resp.status_code == 403
-        resp = await c.get("/setup/tuning-status", follow_redirects=False)
+        resp = await c.get("/setup/prefetch-status", follow_redirects=False)
+        assert resp.status_code == 403
+        resp = await c.post("/setup/prefetch", follow_redirects=False)
         assert resp.status_code == 403
 
 
@@ -305,7 +371,6 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert "MAX_CONCURRENT_SESSIONS=4" in (tmp_path / ".env").read_text()
-    assert "sudo openbrowse tune --share all" in resp.text
     assert "Restart now" in resp.text
 
 

@@ -16,6 +16,12 @@ from typing import Any
 # stay above read_pages' own 420s budget and below the 520s step_timeout.
 os.environ.setdefault("BROWSER_USE_ACTION_TIMEOUT_S", "480")
 
+# @nonobvious(forced-by): cloakbrowser's launch-time background updater once
+# pulled a 200MB build mid-launch on a Pi, starving Chrome of I/O until its
+# debug port missed the readiness window. Updates are frozen at launch and
+# fetched deliberately instead: at boot and during onboarding, via prefetch.
+os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -23,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from openbrowse import __version__, system_metrics, updates
+from openbrowse import __version__, prefetch, system_metrics, updates
 from openbrowse.auth import require_api_key
 from openbrowse.agent.pool import pool
 from openbrowse.api.profiles import router as profiles_router
@@ -68,6 +74,7 @@ async def lifespan(app: FastAPI):
     if expired:
         logger.info("Expired %d stale session shell(s)", expired)
 
+    prefetch.start()
     sweeper = asyncio.create_task(_stale_session_sweeper())
     metrics_sampler = asyncio.create_task(system_metrics.sampler_loop())
     update_checker = asyncio.create_task(updates.checker_loop())

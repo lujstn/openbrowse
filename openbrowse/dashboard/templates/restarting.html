@@ -69,6 +69,9 @@
     <p>Applying your settings. This page will refresh in a few seconds.</p>
     <div class="bar"><span></span></div>
     <script>
+      try {
+        sessionStorage.removeItem("ob-setup-state");
+      } catch (e) {}
       setTimeout(function () {
         window.location.href = "{{ next_url or ('/settings?restarted=' ~ saved_at) }}";
       }, 10000);

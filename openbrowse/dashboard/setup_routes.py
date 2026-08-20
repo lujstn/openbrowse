@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from openbrowse import hostinfo
+from openbrowse import hostinfo, prefetch
 from openbrowse.config import settings
 from openbrowse.dashboard.lifecycle import schedule_restart
 
@@ -142,6 +142,7 @@ async def setup_save(
     max_concurrent_sessions: str = Form(""),
     share: str = Form("most"),
     chrome_light_flags: str = Form(""),
+    restart: str = Form(""),
 ):
     if _configured():
         return RedirectResponse("/", status_code=303)
@@ -202,28 +203,35 @@ async def setup_save(
         object.__setattr__(settings, field_name, value)
     global _completed_this_process
     _completed_this_process = True
+    if restart == "1" and capacity["hw_systemd"]:
+        schedule_restart()
+        return templates.TemplateResponse(
+            request, "restarting.html", context={"saved_at": 0, "next_url": "/"}
+        )
     return templates.TemplateResponse(
         request,
         "setup.html",
         context={
             "done": True,
             "share": share,
-            "tune_command": f"sudo openbrowse tune --share {share}",
             **capacity,
         },
     )
 
 
-@setup_router.get("/setup/tuning-status")
-async def setup_tuning_status():
+@setup_router.post("/setup/prefetch")
+async def setup_prefetch():
     if not _setup_routes_open():
         return JSONResponse({"detail": "Setup is already complete."}, status_code=403)
-    info = hostinfo.probe()
-    rows = hostinfo.checklist(info)
-    return {
-        "checklist": rows,
-        "actions_remaining": sum(1 for row in rows if row["state"] == "action"),
-    }
+    prefetch.start()
+    return prefetch.status()
+
+
+@setup_router.get("/setup/prefetch-status")
+async def setup_prefetch_status():
+    if not _setup_routes_open():
+        return JSONResponse({"detail": "Setup is already complete."}, status_code=403)
+    return {**prefetch.status(), "checks": prefetch.host_checks()}
 
 
 @setup_router.post("/setup/restart", response_class=HTMLResponse)
