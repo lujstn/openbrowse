@@ -782,7 +782,10 @@ async def settings_host_tune(request: Request, share: str = Form("most")):
         share = "most"
     try:
         result = subprocess.run(
-            ["sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT), "--share", share],
+            [
+                "sudo", "-n", "bash", str(_HOST_TUNE_SCRIPT),
+                "--share", share, "--service", hostinfo.UNIT_NAME,
+            ],
             capture_output=True,
             text=True,
             timeout=30,

@@ -85,6 +85,12 @@ def test_share_changes_rewrite_override(tmp_path):
     assert "MemoryHigh=14745M" in content
 
 
+def test_service_flag_overrides_override_dir(tmp_path):
+    proc, systemd_dir, _, _ = _run(tmp_path, "--service", "custom.service")
+    assert proc.returncode == 0
+    assert (systemd_dir / "custom.service.d" / "50-capacity.conf").exists()
+
+
 def test_psi_skipped_when_present(tmp_path):
     proc, _, cmdline, _ = _run(tmp_path, psi=True)
     assert proc.returncode == 0
