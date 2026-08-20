@@ -31,7 +31,6 @@ from openbrowse.agent.runner import (
     _category_for,
     model_reasoning,
     effort_when_unset,
-    recommended_effort,
     validate_effort,
 )
 from openbrowse.api.sessions import _to_session_response
@@ -329,14 +328,17 @@ MODEL_OPTIONS: list[tuple[str, str]] = [
 
 def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     spec = model_reasoning(model_value)
-    recommended = recommended_effort(model_value)
+    unset = effort_when_unset(model_value)
 
     def decorate(value: str, label: str) -> str:
         marks = []
-        if value == spec.default:
+        # @nonobvious(must-hold): "Default" marks what a session with no effort
+        # actually runs at, which is our pick, not the provider's. Marking the
+        # provider's default as "Default" would name a level the app never picks.
+        if value == unset:
             marks.append("Default")
-        if value == recommended:
-            marks.append("Recommended")
+        elif value == spec.default:
+            marks.append("Provider default")
         return f"{label} ({', '.join(marks)})" if marks else label
 
     options: list[tuple[str, str]] = []
@@ -345,7 +347,7 @@ def _reasoning_options_for(model_value: str) -> dict[str, Any]:
     for level in spec.efforts:
         label = "Extra High" if level == "xhigh" else level.capitalize()
         options.append((level, decorate(level, label)))
-    return {"options": options, "default": recommended or spec.default}
+    return {"options": options, "default": unset}
 
 
 def reasoning_options_map() -> dict[str, dict[str, Any]]:

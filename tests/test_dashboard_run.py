@@ -52,10 +52,13 @@ def test_reasoning_options_map_covers_all_models_with_defaults():
 
 
 def test_reasoning_options_per_generation():
+    """"Default" has to name the level the session actually runs at. Where our
+    pick differs from the provider's, the provider's is labelled as such rather
+    than as the default, which it no longer is."""
     options_map = reasoning_options_map()
     sonnet5 = options_map["claude-sonnet-5"]
     assert sonnet5["default"] == "high"
-    assert dict(sonnet5["options"])["high"] == "High (Default, Recommended)"
+    assert dict(sonnet5["options"])["high"] == "High (Default)"
     assert dict(sonnet5["options"])["none"] == "None"
     assert "off" not in dict(sonnet5["options"])
     opus48 = options_map["claude-opus-4-8[1m]"]
@@ -67,15 +70,27 @@ def test_reasoning_options_per_generation():
     assert fable["default"] == "high"
     terra = options_map["gpt-5.6-terra"]
     assert terra["default"] == "none"
-    assert dict(terra["options"])["none"] == "None (Recommended)"
-    assert dict(terra["options"])["medium"] == "Medium (Default)"
+    assert dict(terra["options"])["none"] == "None (Default)"
+    assert dict(terra["options"])["medium"] == "Medium (Provider default)"
     assert dict(terra["options"])["max"] == "Max"
     luna = options_map["gpt-5.6-luna"]
     assert luna["default"] == "max"
-    assert dict(luna["options"])["max"] == "Max (Recommended)"
+    assert dict(luna["options"])["max"] == "Max (Default)"
+    assert dict(luna["options"])["medium"] == "Medium (Provider default)"
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
     assert sonnet46["default"] == "none"
+
+
+def test_no_option_is_labelled_default_unless_it_is_the_one_used():
+    """The preselected value and the one marked Default must be the same option,
+    or the dropdown contradicts itself."""
+    from openbrowse.agent.runner import effort_when_unset
+
+    for model, spec in reasoning_options_map().items():
+        labelled = [v for v, label in spec["options"] if "(Default)" in label]
+        assert labelled == [spec["default"]], model
+        assert spec["default"] == effort_when_unset(model), model
 
 
 def test_model_provider_labels():

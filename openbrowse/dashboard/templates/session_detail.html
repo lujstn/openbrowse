@@ -608,7 +608,7 @@ OpenBrowse{% endblock %} {% block head %}
     <span id="session-status">{{ dstat }}</span>
   </span>
   <span class="mono">{{ session.id }}</span>
-  <span class="badge">{{ session.model or 'sonnet' }}</span>
+  <span class="badge">{{ session.model or '\u2014' }}</span>
 </div>
 
 <dl class="stat-row" id="session-stats">
