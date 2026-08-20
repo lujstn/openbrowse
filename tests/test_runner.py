@@ -3,8 +3,10 @@
 import asyncio
 import json
 import types
+from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.agent.runner import (
@@ -18,6 +20,25 @@ from app.agent.runner import (
     valid_efforts,
     validate_effort,
 )
+from app.config import settings as app_settings
+
+
+@pytest.fixture
+async def runner_db(tmp_path, monkeypatch):
+    from app.db.models import init_db
+
+    test_settings = replace(
+        app_settings,
+        db_path=tmp_path / "test.db",
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "data" / "profiles",
+    )
+    monkeypatch.setattr("app.config.settings", test_settings)
+    monkeypatch.setattr("app.db.models.settings", test_settings)
+    monkeypatch.setattr("app.agent.runner.settings", test_settings)
+    (tmp_path / "data" / "profiles").mkdir(parents=True)
+    await init_db()
+    return test_settings
 
 
 def _fake_settings(*, anthropic: str = "", openai: str = "") -> types.SimpleNamespace:
@@ -1753,3 +1774,95 @@ def test_every_acting_phase_says_it_is_working():
         assert calls, f"expected {label} to still be pushed"
         for call in calls:
             assert "spin=True" in call, f"{label} would render as a stalled agent: {call}"
+
+
+def test_failure_info_classifies_provider_rate_limit():
+    from app.agent.runner import _failure_info
+    from browser_use.llm.exceptions import ModelRateLimitError
+
+    assert _failure_info(ModelRateLimitError(message="slow down", model="x")) == (
+        "provider_rate_limit",
+        429,
+        "error",
+    )
+
+
+def test_failure_info_classifies_provider_server_error():
+    from app.agent.runner import _failure_info
+    from browser_use.llm.exceptions import ModelProviderError
+
+    assert _failure_info(
+        ModelProviderError(message="upstream broke", status_code=503, model="x")
+    ) == ("provider_server_error", 503, "error")
+
+
+def test_failure_info_classifies_provider_timeout():
+    from app.agent.runner import _failure_info
+    from browser_use.llm.exceptions import ModelProviderError
+
+    assert _failure_info(
+        ModelProviderError(message="request timed out", model="x")
+    ) == ("provider_timeout", 502, "error")
+
+
+def test_failure_info_classifies_budget_and_session_timeouts():
+    from app.agent.runner import BudgetExceededError, _failure_info
+
+    assert _failure_info(BudgetExceededError("cap hit")) == (
+        "budget_exceeded",
+        None,
+        "stopped",
+    )
+    assert _failure_info(TimeoutError("step timed out")) == (
+        "session_timeout",
+        None,
+        "timed_out",
+    )
+
+
+def test_failure_info_falls_back_to_agent_failure():
+    from app.agent.runner import _failure_info
+
+    assert _failure_info(RuntimeError("boom")) == ("agent_failure", None, "error")
+
+
+def test_failure_info_preserves_provider_connection_errors():
+    from app.agent.runner import _failure_info
+    from browser_use.llm.exceptions import ModelProviderError
+    from openai import APIConnectionError
+
+    request = httpx.Request("GET", "https://api.openai.com/v1/responses")
+    try:
+        raise APIConnectionError(request=request)
+    except APIConnectionError as cause:
+        try:
+            raise ModelProviderError(message=str(cause), model="gpt-5.6-terra") from cause
+        except ModelProviderError as wrapped:
+            assert _failure_info(wrapped) == (
+                "provider_connection_error",
+                None,
+                "error",
+            )
+
+
+async def test_llm_setup_failure_records_agent_failure(runner_db, monkeypatch):
+    from app.agent import runner
+    from app.db import crud
+
+    session = await crud.create_session(
+        task="a task",
+        output_schema={"type": "object"},
+        max_cost_usd=2,
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("OPENAI_API_KEY is required")
+
+    monkeypatch.setattr(runner, "_build_llm", _boom)
+
+    await runner.run_agent_session(session["id"])
+
+    stored = await crud.get_session(session["id"])
+    assert stored["status"] == "error"
+    assert stored["failure_kind"] == "agent_failure"
+    assert stored["failure_status_code"] is None

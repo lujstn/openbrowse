@@ -99,11 +99,11 @@ def test_normalize_rejects_non_dict():
 
 def test_cookie_domains_dedupes_and_strips_dots():
     state = {"cookies": [
-        {"name": "a", "value": "1", "domain": ".meetup.com"},
-        {"name": "b", "value": "1", "domain": "www.meetup.com"},
+        {"name": "a", "value": "1", "domain": ".example.com"},
+        {"name": "b", "value": "1", "domain": "www.example.com"},
         {"name": "c", "value": "1", "domain": "x.com"},
     ]}
-    assert storage.cookie_domains(state) == ["meetup.com", "www.meetup.com", "x.com"]
+    assert storage.cookie_domains(state) == ["example.com", "www.example.com", "x.com"]
 
 
 async def test_upsert_creates_with_explicit_id():
@@ -127,11 +127,11 @@ async def test_upsert_rejects_bad_id():
 
 
 async def test_import_profile_writes_file_and_upserts():
-    state = {"cookies": [{"name": "s", "value": "v", "domain": ".luma.com"}], "origins": []}
+    state = {"cookies": [{"name": "s", "value": "v", "domain": ".example.org"}], "origins": []}
     res = await import_profile("0bee43b4", state, name="Personal")
     assert res["created"] is True
     assert res["cookie_count"] == 1
-    assert res["domains"] == ["luma.com"]
+    assert res["domains"] == ["example.org"]
     assert storage.profile_state_path("0bee43b4").exists()
 
 

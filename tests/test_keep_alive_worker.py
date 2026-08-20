@@ -499,3 +499,59 @@ async def test_the_expiry_note_says_it_was_idle_rather_than_released():
 
     assert "Expired: no follow-up for" in (await _summaries(session["id"]))[-1]
     assert (await crud.get_session(session["id"]))["status"] == "stopped"
+
+
+async def test_budget_stop_records_its_kind_and_keeps_the_accrued_cost(monkeypatch):
+    class _CappedAgent(_FakeAgent):
+        async def run(self, max_steps=500, on_step_start=None, on_step_end=None):
+            await crud.update_session(
+                self._session_id,
+                total_input_tokens=900,
+                total_output_tokens=120,
+                llm_cost_usd=1.9,
+                capsolver_cost_usd=0.15,
+                total_cost_usd=2.05,
+            )
+            raise runner_mod.BudgetExceededError("Cost $2.05 exceeded budget $2.00")
+
+    session = await crud.create_session(
+        task="collect the records",
+        output_schema={"type": "object", "properties": {"items": {"type": "array"}}},
+        max_cost_usd=2,
+    )
+    sid = session["id"]
+
+    def _capped(**kwargs):
+        agent = _CappedAgent(**kwargs)
+        agent._session_id = sid
+        return agent
+
+    monkeypatch.setattr(runner_mod, "Agent", _capped)
+
+    await asyncio.wait_for(runner_mod.run_agent_session(sid), timeout=3)
+
+    stored = await crud.get_session(sid)
+    assert stored["status"] == "stopped"
+    assert stored["failure_kind"] == "budget_exceeded"
+    assert stored["failure_status_code"] is None
+    assert stored["total_cost_usd"] == 2.05
+    assert stored["llm_cost_usd"] == 1.9
+    assert stored["capsolver_cost_usd"] == 0.15
+    assert stored["total_input_tokens"] == 900
+    assert stored["total_output_tokens"] == 120
+    summaries = await _summaries(sid)
+    assert any("Stopped:" in s for s in summaries)
+
+
+async def test_successful_turn_clears_stale_failure_classification():
+    session = await crud.create_session(task="Summarise the news")
+    sid = session["id"]
+    await crud.update_session(
+        sid, failure_kind="provider_server_error", failure_status_code=503
+    )
+
+    await asyncio.wait_for(runner_mod.run_agent_session(sid), timeout=3)
+
+    stored = await crud.get_session(sid)
+    assert stored["failure_kind"] is None
+    assert stored["failure_status_code"] is None

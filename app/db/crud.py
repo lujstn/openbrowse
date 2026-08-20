@@ -20,7 +20,7 @@ _SESSION_COLUMNS = {
     "total_input_tokens", "total_output_tokens", "llm_cost_usd", "total_cost_usd",
     "capsolver_cost_usd",
     "screenshot_path", "display_num", "system_prompt_extension",
-    "keep_alive", "reasoning_effort", "updated_at",
+    "keep_alive", "reasoning_effort", "failure_kind", "failure_status_code", "updated_at",
 }
 
 _SAFE_PROFILE_ID = re.compile(r"^[A-Za-z0-9._-]+$")

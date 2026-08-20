@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     system_prompt_extension TEXT,
     keep_alive INTEGER NOT NULL DEFAULT 0,
     reasoning_effort TEXT NOT NULL DEFAULT 'default',
+    failure_kind TEXT,
+    failure_status_code INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (profile_id) REFERENCES profiles(id)
@@ -90,6 +92,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
         )
+    if "failure_kind" not in columns:
+        await db.execute("ALTER TABLE sessions ADD COLUMN failure_kind TEXT")
+    if "failure_status_code" not in columns:
+        await db.execute("ALTER TABLE sessions ADD COLUMN failure_status_code INTEGER")
     if "capsolver_cost_usd" not in columns:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN capsolver_cost_usd REAL NOT NULL DEFAULT 0.0"

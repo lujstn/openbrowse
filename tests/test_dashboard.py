@@ -121,7 +121,7 @@ async def test_profiles_page_shows_domains_not_user_id(client):
             {"name": "s", "value": "v", "domain": ".workatastartup.com"},
             {"name": "t", "value": "v", "domain": ".ycombinator.com"},
         ], "origins": []},
-        name="YC",
+        name="Acme",
     )
     resp = await client.get("/profiles", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200

@@ -302,6 +302,70 @@ class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
 
 
+
+def _timeout_text(error: BaseException) -> bool:
+    message = str(error).lower()
+    return (
+        "timeout" in message
+        or "timed out" in message
+        or "headers timeout" in message
+        or "body timeout" in message
+    )
+
+
+def _provider_failure_info(error: BaseException) -> tuple[str, int | None, str] | None:
+    if isinstance(error, RateLimitError):
+        status_code = getattr(error, "status_code", None) or 429
+        return "provider_rate_limit", status_code, "error"
+    if isinstance(error, APIConnectionError):
+        return "provider_connection_error", None, "error"
+    if isinstance(error, APIStatusError):
+        status_code = getattr(error, "status_code", None)
+        if _timeout_text(error):
+            return "provider_timeout", status_code, "error"
+        if status_code == 429:
+            return "provider_rate_limit", 429, "error"
+        if isinstance(status_code, int) and 500 <= status_code <= 599:
+            return "provider_server_error", status_code, "error"
+        if isinstance(status_code, int):
+            return "provider_error", status_code, "error"
+    return None
+
+
+def _failure_info(error: BaseException) -> tuple[str, int | None, str]:
+    if isinstance(error, BudgetExceededError):
+        return "budget_exceeded", None, "stopped"
+    if isinstance(error, asyncio.TimeoutError):
+        return "session_timeout", None, "timed_out"
+    if isinstance(error, ModelOutputTruncatedError):
+        return "invalid_output", None, "error"
+    if isinstance(error, ModelRateLimitError):
+        return "provider_rate_limit", 429, "error"
+    provider_failure = _provider_failure_info(error)
+    if provider_failure is not None:
+        return provider_failure
+    if isinstance(error, ModelProviderError):
+        provider_failure = (
+            _provider_failure_info(getattr(error, "__cause__", None))
+            or _provider_failure_info(getattr(error, "__context__", None))
+        )
+        if provider_failure is not None:
+            return provider_failure
+        status_code = getattr(error, "status_code", None)
+        if _timeout_text(error):
+            return "provider_timeout", status_code, "error"
+        if status_code == 429:
+            return "provider_rate_limit", 429, "error"
+        if isinstance(status_code, int) and 500 <= status_code <= 599:
+            return "provider_server_error", status_code, "error"
+        if isinstance(status_code, int):
+            return "provider_error", status_code, "error"
+        return "agent_failure", None, "error"
+    if _timeout_text(error):
+        return "session_timeout", None, "timed_out"
+    return "agent_failure", None, "error"
+
+
 _MAX_REVIEW_ROUNDS = 3
 _MAX_REVIEW_JUSTIFICATIONS = 2
 _REVIEW_REASON_CAP = 4000
@@ -1751,6 +1815,8 @@ async def _finalise_task(
         **status_update,
         output=output,
         is_task_successful=int(is_successful),
+        failure_kind=None,
+        failure_status_code=None,
         total_input_tokens=total_input,
         total_output_tokens=total_output,
         llm_cost_usd=llm_cost,
@@ -1874,7 +1940,12 @@ async def run_agent_session(session_id: str) -> None:
 
     task = session.get("task")
     if not task:
-        await crud.update_session(session_id, status="error")
+        await crud.update_session(
+            session_id,
+            status="error",
+            failure_kind="agent_failure",
+            failure_status_code=None,
+        )
         return
 
     keep_alive = bool(session.get("keep_alive"))
@@ -1888,7 +1959,12 @@ async def run_agent_session(session_id: str) -> None:
         provider, model, llm = _build_llm(requested_model, reasoning_effort)
     except ValueError as e:
         logger.error("Session %s LLM setup failed: %s", session_id, e)
-        await crud.update_session(session_id, status="error")
+        await crud.update_session(
+            session_id,
+            status="error",
+            failure_kind="agent_failure",
+            failure_status_code=None,
+        )
         await crud.create_message(
             session_id=session_id,
             role="ai",
@@ -2525,6 +2601,8 @@ async def run_agent_session(session_id: str) -> None:
             status="idle" if keep_alive else "stopped",
             output=output,
             is_task_successful=int(is_successful),
+            failure_kind="budget_exceeded",
+            failure_status_code=None,
         )
         await crud.create_message(
             session_id=session_id,
@@ -2534,7 +2612,13 @@ async def run_agent_session(session_id: str) -> None:
         )
     except Exception as e:
         logger.exception("Agent session %s failed: %s", session_id, e)
-        await crud.update_session(session_id, status="error")
+        failure_kind, failure_status_code, failure_status = _failure_info(e)
+        await crud.update_session(
+            session_id,
+            status=failure_status,
+            failure_kind=failure_kind,
+            failure_status_code=failure_status_code,
+        )
         await crud.create_message(
             session_id=session_id,
             role="ai",

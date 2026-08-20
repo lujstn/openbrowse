@@ -234,7 +234,7 @@ def test_merge_action_named_parallel_blocks():
             _NamedBlk("thinking"),
             _NamedBlk(
                 "tool_use",
-                {"key": "careersPageUrl", "value": "https://x/jobs"},
+                {"key": "detailsPageUrl", "value": "https://example.com/details"},
                 name="set_field",
             ),
             _NamedBlk(
@@ -245,7 +245,7 @@ def test_merge_action_named_parallel_blocks():
     repair_anthropic_message(msg, output_tool_name="AgentOutput")
     first = msg.content[1]
     assert first.input["action"] == [
-        {"set_field": {"key": "careersPageUrl", "value": "https://x/jobs"}},
+        {"set_field": {"key": "detailsPageUrl", "value": "https://example.com/details"}},
         {"find_links": {"frame_url_contains": "ashby"}},
     ]
 
@@ -387,7 +387,7 @@ def test_coerce_is_noop_on_well_typed_reply():
         "thinking": "well formed",
         "action": [
             {"read_pages": {"urls": ["https://a"], "frame_url_contains": "ashby"}},
-            {"set_field": {"key": "careersPageUrl", "value": "https://a/jobs"}},
+            {"set_field": {"key": "detailsPageUrl", "value": "https://example.org/details"}},
         ],
     }
     before = copy.deepcopy(ti)

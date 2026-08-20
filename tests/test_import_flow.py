@@ -36,10 +36,10 @@ async def setup(tmp_path, monkeypatch):
 
 
 def test_candidate_origins():
-    origins = cloud_export._candidate_origins(["www.meetup.com", ".luma.com"])
-    assert "https://meetup.com" in origins
-    assert "https://www.meetup.com" in origins
-    assert "https://luma.com" in origins
+    origins = cloud_export._candidate_origins(["www.example.com", ".example.org"])
+    assert "https://example.com" in origins
+    assert "https://www.example.com" in origins
+    assert "https://example.org" in origins
 
 
 def test_map_cookie_keeps_partition_key_and_defaults():
@@ -140,7 +140,7 @@ async def _wait(job_id, want, timeout=3.0):
 
 async def test_full_import_flow(client, monkeypatch):
     async def fake_list(token):
-        return [{"id": "0bee", "name": "Personal", "cookieDomains": ["luma.com"]}]
+        return [{"id": "0bee", "name": "Personal", "cookieDomains": ["example.org"]}]
 
     async def fake_export(token, pid, on_log=None, on_progress=None):
         if on_log:
@@ -150,10 +150,10 @@ async def test_full_import_flow(client, monkeypatch):
             on_progress(3, 3)
         return {
             "cookies": [
-                {"name": "s", "value": "v", "domain": ".luma.com"},
-                {"name": "t", "value": "v", "domain": ".meetup.com"},
+                {"name": "s", "value": "v", "domain": ".example.org"},
+                {"name": "t", "value": "v", "domain": ".example.com"},
             ],
-            "origins": [{"origin": "https://luma.com", "localStorage": [{"name": "k", "value": "v"}]}],
+            "origins": [{"origin": "https://example.org", "localStorage": [{"name": "k", "value": "v"}]}],
         }
 
     monkeypatch.setattr(import_routes, "list_cloud_profiles", fake_list)

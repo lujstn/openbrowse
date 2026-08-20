@@ -96,6 +96,8 @@ class SessionResponse(BaseModel):
     totalCostUsd: str = "0"
     screenshotUrl: str | None = None
     reasoningEffort: str = "default"
+    failureKind: str | None = None
+    failureStatusCode: int | None = None
     agentmailEmail: str | None = None
     integrationsUsed: list[str] = []
     createdAt: str
@@ -167,6 +169,8 @@ def _to_session_response(row: dict[str, Any]) -> SessionResponse:
         llmCostUsd=str(row.get("llm_cost_usd", 0)),
         totalCostUsd=str(row.get("total_cost_usd", 0)),
         reasoningEffort=row.get("reasoning_effort") or "default",
+        failureKind=row.get("failure_kind"),
+        failureStatusCode=row.get("failure_status_code"),
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
     )
