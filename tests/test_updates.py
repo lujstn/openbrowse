@@ -123,8 +123,74 @@ def test_detect_uv_tool(tmp_path, monkeypatch):
     assert commands == [["/usr/bin/uv", "tool", "upgrade", "openbrowse"]]
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "/home/pi/.local/pipx/venvs/openbrowse",
+        "/home/pi/.local/share/pipx/venvs/openbrowse",
+    ],
+)
+def test_detect_pipx(tmp_path, monkeypatch, prefix):
+    """pipx owns the app, so pipx upgrades it. Reaching around it with a bare pip
+    would leave pipx's records describing a version no longer installed."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/usr/bin/pipx")
+    monkeypatch.setattr(sys, "prefix", prefix)
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pipx"
+    assert commands == [["/usr/bin/pipx", "upgrade", "openbrowse"]]
+
+
+def test_detect_pipx_without_the_binary_offers_no_command(tmp_path, monkeypatch):
+    """Better to say there is no automatic path than to invent one that reaches
+    around the installer."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: None)
+    monkeypatch.setattr(sys, "prefix", "/home/pi/.local/pipx/venvs/openbrowse")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pipx"
+    assert commands is None
+
+
+def test_managed_installs_are_never_mistaken_for_a_plain_venv(monkeypatch):
+    """Both uv and pipx put the app in a venv, so sys.prefix != base_prefix is
+    true for them too. Whichever manager owns the app has to win that race."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/usr/bin/pipx")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    for prefix, expected in (
+        ("/home/pi/.local/share/uv/tools/openbrowse", "uv-tool"),
+        ("/home/pi/.local/pipx/venvs/openbrowse", "pipx"),
+        ("/home/pi/.local/share/pipx/venvs/openbrowse", "pipx"),
+    ):
+        monkeypatch.setattr(sys, "prefix", prefix)
+        assert updates.detect_install_method()[0] == expected, prefix
+
+
+def test_installer_lookup_survives_a_systemd_path(tmp_path, monkeypatch):
+    """systemd hands the service a minimal PATH that usually omits ~/.local/bin,
+    which is where both uv and pipx install themselves."""
+    monkeypatch.setattr(updates.shutil, "which", lambda name: None)
+    monkeypatch.setattr(updates.Path, "home", staticmethod(lambda: tmp_path))
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    for name in ("uv", "pipx"):
+        (tmp_path / ".local" / "bin" / name).write_text("")
+
+    assert updates._uv_binary() == str(tmp_path / ".local" / "bin" / "uv")
+    assert updates._pipx_binary() == str(tmp_path / ".local" / "bin" / "pipx")
+
+
 def test_detect_pip_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pip_available", lambda: True)
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
     monkeypatch.setattr(sys, "base_prefix", "/usr")
 
@@ -134,6 +200,75 @@ def test_detect_pip_venv(tmp_path, monkeypatch):
     assert commands == [
         [sys.executable, "-m", "pip", "install", "--upgrade", "openbrowse"]
     ]
+    assert "--user" not in commands[0], "pip refuses --user inside a venv"
+
+
+def test_detect_pip_user_site_upgrades_the_user_site(tmp_path, monkeypatch):
+    """Without --user, pip aims at the system site rather than the copy that is
+    actually running, and on a PEP 668 distro refuses outright."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pip_available", lambda: True)
+    monkeypatch.setattr(updates, "_in_user_site", lambda: True)
+    monkeypatch.setattr(sys, "prefix", "/usr")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pip"
+    assert commands == [
+        [sys.executable, "-m", "pip", "install", "--user", "--upgrade", "openbrowse"]
+    ]
+
+
+def test_detect_pip_in_a_venv_that_has_no_pip(tmp_path, monkeypatch):
+    """uv creates virtual environments without pip inside them, so the obvious
+    `python -m pip` would fail on exactly the environments a uv user makes."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pip_available", lambda: False)
+    monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pip"
+    assert commands == [
+        ["/usr/bin/uv", "pip", "install", "--python", sys.executable, "--upgrade", "openbrowse"]
+    ]
+
+
+def test_detect_pip_with_no_pip_and_no_uv_offers_no_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_pip_available", lambda: False)
+    monkeypatch.setattr(updates, "_uv_binary", lambda: None)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    method, commands = updates.detect_install_method()
+
+    assert method == "pip"
+    assert commands is None
+
+
+def test_every_supported_installer_offers_a_working_upgrade(tmp_path, monkeypatch):
+    """The three documented ways in must all reach a real upgrade command, or one
+    of them is a second-class citizen the docs do not admit to."""
+    monkeypatch.setattr(updates, "checkout_root", lambda: None)
+    monkeypatch.setattr(updates, "_uv_binary", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(updates, "_pipx_binary", lambda: "/usr/bin/pipx")
+    monkeypatch.setattr(updates, "_pip_available", lambda: True)
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    for prefix, expected in (
+        ("/home/pi/.local/share/uv/tools/openbrowse", "uv-tool"),
+        ("/home/pi/.local/pipx/venvs/openbrowse", "pipx"),
+        ("/home/pi/.venvs/openbrowse", "pip"),
+    ):
+        monkeypatch.setattr(sys, "prefix", prefix)
+        method, commands = updates.detect_install_method()
+        assert method == expected, prefix
+        assert commands, f"{expected} has no upgrade command"
+        assert "openbrowse" in commands[-1], prefix
 
 
 def test_detect_unknown(tmp_path, monkeypatch):

@@ -1,12 +1,11 @@
 # Getting started with OpenBrowse
 
-The full documentation lives at **<https://openbrowse.co/docs>**. Every page there
-is also available as plain Markdown by adding `.md` to its address, so
-<https://openbrowse.co/docs/installation.md> works if you would rather read it in a
-terminal.
+Our full documentation lives at **<https://openbrowse.co/docs>**. If you're using
+a coding agent, you can give them the URL <https://openbrowse.co/llms.txt> or
+<https://openbrowse.co/llms-full.txt> to allow them to navigate our docs.
 
-This file is the short version. It exists so that someone who has just cloned the
-repository can get a browser agent running without leaving the checkout.
+If you're keeping things focused, you can add `.md` to the end of any page, e.g.
+<https://openbrowse.co/docs/installation.md>.
 
 ## What you need
 
@@ -28,15 +27,26 @@ sudo apt install -y xvfb x11vnc novnc websockify \
   libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libgtk-3-0
 ```
 
-Then install [uv](https://docs.astral.sh/uv/) if you do not have it, and install
-OpenBrowse itself:
+You can install OpenBrowse however you normally install Python applications:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
+# uv
 uv tool install openbrowse
 openbrowse start
+
+# pipx
+pipx install openbrowse
+openbrowse start
+
+# venv
+source <path-to-venv>/bin/activate
+pip install openbrowse
+openbrowse start
 ```
+
+> [!NOTE]
+> `pipx` and `uv` each make an isolated environment for you; you **must** create
+> or use an existing virtual environment (`venv`) to use plain `pip`.
 
 `openbrowse start` registers OpenBrowse as a systemd service, so it is running
 now and starts again on every boot. `openbrowse stop --disable` undoes that, and
@@ -93,6 +103,10 @@ the Settings page, and the server restarts itself afterwards. From a shell:
 openbrowse check-update
 openbrowse update
 ```
+
+`openbrowse update` runs whichever upgrade the install method calls for: `pipx
+upgrade` for a pipx app, `uv tool upgrade` for a uv tool, `pip install --upgrade`
+inside a virtual environment, or a `git pull` for a checkout.
 
 Set `UPDATE_CHECK_HOURS` in your `.env` to change how often it looks, or `0` to
 switch the background check off.

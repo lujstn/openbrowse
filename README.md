@@ -95,7 +95,6 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 <summary>See all supported models</summary>
 
-
 > - OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
 > - Anthropic: `claude-mythos-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-opus-4.8[1m]`, `claude-opus-4.7`, `claude-opus-4.7[1m]`, `claude-opus-4.6`, `claude-opus-4.6[1m]`, `claude-sonnet-4.6`, `claude-sonnet-4.6[1m]`
 > - Google: ⚠️ Coming soon
@@ -104,13 +103,24 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 ## Quick start
 
+Install OpenBrowse with your favorite package manager:
+
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv
 uv tool install openbrowse
+openbrowse start
+
+# pipx
+pipx install openbrowse
+openbrowse start
+
+# venv
+source <path-to-venv>/bin/activate
+pip install openbrowse
 openbrowse start
 ```
 
-To run from source instead, clone the repo and use uv directly:
+To install from source, clone the repo and use uv directly:
 
 ```bash
 git clone git@github.com:lujstn/openbrowse.git
@@ -119,9 +129,7 @@ uv sync
 uv run openbrowse serve
 ```
 
-Then, open `http://localhost:8420` in a browser. You'll be guided through everything you need to run OpenBrowse.
-
-[View the installation guide](https://openbrowse.co/docs/installation) for more details.
+Then, open `http://localhost:8420` in a browser. You'll be guided through everything you need to run OpenBrowse. [View the installation guide](https://openbrowse.co/docs/installation) for more details.
 
 ## Exposing it to the web
 
