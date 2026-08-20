@@ -28,24 +28,42 @@ sudo apt install -y xvfb x11vnc novnc websockify \
   libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libgtk-3-0
 ```
 
-Then install OpenBrowse with either [uv](https://docs.astral.sh/uv/) or
-[pipx](https://pipx.pypa.io/), whichever you already use for Python apps:
+Then install OpenBrowse whichever way you already install Python applications.
+All three are equally supported.
+
+[pipx](https://pipx.pypa.io/) comes from Debian's own repositories, so it needs
+no third-party installer:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-uv tool install openbrowse
-openbrowse start
-```
-
-```bash
+sudo apt install pipx
 pipx install openbrowse
 openbrowse start
 ```
 
-Neither is preferred. OpenBrowse works out which one installed it and upgrades
+[uv](https://docs.astral.sh/uv/), if you would rather:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install openbrowse
+openbrowse start
+```
+
+Or pip, into a virtual environment. An existing one is fine:
+
+```bash
+python3 -m venv ~/.venvs/openbrowse
+~/.venvs/openbrowse/bin/pip install openbrowse
+~/.venvs/openbrowse/bin/openbrowse start
+```
+
+None is preferred. OpenBrowse works out which one installed it and upgrades
 itself with that same tool, so the installer that owns the app stays the one
 that changes it.
+
+pip needs the virtual environment because Raspberry Pi OS marks its system
+Python as externally managed and pip refuses to install into it. pipx and uv
+each make an isolated environment for you; that is the only real difference
+between them and pip here.
 
 `openbrowse start` registers OpenBrowse as a systemd service, so it is running
 now and starts again on every boot. `openbrowse stop --disable` undoes that, and
@@ -103,9 +121,9 @@ openbrowse check-update
 openbrowse update
 ```
 
-`openbrowse update` runs whichever upgrade the install method calls for: `uv tool
-upgrade` for a uv tool, `pipx upgrade` for a pipx app, `pip install --upgrade`
-for a plain venv, or a `git pull` for a checkout.
+`openbrowse update` runs whichever upgrade the install method calls for: `pipx
+upgrade` for a pipx app, `uv tool upgrade` for a uv tool, `pip install --upgrade`
+inside a virtual environment, or a `git pull` for a checkout.
 
 Set `UPDATE_CHECK_HOURS` in your `.env` to change how often it looks, or `0` to
 switch the background check off.

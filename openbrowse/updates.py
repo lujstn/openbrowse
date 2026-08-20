@@ -3,14 +3,15 @@
 The checker polls PyPI's JSON API on an interval and caches the result; the
 dashboard reads the cache to show its badge and calls :func:`install_update`
 when the user asks for the upgrade. The upgrade command depends on how this
-copy was installed: a uv tool, a pipx app, a plain pip/venv install, or a git
-checkout. uv and pipx are equal citizens; each is upgraded with its own tool so
-the installer that owns the app stays the one that changes it.
+copy was installed: a uv tool, a pipx app, pip inside a virtual environment, or
+a git checkout. All are equal citizens, each upgraded with the tool that owns it,
+so the installer a user chose stays the one that changes their install.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 import os
 import re
@@ -175,10 +176,33 @@ def detect_install_method() -> tuple[str, list[list[str]] | None]:
             return "pipx", [[pipx, "upgrade", "openbrowse"]]
         return "pipx", None
 
-    if sys.prefix != sys.base_prefix or _in_user_site():
-        return "pip", [[sys.executable, "-m", "pip", "install", "--upgrade", "openbrowse"]]
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv or _in_user_site():
+        return "pip", _pip_upgrade_command(in_venv)
 
     return "unknown", None
+
+
+def _pip_available() -> bool:
+    return importlib.util.find_spec("pip") is not None
+
+
+def _pip_upgrade_command(in_venv: bool) -> list[list[str]] | None:
+    if _pip_available():
+        # @nonobvious(forced-by): pip refuses --user inside a virtual environment
+        # outright, and without it a user-site install would try to write to the
+        # system one instead of the copy that is actually running.
+        scope = [] if in_venv else ["--user"]
+        return [
+            [sys.executable, "-m", "pip", "install", *scope, "--upgrade", "openbrowse"]
+        ]
+    # @nonobvious(forced-by): uv creates virtual environments with no pip inside
+    # them, so `python -m pip` would fail on exactly the environments a uv user
+    # makes. uv can still upgrade that environment from outside it.
+    uv = _uv_binary()
+    if uv:
+        return [[uv, "pip", "install", "--python", sys.executable, "--upgrade", "openbrowse"]]
+    return None
 
 
 def _in_user_site() -> bool:

@@ -104,6 +104,16 @@ OpenAI and Anthropic models are generally at their best at the opposite ends of 
 
 ## Quick start
 
+Install it whichever way you already install Python applications. All three are equally supported.
+
+With [pipx](https://pipx.pypa.io/), which Debian and Raspberry Pi OS package for you:
+
+```bash
+sudo apt install pipx
+pipx install openbrowse
+openbrowse start
+```
+
 With [uv](https://docs.astral.sh/uv/):
 
 ```bash
@@ -112,14 +122,17 @@ uv tool install openbrowse
 openbrowse start
 ```
 
-Or with [pipx](https://pipx.pypa.io/), if that is already how you install Python apps:
+With pip, into a virtual environment. An existing one is fine:
 
 ```bash
-pipx install openbrowse
-openbrowse start
+python3 -m venv ~/.venvs/openbrowse
+~/.venvs/openbrowse/bin/pip install openbrowse
+~/.venvs/openbrowse/bin/openbrowse start
 ```
 
-Either is fine. OpenBrowse notices which one installed it and upgrades itself with that same tool, so the dashboard's one-click update works the same way round.
+OpenBrowse works out which of the three installed it and upgrades itself with that same tool, so `openbrowse update` and the dashboard's one-click update behave identically whichever you picked.
+
+pip needs the virtual environment because Debian and Raspberry Pi OS mark their system Python as externally managed, and pip refuses to install into it. pipx and uv both make an isolated environment for you, which is the only real difference between them and pip here.
 
 To run from source instead, clone the repo and use uv directly:
 
