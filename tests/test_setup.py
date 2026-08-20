@@ -41,11 +41,12 @@ async def test_setup_form_served_when_unconfigured(client):
     c, _ = client
     resp = await c.get("/setup")
     assert resp.status_code == 200
-    assert "Welcome to OpenBrowse" in resp.text
+    assert "Set up OpenBrowse" in resp.text
     assert 'name="api_key"' in resp.text
+    assert "Start setup" in resp.text
 
 
-async def test_setup_writes_env_and_shows_key_once(client):
+async def test_setup_writes_env(client):
     c, tmp_path = client
     resp = await c.post(
         "/setup",
@@ -53,16 +54,100 @@ async def test_setup_writes_env_and_shows_key_once(client):
             "api_key": "generated-abc123",
             "anthropic_api_key": "sk-ant-test",
             "openai_api_key": "",
-            "dashboard_password": "hunter2",
+            "dashboard_password": "hunter2-hunter2",
         },
     )
     assert resp.status_code == 200
-    assert "generated-abc123" in resp.text
+    assert "OpenBrowse is configured" in resp.text
     env = (tmp_path / ".env").read_text()
     assert "API_KEY=generated-abc123" in env
     assert "ANTHROPIC_API_KEY=sk-ant-test" in env
-    assert "DASHBOARD_PASSWORD=hunter2" in env
+    assert "DASHBOARD_PASSWORD=hunter2-hunter2" in env
     assert "OPENAI_API_KEY" not in env
+
+
+async def test_setup_requires_a_dashboard_password(client):
+    c, tmp_path = client
+    resp = await c.post(
+        "/setup",
+        data={"api_key": "k1", "anthropic_api_key": "sk-ant-test"},
+    )
+    assert resp.status_code == 400
+    assert "password" in resp.text.lower()
+    assert not (tmp_path / ".env").exists()
+
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "anthropic_api_key": "sk-ant-test",
+            "dashboard_password": "short",
+        },
+    )
+    assert resp.status_code == 400
+    assert not (tmp_path / ".env").exists()
+
+
+async def test_setup_requires_a_model_provider_key(client):
+    c, tmp_path = client
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "dashboard_password": "long-enough-pw",
+            "capsolver_api_key": "CAP-123",
+        },
+    )
+    assert resp.status_code == 400
+    assert "provider" in resp.text.lower()
+    assert not (tmp_path / ".env").exists()
+
+
+async def test_validate_key_reports_provider_verdict(client, monkeypatch):
+    c, _ = client
+
+    async def fake_check(provider, key):
+        assert provider == "anthropic"
+        return (key == "sk-ant-good", "Anthropic rejected this key.")
+
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes._check_provider_key", fake_check
+    )
+    resp = await c.post(
+        "/setup/validate-key", json={"provider": "anthropic", "key": "sk-ant-good"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp = await c.post(
+        "/setup/validate-key", json={"provider": "anthropic", "key": "sk-ant-bad"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+async def test_validate_key_reports_unreachable_as_neither(client, monkeypatch):
+    c, _ = client
+
+    async def fake_check(provider, key):
+        return None, "Could not reach the provider from this machine."
+
+    monkeypatch.setattr(
+        "openbrowse.dashboard.setup_routes._check_provider_key", fake_check
+    )
+    resp = await c.post(
+        "/setup/validate-key", json={"provider": "openai", "key": "sk-proj-x"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is None
+
+
+async def test_validate_key_rejects_unknown_provider(client):
+    c, _ = client
+    resp = await c.post(
+        "/setup/validate-key", json={"provider": "gemini", "key": "x"}
+    )
+    assert resp.status_code == 422
 
 
 async def test_setup_refuses_to_clobber_existing_env(client):
@@ -95,6 +180,12 @@ async def test_setup_hidden_once_configured(tmp_path, monkeypatch):
         assert resp.status_code == 303
         resp = await c.post("/setup", data={"api_key": "x"}, follow_redirects=False)
         assert resp.status_code == 303
+        resp = await c.post(
+            "/setup/validate-key",
+            json={"provider": "anthropic", "key": "sk-ant-x"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
 
 
 async def test_codeview_shell_served_without_auth(client):
@@ -133,7 +224,13 @@ async def test_setup_clamps_oversized_concurrency(client, monkeypatch):
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post(
         "/setup",
-        data={"api_key": "k1", "max_concurrent_sessions": "99", "share": "all"},
+        data={
+            "api_key": "k1",
+            "dashboard_password": "long-enough-pw",
+            "anthropic_api_key": "sk-ant-test",
+            "max_concurrent_sessions": "99",
+            "share": "all",
+        },
     )
     assert resp.status_code == 200
     assert "MAX_CONCURRENT_SESSIONS=4" in (tmp_path / ".env").read_text()
@@ -154,7 +251,7 @@ async def test_setup_falls_back_to_plain_input_without_probe(client, monkeypatch
     resp = await c.get("/setup")
     assert resp.status_code == 200
     assert 'name="max_concurrent_sessions" value="1"' in resp.text.replace("\n", " ")
-    assert 'type="range"' not in resp.text
+    assert 'id="mcs-slider"' not in resp.text
 
 
 async def test_setup_restart_requires_saved_env(client, monkeypatch):
@@ -198,7 +295,13 @@ async def test_setup_save_honours_the_light_browser_choice(client, monkeypatch):
     c, tmp_path = client
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
     resp = await c.post(
-        "/setup", data={"api_key": "k1", "chrome_light_flags": "1"}
+        "/setup",
+        data={
+            "api_key": "k1",
+            "dashboard_password": "long-enough-pw",
+            "anthropic_api_key": "sk-ant-test",
+            "chrome_light_flags": "1",
+        },
     )
     assert resp.status_code == 200
     assert "CHROME_LIGHT_FLAGS=1" in (tmp_path / ".env").read_text()
@@ -207,7 +310,14 @@ async def test_setup_save_honours_the_light_browser_choice(client, monkeypatch):
 async def test_setup_save_omits_the_light_browser_flag_when_opted_out(client, monkeypatch):
     c, tmp_path = client
     monkeypatch.setattr("openbrowse.hostinfo.probe", lambda: _fixed_info())
-    resp = await c.post("/setup", data={"api_key": "k1"})
+    resp = await c.post(
+        "/setup",
+        data={
+            "api_key": "k1",
+            "dashboard_password": "long-enough-pw",
+            "anthropic_api_key": "sk-ant-test",
+        },
+    )
     assert resp.status_code == 200
     assert "CHROME_LIGHT_FLAGS" not in (tmp_path / ".env").read_text()
 
