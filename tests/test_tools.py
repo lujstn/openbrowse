@@ -1,7 +1,7 @@
 """Tool registration tests (no live API calls)."""
 
 import pytest
-from browser_use import Tools
+from browser_use import ActionResult, Tools
 
 
 def test_register_fetch_tool() -> None:
@@ -1188,10 +1188,19 @@ async def test_run_code_file_reports_saved_files(tmp_path) -> None:
 
 
 async def test_run_code_file_hints_on_string_indices(tmp_path) -> None:
+    """The hint must not travel inside ``error``: browser-use renders an error over
+    200 chars as its first 100 plus last 100, so a hint sitting between the exception
+    and stdout is deleted before the model reads it."""
+    from openbrowse.agent.tools import model_visible_attrs
+
     result = await _run_sandbox(tmp_path, "x = '{\"a\": 1}'\nprint(x['a'])")
     assert result.error
-    assert "parsed dicts" in result.error
-    assert "read_output()" in result.error
+    assert "TypeError" in result.error
+    assert "parsed dicts" not in result.error
+
+    visible = "\n".join(str(getattr(result, a) or "") for a in model_visible_attrs(result))
+    assert "parsed dicts" in visible
+    assert "read_output()" in visible
 
 
 async def test_run_code_file_shows_code_tab_and_restores_focus(
@@ -3479,15 +3488,20 @@ async def test_search_page_flow_wrapper() -> None:
     clipboard = {"_visited": {"https://x.com/a"}}
     register_search_page_flow(tools, clipboard)
 
+    from openbrowse.agent.tools import model_visible_attrs
+
+    def seen_by_model(result) -> str:
+        return "\n".join(str(getattr(result, a) or "") for a in model_visible_attrs(result))
+
     params = SimpleNamespace(pattern="salary|equity", css_scope="null")
     first = await entry.function(params=params)
     assert calls[-1] is None
-    assert "pages.json" in first.extracted_content
+    assert "pages.json" in seen_by_model(first)
 
     params2 = SimpleNamespace(pattern="salary|equity", css_scope=None)
     second = await entry.function(params=params2)
-    assert "searched 2 times" in second.extracted_content
-    assert "run_code_file" in second.extracted_content
+    assert "searched 2 times" in seen_by_model(second)
+    assert "run_code_file" in seen_by_model(second)
 
 
 async def test_read_output_fields_json_string_normalised_at_boundary() -> None:
@@ -3599,3 +3613,347 @@ async def test_gate_emits_pass_event_on_clean_done() -> None:
     result = await entry.function(params=params, file_system=_FakeFileSystem())
     assert result.is_done, getattr(result, "extracted_content", "")
     assert passes and not bounces
+
+
+# --- delivery channel: what the agent can actually read ---------------------
+
+
+def _seen_by_model(result) -> str:
+    from openbrowse.agent.tools import model_visible_attrs
+
+    return "\n".join(str(getattr(result, a) or "") for a in model_visible_attrs(result))
+
+
+async def test_model_visible_attrs_matches_browser_use_history_rendering() -> None:
+    """The contract every other fix here rests on. If browser-use ever changes which
+    fields it forwards, this fails before the tools quietly stop being readable."""
+    import tempfile
+
+    from browser_use.agent.message_manager.service import MessageManager
+    from browser_use.agent.views import AgentStepInfo
+    from browser_use.filesystem.file_system import FileSystem
+    from browser_use.llm.messages import SystemMessage
+
+    from openbrowse.agent.tools import model_visible_attrs
+
+    fs = FileSystem(tempfile.mkdtemp())
+    cases = [
+        ActionResult(extracted_content="LISTING", long_term_memory="COUNT"),
+        ActionResult(extracted_content="LISTING"),
+        ActionResult(long_term_memory="COUNT"),
+        ActionResult(
+            extracted_content="LISTING",
+            long_term_memory="COUNT",
+            include_extracted_content_only_once=True,
+        ),
+    ]
+    for result in cases:
+        manager = MessageManager(
+            task="t", system_message=SystemMessage(content="s"), file_system=fs
+        )
+        manager._update_agent_history_description(
+            None, [result], AgentStepInfo(step_number=0, max_steps=10)
+        )
+        rendered = "\n".join(i.to_string() for i in manager.state.agent_history_items)
+        rendered += manager.state.read_state_description
+        for attr in ("extracted_content", "long_term_memory"):
+            text = getattr(result, attr, None)
+            if not text:
+                continue
+            forwarded = text in rendered
+            predicted = attr in model_visible_attrs(result)
+            assert forwarded == predicted, (attr, result)
+
+
+async def test_find_elements_asks_for_the_attributes_its_selector_names() -> None:
+    """A selector that filters on href and comes back with tag and text only is a dead
+    end: the href is unrecoverable and nothing says it was withheld."""
+    from types import SimpleNamespace
+
+    from openbrowse.agent.tools import register_find_elements_flow
+
+    asked: list = []
+
+    async def fake_find(params=None, **kwargs):
+        asked.append(list(params.attributes or []))
+        rows = "\n".join(f'[{i}] <a> "X" {{href="https://x.com/{i}"}}' for i in range(3))
+        return ActionResult(
+            extracted_content=f'Found 3 elements matching "{params.selector}":\n\n{rows}',
+            long_term_memory=f'Found 3 elements matching "{params.selector}".',
+        )
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("find_elements")
+    if entry is None:
+        pytest.skip("browser-use build has no find_elements action")
+    entry.function = fake_find
+    register_find_elements_flow(tools)
+
+    params = SimpleNamespace(
+        selector="a[href*='twitter.com'], a[href*='linkedin.com']", attributes=None
+    )
+    result = await entry.function(params=params)
+
+    assert asked[-1] == ["href"]
+    visible = _seen_by_model(result)
+    assert "https://x.com/0" in visible
+    assert "https://x.com/2" in visible
+
+
+async def test_find_elements_respects_attributes_the_caller_gave() -> None:
+    from types import SimpleNamespace
+
+    from openbrowse.agent.tools import register_find_elements_flow
+
+    asked: list = []
+
+    async def fake_find(params=None, **kwargs):
+        asked.append(list(params.attributes or []))
+        return ActionResult(extracted_content="Found 0 elements.", long_term_memory="none")
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("find_elements")
+    if entry is None:
+        pytest.skip("browser-use build has no find_elements action")
+    entry.function = fake_find
+    register_find_elements_flow(tools)
+
+    params = SimpleNamespace(selector="a[href]", attributes=["src"])
+    await entry.function(params=params)
+    assert asked[-1] == ["src"]
+
+
+def test_attrs_from_selector_covers_filters_and_tag_identity() -> None:
+    from openbrowse.agent.tools import _attrs_from_selector
+
+    assert _attrs_from_selector("a[href*='x.com']") == ["href"]
+    assert _attrs_from_selector("img[data-src]") == ["data-src", "src"]
+    assert _attrs_from_selector("div.card") == []
+    assert _attrs_from_selector("a") == ["href"]
+    assert "href" in _attrs_from_selector("nav a, footer a")
+
+
+async def test_recall_returns_the_whole_value_not_a_hundred_characters() -> None:
+    """recall is the documented way back to stashed data; a silent 100-char preview
+    makes every pointer that names it a lie."""
+    from openbrowse.agent.tools import register_clipboard_tools
+
+    links = [f"https://example.com/page-{i}" for i in range(40)]
+    clipboard = {"found_links": links}
+    tools = Tools()
+    register_clipboard_tools(tools, clipboard)
+    entry = tools.registry.registry.actions["recall"]
+
+    result = await entry.function(key="found_links")
+    visible = _seen_by_model(result)
+
+    assert len(str(links)) > 100
+    assert "page-0" in visible and "page-39" in visible
+
+
+async def test_recall_says_so_when_a_value_is_too_big_to_return_whole() -> None:
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import register_clipboard_tools
+
+    value = "x" * (tools_mod._RECALL_INLINE_CHARS + 500)
+    tools = Tools()
+    register_clipboard_tools(tools, {"blob": value})
+    entry = tools.registry.registry.actions["recall"]
+
+    visible = _seen_by_model(await entry.function(key="blob"))
+    assert "cut here" in visible
+    assert str(len(value)) in visible
+
+
+async def test_output_guard_breaks_a_repeat_loop_on_the_persistent_channel() -> None:
+    """The wise.com shape: a short constant reply, under every size threshold, that an
+    agent can re-request forever without learning anything."""
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    async def fake(params=None, **kwargs):
+        return ActionResult(long_term_memory='Found 5 elements matching "a[href]".')
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("find_elements")
+    if entry is None:
+        pytest.skip("browser-use build has no find_elements action")
+    entry.function = fake
+    register_output_guard_overrides(tools)
+
+    first = _seen_by_model(await entry.function(params=None))
+    assert "STOP REPEATING" not in first
+
+    second = _seen_by_model(await entry.function(params=None))
+    assert "STOP REPEATING THIS" in second
+    assert "find_elements" in second
+
+
+async def test_output_guard_back_reference_names_the_file_it_saved() -> None:
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    big = "y" * 20000
+
+    async def fake(params=None, **kwargs):
+        return ActionResult(long_term_memory=big)
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("evaluate")
+    if entry is None:
+        pytest.skip("browser-use build has no evaluate action")
+    entry.function = fake
+    register_output_guard_overrides(tools)
+
+    fs = _FakeFileSystem()
+    first = _seen_by_model(await entry.function(params=None, file_system=fs))
+    assert "readout_evaluate.txt" in first
+
+    second = _seen_by_model(await entry.function(params=None, file_system=fs))
+    assert "readout_evaluate.txt" in second, "a back-reference must say where to look"
+
+
+async def test_read_pages_queues_the_remainder_and_resumes_from_it(monkeypatch) -> None:
+    """Over the cap, a second no-args call used to re-read the same first batch while
+    the result claimed everything had been read."""
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import register_tab_tools
+
+    calls: list[list[str]] = []
+
+    async def fake_impl(session, urls, url_contains, clipboard, progress=None):
+        calls.append(list(urls))
+        return [
+            {"url": u, "title": "t", "text": "body " * 100, "jsonld": None, "links": []}
+            for u in urls
+        ]
+
+    monkeypatch.setattr(tools_mod, "_read_pages_impl", fake_impl)
+    monkeypatch.setattr(tools_mod, "_READ_PAGES_MAX", 3)
+
+    all_urls = [f"https://x.com/{i}" for i in range(5)]
+    clipboard: dict = {"found_links": list(all_urls)}
+    tools = Tools()
+    register_tab_tools(tools, object(), clipboard, _items_store(), None)
+    entry = tools.registry.registry.actions["read_pages"]
+
+    first = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls[-1] == all_urls[:3]
+    visible = _seen_by_model(first)
+    assert "2 link(s) are still UNREAD" in visible
+    assert "NO arguments" in visible
+
+    second = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls[-1] == all_urls[3:], "the second call must resume, not repeat"
+    assert "Nothing is queued" in _seen_by_model(second)
+
+
+async def test_read_pages_says_plainly_when_the_queue_is_empty(monkeypatch) -> None:
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import register_tab_tools
+
+    async def fake_impl(session, urls, url_contains, clipboard, progress=None):
+        return [
+            {"url": u, "title": "t", "text": "body " * 100, "jsonld": None, "links": []}
+            for u in urls
+        ]
+
+    monkeypatch.setattr(tools_mod, "_read_pages_impl", fake_impl)
+
+    clipboard: dict = {
+        "found_links": ["https://x.com/a"],
+        "_unread_links": ["https://x.com/a"],
+        "_visited": {tools_mod._norm_url("https://x.com/a")},
+    }
+    tools = Tools()
+    register_tab_tools(tools, object(), clipboard, _items_store(), None)
+    entry = tools.registry.registry.actions["read_pages"]
+
+    result = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert "nothing left to read" in _seen_by_model(result)
+
+
+def test_gate_link_deficit_reports_the_links_it_does_not_list() -> None:
+    """The gate fires once, so a silent top-8 cut lets an agent clear eight links and
+    believe it is finished."""
+    from openbrowse.agent.tools import _gate_link_deficit
+
+    store = _items_store()
+    clipboard = {"found_links": [f"https://x.com/{i}" for i in range(20)]}
+    msg = _gate_link_deficit(store, clipboard)
+
+    assert msg is not None
+    assert "and 12 more link(s)" in msg
+
+
+async def test_card_fields_reach_the_agents_own_history() -> None:
+    """Without this the model's stated next move is dashboard-only, and every step
+    begins with no record of what it just decided to do."""
+    import tempfile
+
+    import openbrowse.agent.runner  # noqa: F401  — importing applies the patch
+    from browser_use.agent.message_manager.service import MessageManager
+    from browser_use.agent.views import AgentStepInfo
+    from browser_use.filesystem.file_system import FileSystem
+    from browser_use.llm.messages import SystemMessage
+
+    class _Brain:
+        def __init__(self, output):
+            self._o = output
+
+        evaluation_previous_goal = property(lambda s: s._o.evaluation_previous_goal or "")
+        memory = property(lambda s: s._o.memory or "")
+        next_goal = property(lambda s: s._o.next_goal or "")
+
+    class _Output:
+        def __init__(self, **kw):
+            self.evaluation_previous_goal = kw.get("evaluation_previous_goal", "")
+            self.memory = kw.get("memory", "")
+            self.next_goal = kw.get("next_goal", "")
+            self.what_i_see = kw.get("what_i_see")
+            self.plan_to_goal = kw.get("plan_to_goal")
+            self.next_move = kw.get("next_move")
+
+        @property
+        def current_state(self):
+            return _Brain(self)
+
+    fs = FileSystem(tempfile.mkdtemp())
+
+    def render(output):
+        manager = MessageManager(
+            task="t", system_message=SystemMessage(content="s"), file_system=fs
+        )
+        manager._update_agent_history_description(
+            output, [ActionResult(long_term_memory="did a thing")],
+            AgentStepInfo(step_number=1, max_steps=10),
+        )
+        return "\n".join(i.to_string() for i in manager.state.agent_history_items)
+
+    blank = _Output(next_move="ask find_elements for the href attribute")
+    assert "ask find_elements for the href attribute" in render(blank)
+
+    populated = _Output(next_goal="native goal", next_move="card move")
+    rendered = render(populated)
+    assert "native goal" in rendered
+    assert "card move" not in rendered, "a populated native field must not be overwritten"
+
+
+def test_backfill_brain_fields_only_fires_on_a_silent_step() -> None:
+    from openbrowse.agent.leak_repair import backfill_brain_fields
+
+    class _Block:
+        type = "tool_use"
+
+        def __init__(self, payload):
+            self.input = payload
+
+    class _Response:
+        def __init__(self, blocks):
+            self.content = blocks
+
+    silent = {"action": [{"find_elements": {"selector": "a"}}]}
+    assert backfill_brain_fields(_Response([_Block(silent)]), "I should ask for href")
+    assert "href" in silent["memory"]
+
+    spoken = {"action": [], "next_goal": "already said something"}
+    assert not backfill_brain_fields(_Response([_Block(spoken)]), "reasoning")
+    assert "memory" not in spoken

@@ -49,6 +49,9 @@ _FETCH_PREVIEW_CHARS = 2000
 _SANDBOX_STDOUT_PREVIEW_CHARS = 2500
 _CAPPED_READ_PREVIEW_CHARS = 8000
 _GUARD_MIN_CHARS = 500
+_RECALL_INLINE_CHARS = 8000
+_UNREAD_LINKS_KEY = "_unread_links"
+_READ_DONE_KEY = "_read_pages_done"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -776,6 +779,8 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
         "found_links_frame",
         "found_links_meta",
         "_visited",
+        "_unread_links",
+        "_read_pages_done",
         "_read_items",
         "_read_failed",
         "_read_failed_frame",
@@ -1467,14 +1472,14 @@ def register_fetch_tool(tools: Tools) -> None:
                         f"Full body saved to '{saved}' — read specific parts via read_file "
                         "or the code sandbox (read_json) rather than re-fetching."
                         if saved
-                        else "Saving the full body failed; narrow the request instead of re-fetching."
+                        else "Saving the full body FAILED, so this preview is all that "
+                        "survives and the rest is gone — there is no file to read. "
+                        "Fetch a narrower URL if you need more of it."
                     )
                 ),
             }
-            return ActionResult(
-                extracted_content=json.dumps(result, indent=2),
-                long_term_memory=f"Fetched {url} ({total} chars) -> {saved or 'preview only'}",
-            )
+            payload = json.dumps(result, indent=2)
+            return ActionResult(extracted_content=payload, long_term_memory=payload)
         except httpx.HTTPError as e:
             return ActionResult(error=f"HTTP request failed: {e}")
 
@@ -1559,11 +1564,16 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
     except asyncio.TimeoutError:
         out = stdout.getvalue()
         tail = f"\n--- stdout so far ---\n{out[-2000:]}" if out else ""
+        # @nonobvious(forced-by): browser-use renders a result's `error` as its first
+        # 100 plus last 100 characters once it passes 200, so anything explanatory in
+        # the middle is deleted before the model reads it. The guidance travels on
+        # long_term_memory, which survives whole.
         return ActionResult(
-            error="Script timed out after 300 seconds. Anything you saved with "
-            "save_json before the timeout is still on disk. For bulk page reads use "
-            "browser.read_pages(urls, frame_url_contains) instead of a navigate "
-            f"loop; otherwise process a smaller batch and continue in the next run.{tail}"
+            error="Script timed out after 300 seconds.",
+            long_term_memory="Script timed out after 300 seconds. Anything you saved "
+            "with save_json before the timeout is still on disk. For bulk page reads "
+            "use browser.read_pages(urls, frame_url_contains) instead of a navigate "
+            f"loop; otherwise process a smaller batch and continue in the next run.{tail}",
         )
     except Exception as e:
         out = stdout.getvalue()
@@ -1591,7 +1601,12 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
                 "with OR without await."
             )
         tail = f"\n--- stdout ---\n{out}" if out else ""
-        return ActionResult(error=f"{type(e).__name__}: {e}{hint}{tail}"[:10000])
+        # The hint sat between the exception and stdout, which is exactly the span
+        # browser-use's 100-plus-100 error clip removes; it has to travel separately.
+        return ActionResult(
+            error=f"{type(e).__name__}: {e}",
+            long_term_memory=f"{type(e).__name__}: {e}{hint}{tail}"[:10000],
+        )
 
     out = stdout.getvalue()
     total = len(out)
@@ -1872,11 +1887,17 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
             return ActionResult(
                 extracted_content=f"No value stored for '{key}'. Known keys: {known}"
             )
-        value = clipboard[str(key)]
-        return ActionResult(
-            extracted_content=str(value),
-            long_term_memory=f"recall({key})={str(value)[:100]}",
-        )
+        value = str(clipboard[str(key)])
+        if len(value) <= _RECALL_INLINE_CHARS:
+            note = f"recall({key}) = {value}"
+        else:
+            note = (
+                f"recall({key}) = {value[:_RECALL_INLINE_CHARS]}"
+                f"\n[cut here — the stored value is {len(value)} chars and only the first "
+                f"{_RECALL_INLINE_CHARS} are above. If this key came from a tool that also "
+                "saved a file, read that file for the rest.]"
+            )
+        return ActionResult(extracted_content=note, long_term_memory=note)
 
 
 class TabManager:
@@ -2137,15 +2158,34 @@ def register_tab_tools(
         try:
             offhost_skipped = 0
             if not urls:
-                urls, offhost_skipped = _saved_links_sans_offhost(clipboard)
+                # A queue left by an earlier capped call is the resume point; without
+                # it a second no-args call re-reads the same first batch forever.
+                queued = [u for u in (clipboard.get(_UNREAD_LINKS_KEY) or []) if u]
+                if queued:
+                    visited = clipboard.get("_visited") or set()
+                    urls = [u for u in queued if _norm_url(u) not in visited]
+                    if not urls:
+                        clipboard[_UNREAD_LINKS_KEY] = []
+                        done_note = (
+                            "read_pages: nothing left to read — every queued link has "
+                            "already been read this session. Their full text is in "
+                            "pages.json; work from that instead of calling read_pages "
+                            "again."
+                        )
+                        return ActionResult(
+                            extracted_content=done_note, long_term_memory=done_note
+                        )
+                else:
+                    urls, offhost_skipped = _saved_links_sans_offhost(clipboard)
                 if not urls:
                     return ActionResult(
                         error="No urls given and no saved found_links — run find_links first."
                     )
             if frame_url_contains is None:
                 frame_url_contains = clipboard.get("found_links_frame")
-            dropped = max(0, len(urls) - _READ_PAGES_MAX)
+            remainder = urls[_READ_PAGES_MAX:]
             urls = urls[:_READ_PAGES_MAX]
+            clipboard[_UNREAD_LINKS_KEY] = remainder
             pages = await _read_pages_impl(
                 browser_session, urls, frame_url_contains, clipboard, progress=progress
             )
@@ -2254,9 +2294,9 @@ def register_tab_tools(
                     else ""
                 )
                 + (
-                    f". NOTE: {dropped} URL(s) beyond the {_READ_PAGES_MAX}-page cap "
-                    "were NOT read — call read_pages again with the remainder"
-                    if dropped
+                    f". {len(remainder)} link(s) beyond the {_READ_PAGES_MAX}-page cap "
+                    "were NOT read and are queued for the next call"
+                    if remainder
                     else ""
                 )
                 + ".\n"
@@ -2271,9 +2311,28 @@ def register_tab_tools(
                     "then add_items_from_file('items.json'). Do not re-read these pages."
                 )
             )
+            done_total = int(clipboard.get(_READ_DONE_KEY) or 0) + len(pages)
+            clipboard[_READ_DONE_KEY] = done_total
+            # The queue state has to be unmistakable in both directions: an agent that
+            # thinks it has read everything stops early, and one that thinks work
+            # remains calls into an error. Say the count, say the exact next call, and
+            # say plainly when there is nothing left.
+            queue_state = (
+                f" {len(remainder)} link(s) are still UNREAD and are queued: call "
+                "read_pages() again with NO arguments to read the next batch — it "
+                "resumes from the queue by itself, so do not re-pass URLs you have "
+                "already read."
+                if remainder
+                else " Nothing is queued — every saved link has now been read."
+            )
             return ActionResult(
                 extracted_content=note,
-                long_term_memory=f"read_pages: {ok_count}/{len(pages)} pages -> {saved}",
+                long_term_memory=(
+                    f"read_pages: read {ok_count} of {len(pages)} page(s) this call, "
+                    f"{done_total} read so far this session -> {saved}."
+                    + queue_state
+                    + f"\n{note}"
+                ),
             )
         except Exception as e:
             return ActionResult(error=f"read_pages failed: {type(e).__name__}: {e}")
@@ -2641,12 +2700,20 @@ def register_tab_tools(
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
             + (f" and {saved}" if saved else "")
-            + ". Next: call read_pages() with no args to read them ALL in one step — "
+            + ". Next: call read_pages() with no args to read them — "
             "each item's detail (description, published date and more) lives on its own "
-            "page, not this list page." + unverified_hint + frame_hint + offhost_hint
+            "page, not this list page."
+            + (
+                f" There are more than {_READ_PAGES_MAX} of them, so this takes more "
+                "than one call: read_pages() reads a batch, queues the rest, and "
+                "resumes from that queue each time you call it again with no args."
+                if len(links) > _READ_PAGES_MAX
+                else " One call covers them all."
+            )
+            + unverified_hint + frame_hint + offhost_hint
             + " read_pages prefills rows_draft.json for add_items_from_file — no "
-            "mapping script needed. The links stay in view below and via "
-            "recall('found_links') — no need to re-read."
+            "mapping script needed. The link list itself is in found_links.json and "
+            "via recall('found_links') — no need to re-run find_links to see it again."
         )
         return ActionResult(
             extracted_content=json.dumps(links, indent=2),
@@ -2656,12 +2723,35 @@ def register_tab_tools(
 
 _GUARDED_DUMP_ACTIONS = (
     "find_elements",
+    "search_page",
     "evaluate",
     "find_links",
     "http_fetch",
     "run_code_file",
+    "read_pages",
 )
 _GUARDED_DEDUP_ACTIONS = ("read_output", "search_output")
+
+_REPEAT_BREAK_AT = 2
+
+
+def model_visible_attrs(result: ActionResult) -> tuple[str, ...]:
+    """The ``ActionResult`` fields browser-use actually forwards to the model, in the
+    order it renders them. Mirrors ``_update_agent_history_description``: a result's
+    ``extracted_content`` is DISCARDED — not truncated, not previewed — whenever
+    ``long_term_memory`` is set and ``include_extracted_content_only_once`` is False.
+    Anything written to a field this does not return is invisible to the agent no
+    matter how carefully it is worded.
+    """
+    once = bool(getattr(result, "include_extracted_content_only_once", False))
+    attrs: list[str] = []
+    if once and getattr(result, "extracted_content", None):
+        attrs.append("extracted_content")
+    if getattr(result, "long_term_memory", None):
+        attrs.append("long_term_memory")
+    elif not once and getattr(result, "extracted_content", None):
+        attrs.append("extracted_content")
+    return tuple(attrs)
 
 
 def _compact_json_text(text: str) -> str | None:
@@ -2701,10 +2791,20 @@ def register_output_guard_overrides(tools: Tools) -> None:
     """Stop a run's context ballooning: replace any large chunk already seen this
     session with a short back-reference, and (for dump actions only) cap genuinely huge
     single outputs to a file. The answer-surface reads (read_output/search_output) are
-    deduped but never capped, so the store always shows whole. Rewrites BOTH
-    ``extracted_content`` and ``long_term_memory`` (browser-use folds
-    ``long_term_memory`` into permanent context first, so capping only the former
-    silently misses a whole size band).
+    deduped but never capped, so the store always shows whole.
+
+    Operates only on the fields ``model_visible_attrs`` reports, because those are the
+    only ones the agent ever reads. A back-reference written anywhere else is not a
+    pointer, it is a deletion; and a back-reference is only honest at all because the
+    text it points at went to a persistent field, so it is still in the history.
+    Whenever a cap spills to a readout file, every later reference names that file
+    rather than a step number the agent cannot look up.
+
+    Also breaks repeat loops. An action that keeps returning the same bytes cannot make
+    progress, and the agent has no way to notice on its own: its own stated intent does
+    not survive the step boundary, so it re-derives the same call from a history that by
+    then reads as N copies of one line. The streak is tracked at any size — a short
+    constant reply is exactly the kind that loops.
 
     Swaps each action's normalised function in place — the registry executes
     ``entry.function`` at call time, and every function is normalised to accept
@@ -2713,45 +2813,94 @@ def register_output_guard_overrides(tools: Tools) -> None:
     so it wraps the final version of each action.
     """
     registry_actions = tools.registry.registry.actions
-    seen: dict[str, int] = {}
+    seen: dict[str, dict[str, Any]] = {}
     counter = {"n": 0}
+    streak: dict[str, Any] = {"action": None, "key": None, "n": 0}
+
+    def _back_reference(prior: dict[str, Any]) -> str:
+        where = prior.get("where")
+        if where:
+            return (
+                f"[identical to earlier output #{prior['n']} — not repeated; the full "
+                f"text is in '{where}', read that rather than re-running this]"
+            )
+        return (
+            f"[identical to earlier output #{prior['n']} — not repeated; it is still "
+            "in your history above, scroll back rather than re-running this]"
+        )
+
+    def _bump_streak(action_name: str, visible: str) -> int:
+        key = guard_key(visible)
+        if streak["action"] == action_name and streak["key"] == key:
+            streak["n"] += 1
+        else:
+            streak.update({"action": action_name, "key": key, "n": 1})
+        return int(streak["n"])
 
     async def _guard(
-        result: ActionResult, file_system: Any, readout_name: str, cap: bool
+        result: ActionResult,
+        file_system: Any,
+        action_name: str,
+        readout_name: str,
+        cap: bool,
     ) -> ActionResult:
-        for attr in ("extracted_content", "long_term_memory"):
+        attrs = model_visible_attrs(result)
+        if not attrs:
+            return result
+        repeats = _bump_streak(
+            action_name, "\n".join(str(getattr(result, a) or "") for a in attrs)
+        )
+
+        for attr in attrs:
             text = getattr(result, attr, None)
             if not text or len(text) <= _GUARD_MIN_CHARS:
                 continue
             key = guard_key(text)
-            if key in seen:
-                setattr(result, attr, f"[identical to earlier output #{seen[key]} — not repeated]")
+            prior = seen.get(key)
+            if prior is not None:
+                setattr(result, attr, _back_reference(prior))
                 continue
             counter["n"] += 1
-            seen[key] = counter["n"]
+            record: dict[str, Any] = {"n": counter["n"], "where": None}
+            seen[key] = record
             if cap and len(text) > _CAPPED_READ_PREVIEW_CHARS:
                 total = len(text)
                 tail = "narrow your query instead of dumping"
                 if file_system is not None and readout_name:
                     try:
                         await file_system.write_file(readout_name, text)
+                        record["where"] = readout_name
                         tail = f"saved to '{readout_name}' — read specific parts instead"
                     except Exception:
                         logger.warning("output guard: failed to save readout", exc_info=True)
+                        tail = (
+                            "saving it failed, so the rest is gone — narrow your query "
+                            "and run again rather than expecting a file"
+                        )
                 compacted = _compact_json_text(text)
                 if compacted is not None and len(compacted) <= 2 * _CAPPED_READ_PREVIEW_CHARS:
                     setattr(
                         result,
                         attr,
-                        compacted + f"\n[full data: {total} chars, {tail}] (output #{seen[key]})",
+                        compacted + f"\n[full data: {total} chars, {tail}] (output #{record['n']})",
                     )
                     continue
                 setattr(
                     result,
                     attr,
                     text[:_CAPPED_READ_PREVIEW_CHARS]
-                    + f"\n[truncated: {total} chars total, {tail}] (output #{seen[key]})",
+                    + f"\n[truncated: {total} chars total, {tail}] (output #{record['n']})",
                 )
+
+        if repeats >= _REPEAT_BREAK_AT:
+            note = (
+                f" STOP REPEATING THIS: {action_name} has now returned exactly the same "
+                f"result {repeats} times in a row. Running it again cannot produce "
+                "anything different. Change the approach — different parameters, a "
+                "different tool, or record what you already have and move on."
+            )
+            target = attrs[-1]
+            setattr(result, target, str(getattr(result, target) or "") + note)
         return result
 
     def _install(name: str, cap: bool) -> None:
@@ -2764,13 +2913,14 @@ def register_output_guard_overrides(tools: Tools) -> None:
         async def wrapped(
             params: Any = None,
             _original: Any = original,
+            _name: str = name,
             _readout: str = readout,
             _cap: bool = cap,
             **kwargs: Any,
         ) -> Any:
             result = await _original(params=params, **kwargs)
             if isinstance(result, ActionResult):
-                return await _guard(result, kwargs.get("file_system"), _readout, _cap)
+                return await _guard(result, kwargs.get("file_system"), _name, _readout, _cap)
             return result
 
         entry.function = wrapped
@@ -2848,13 +2998,84 @@ def action_param_kinds(tools: Tools) -> dict[str, dict[str, dict[str, Any]]]:
     return kinds
 
 
+_SELECTOR_ATTR_RE = re.compile(r"\[\s*([A-Za-z_:][-\w:.]*)\s*(?:[~|^$*]?=|\])")
+_TAG_IDENTITY_ATTRS = (("a", "href"), ("link", "href"), ("img", "src"), ("script", "src"))
+
+
+def _attrs_from_selector(selector: str) -> list[str]:
+    """The attributes a selector demonstrably cares about: every attribute it filters
+    on, plus the one that identifies the tag it targets.
+
+    ``find_elements`` defaults to returning tag and text only, so asking it for
+    ``a[href*='x.com']`` answers with five anonymous anchors and no URLs — the one
+    thing the selector proves the caller wanted. Nothing about the reply says the
+    attribute is available on request, so the honest default is to include what was
+    filtered on.
+    """
+    names: list[str] = []
+    for match in _SELECTOR_ATTR_RE.finditer(selector or ""):
+        name = match.group(1)
+        if name not in names:
+            names.append(name)
+    lowered = (selector or "").lower()
+    for tag, attr in _TAG_IDENTITY_ATTRS:
+        if re.search(rf"(?:^|[\s,>+~]){tag}\b", lowered) and attr not in names:
+            names.append(attr)
+    return names
+
+
+def _deliver_listing(result: ActionResult) -> None:
+    """Move a listing the model cannot see onto the field it reads.
+
+    ``find_elements`` and ``search_page`` put their actual findings in
+    ``extracted_content`` and a bare count in ``long_term_memory``, and browser-use
+    discards ``extracted_content`` whenever ``long_term_memory`` is set — so the
+    findings never arrive and the count is all there is. Both formatters lead with
+    that same count line, so carrying the listing over loses nothing even when the
+    output guard later truncates it from the head.
+    """
+    listing = getattr(result, "extracted_content", None)
+    if listing:
+        result.long_term_memory = listing
+
+
+def register_find_elements_flow(tools: Tools) -> None:
+    """Wrap the built-in ``find_elements`` so it can answer the question it was asked:
+    fill in the attributes the selector already names when the caller gave none, and
+    deliver the element listing on the field the model actually reads.
+
+    Left alone this action is unanswerable — its listing is the only place attribute
+    values appear, and that listing is dropped. An agent that needs an href gets a
+    count, cannot tell that anything was withheld, and re-runs the same call.
+    """
+    entry = tools.registry.registry.actions.get("find_elements")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def wrapped(params: Any = None, **kwargs: Any) -> Any:
+        if params is not None and not getattr(params, "attributes", None):
+            derived = _attrs_from_selector(str(getattr(params, "selector", "") or ""))
+            if derived:
+                try:
+                    params.attributes = derived
+                except Exception:
+                    logger.debug("find_elements: could not set derived attributes", exc_info=True)
+        result = await original(params=params, **kwargs)
+        if isinstance(result, ActionResult):
+            _deliver_listing(result)
+        return result
+
+    entry.function = wrapped
+
+
 def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
     """Wrap the built-in ``search_page`` so it survives the shapes models
-    actually send and steers away from unproductive repeats: a ``css_scope``
-    of ``"null"``/``"none"``/empty text becomes no scope instead of a literal
-    selector lookup that always fails; the first search after pages have been
-    read points at the one-step pages.json sweep; an exact repeated pattern is
-    told its result will not change.
+    actually send, delivers its matches where the model can read them, and steers
+    away from unproductive repeats: a ``css_scope`` of ``"null"``/``"none"``/empty
+    text becomes no scope instead of a literal selector lookup that always fails;
+    the first search after pages have been read points at the one-step pages.json
+    sweep; an exact repeated pattern is told its result will not change.
     """
     entry = tools.registry.registry.actions.get("search_page")
     if entry is None:
@@ -2869,6 +3090,8 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
             except Exception:
                 pass
         result = await original(params=params, **kwargs)
+        if isinstance(result, ActionResult):
+            _deliver_listing(result)
         pattern = str(getattr(params, "pattern", "") or "")
         counts = clipboard.setdefault("_page_search_counts", {})
         n = counts.get(pattern, 0) + 1
@@ -2888,8 +3111,12 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
                 "either. To check every read page in one step, search "
                 "pages.json with run_code_file."
             )
-        if notes and isinstance(result, ActionResult) and result.extracted_content:
-            result.extracted_content += " NOTE: " + " ".join(notes)
+        visible = model_visible_attrs(result) if isinstance(result, ActionResult) else ()
+        if notes and visible:
+            target = visible[-1]
+            setattr(
+                result, target, str(getattr(result, target) or "") + " NOTE: " + " ".join(notes)
+            )
         return result
 
     entry.function = wrapped
@@ -3879,8 +4106,17 @@ def _gate_link_deficit(
     )
     if unlisted:
         shown = "\n- ".join(unlisted[:8])
+        # The gate fires once, so a silent top-8 cut is the difference between the
+        # agent clearing eight links and believing it is finished, and it knowing how
+        # many are actually outstanding.
+        more = (
+            f"\n- …and {len(unlisted) - 8} more link(s) with no item — "
+            "read_pages() covers them all in one call"
+            if len(unlisted) > 8
+            else ""
+        )
         msg += (
-            f" These link(s) have no item yet:\n- {shown}\n"
+            f" These link(s) have no item yet:\n- {shown}{more}\n"
             "Read them with read_pages([...]) and add the missing rows, or state "
             "in your done text why they are not records."
         )
