@@ -3805,10 +3805,11 @@ async def test_output_guard_back_reference_names_the_file_it_saved() -> None:
 
     fs = _FakeFileSystem()
     first = _seen_by_model(await entry.function(params=None, file_system=fs))
-    assert "readout_evaluate.txt" in first
+    saved_as = first.split("saved to '")[1].split("'")[0]
+    assert saved_as.startswith("readout_evaluate")
 
     second = _seen_by_model(await entry.function(params=None, file_system=fs))
-    assert "readout_evaluate.txt" in second, "a back-reference must say where to look"
+    assert saved_as in second, "a back-reference must say where to look"
 
 
 async def test_read_pages_queues_the_remainder_and_resumes_from_it(monkeypatch) -> None:
@@ -3983,3 +3984,207 @@ def test_clip_marked_says_when_it_cut_something() -> None:
     assert clipped.startswith("z" * 500)
     assert "900 chars total" in clipped
     assert "cut here" in clipped
+
+
+# --- regressions from review of the channel fix ----------------------------
+
+
+def _queue_fixture(monkeypatch, count=5, cap=3, verbose=False):
+    import openbrowse.agent.tools as tools_mod
+    from openbrowse.agent.tools import register_tab_tools
+
+    calls: list[list[str]] = []
+
+    async def fake_impl(session, urls, url_contains, clipboard, progress=None):
+        calls.append(list(urls))
+        return [
+            {
+                "url": u,
+                "title": "t",
+                "text": "body " * 100,
+                "jsonld": None,
+                "links": [],
+                "link_text": "Senior Engineer, Platform Infrastructure" if verbose else "",
+            }
+            for u in urls
+        ]
+
+    monkeypatch.setattr(tools_mod, "_read_pages_impl", fake_impl)
+    monkeypatch.setattr(tools_mod, "_READ_PAGES_MAX", cap)
+    prefix = "https://careers.example.com/jobs/engineering/listing" if verbose else "https://x.com"
+    urls = [f"{prefix}/{i}" for i in range(count)]
+    clipboard: dict = {"found_links": list(urls)}
+    tools = Tools()
+    register_tab_tools(tools, object(), clipboard, _items_store(), None)
+    return tools, tools.registry.registry.actions["read_pages"], clipboard, calls, urls
+
+
+async def test_read_pages_drained_queue_does_not_restart_from_the_top(monkeypatch) -> None:
+    """An empty queue means DRAINED, not 'no queue'. Reading truthiness sent the
+    fallback back to the full saved set and re-read batch one for ever."""
+    _tools, entry, _clip, calls, urls = _queue_fixture(monkeypatch)
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls == [urls[:3], urls[3:]]
+
+    third = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls == [urls[:3], urls[3:]], "a drained queue must not re-read anything"
+    assert "nothing left to read" in _seen_by_model(third)
+
+
+async def test_read_pages_explicit_urls_do_not_clobber_the_queue(monkeypatch) -> None:
+    """The completeness gate tells the agent to call read_pages([...]); that errand
+    must not wipe the resume point of the main crawl."""
+    _tools, entry, clipboard, calls, urls = _queue_fixture(monkeypatch)
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert clipboard["_unread_links"] == urls[3:]
+
+    await entry.function(
+        browser_session=object(),
+        file_system=_FakeFileSystem(),
+        urls=["https://other.com/z"],
+    )
+    assert clipboard["_unread_links"] == urls[3:], "side errand must leave the queue alone"
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls[-1] == urls[3:], "the crawl must resume where it stopped"
+
+
+async def test_read_pages_accumulates_batches_instead_of_overwriting(monkeypatch) -> None:
+    """pages.json is rewritten, not appended, so batching had to carry earlier batches
+    forward — the result text tells the agent pages.json holds them all."""
+    _tools, entry, _clip, _calls, urls = _queue_fixture(monkeypatch)
+    fs = _FakeFileSystem()
+
+    await entry.function(browser_session=object(), file_system=fs)
+    await entry.function(browser_session=object(), file_system=fs)
+
+    import json as _json
+
+    saved = _json.loads(fs.files["pages.json"])
+    assert [p["url"] for p in saved] == urls, "every batch must survive in pages.json"
+
+
+async def test_read_pages_next_step_instruction_survives_the_guard_cap(monkeypatch) -> None:
+    """The note is capped from the head; trailing guidance is what a big batch loses,
+    and the prefill instruction is the one part that must always arrive."""
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    import openbrowse.agent.tools as tools_mod
+
+    tools, _entry, _clip, _calls, _urls = _queue_fixture(monkeypatch, count=48, cap=48, verbose=True)
+    register_output_guard_overrides(tools)
+    entry = tools.registry.registry.actions["read_pages"]
+
+    result = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    visible = _seen_by_model(result)
+    assert len(visible) > tools_mod._CAPPED_READ_PREVIEW_CHARS / 2, "expect a big note"
+    head = visible[: tools_mod._CAPPED_READ_PREVIEW_CHARS]
+    assert "add_items_from_file" in head or "run_code_file" in head
+
+
+async def test_guard_readout_files_are_not_reused_between_outputs() -> None:
+    """A back-reference pins the filename for the rest of the run, so a reused name
+    later serves one call's content under another call's name."""
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    payloads = ["A" * 20000, "B" * 20000, "A" * 20000]
+    calls = {"n": 0}
+
+    async def fake(params=None, **kwargs):
+        text = payloads[min(calls["n"], len(payloads) - 1)]
+        calls["n"] += 1
+        return ActionResult(long_term_memory=text)
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("evaluate")
+    if entry is None:
+        pytest.skip("browser-use build has no evaluate action")
+    entry.function = fake
+    register_output_guard_overrides(tools)
+
+    fs = _FakeFileSystem()
+    first = _seen_by_model(await entry.function(params=None, file_system=fs))
+    second = _seen_by_model(await entry.function(params=None, file_system=fs))
+    third = _seen_by_model(await entry.function(params=None, file_system=fs))
+
+    name_a = first.split("saved to '")[1].split("'")[0]
+    name_b = second.split("saved to '")[1].split("'")[0]
+    assert name_a != name_b, "each spilled output needs its own file"
+    assert name_a in third, "the back-reference must name the file holding THAT text"
+    assert fs.files[name_a].startswith("A")
+
+
+async def test_guard_breaks_a_loop_of_identical_errors() -> None:
+    """An action failing identically over and over is the commonest real loop, and a
+    result carrying only `error` has no model-visible fields at all."""
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    async def fake(params=None, **kwargs):
+        return ActionResult(error="find_elements failed: selector not found")
+
+    tools = Tools()
+    entry = tools.registry.registry.actions.get("find_elements")
+    if entry is None:
+        pytest.skip("browser-use build has no find_elements action")
+    entry.function = fake
+    register_output_guard_overrides(tools)
+
+    await entry.function(params=None)
+    second = await entry.function(params=None)
+    assert "failed with exactly the same error" in _seen_by_model(second)
+
+
+async def test_guard_streaks_are_per_action_and_adjacent() -> None:
+    """Two identical reads far apart are a coincidence, not a loop; saying otherwise
+    pushes the agent to finish early."""
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    async def same_a(params=None, **kwargs):
+        return ActionResult(long_term_memory="stable output A")
+
+    async def other(params=None, **kwargs):
+        return ActionResult(long_term_memory="something else entirely")
+
+    from openbrowse.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    register_output_store_tools(tools, _items_store(), {})
+    a_entry = tools.registry.registry.actions["read_output"]
+    b_entry = tools.registry.registry.actions["search_output"]
+    a_entry.function = same_a
+    b_entry.function = other
+    register_output_guard_overrides(tools)
+
+    await a_entry.function(params=None)
+    await b_entry.function(params=None)
+    interrupted = _seen_by_model(await a_entry.function(params=None))
+    assert "STOP REPEATING" not in interrupted, "a different action broke the streak"
+
+    back_to_back = _seen_by_model(await a_entry.function(params=None))
+    assert "STOP REPEATING" in back_to_back
+
+
+async def test_recall_is_deduped_so_repeats_do_not_grow_context() -> None:
+    from openbrowse.agent.tools import register_clipboard_tools, register_output_guard_overrides
+
+    value = "https://example.com/a-reasonably-long-url" * 40
+    tools = Tools()
+    register_clipboard_tools(tools, {"blob": value})
+    register_output_guard_overrides(tools)
+    entry = tools.registry.registry.actions["recall"]
+
+    first = _seen_by_model(await entry.function(key="blob"))
+    assert "example.com" in first
+
+    second = _seen_by_model(await entry.function(key="blob"))
+    assert "identical to earlier output" in second
+    assert len(second) < len(first)
+
+
+async def test_sandbox_error_field_is_bounded(tmp_path) -> None:
+    result = await _run_sandbox(tmp_path, "raise ValueError('x' * 50000)")
+    assert result.error
+    assert len(result.error) <= 2000 + 200

@@ -51,8 +51,9 @@ _CAPPED_READ_PREVIEW_CHARS = 8000
 _GUARD_MIN_CHARS = 500
 _RECALL_INLINE_CHARS = 8000
 _EXTRA_VALUE_CHARS = 500
+_SANDBOX_ERROR_CHARS = 2000
 _UNREAD_LINKS_KEY = "_unread_links"
-_READ_DONE_KEY = "_read_pages_done"
+_READ_PAGES_KEY = "_read_pages_all"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -781,7 +782,7 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
         "found_links_meta",
         "_visited",
         "_unread_links",
-        "_read_pages_done",
+        "_read_pages_all",
         "_read_items",
         "_read_failed",
         "_read_failed_frame",
@@ -1605,7 +1606,7 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
         # The hint sat between the exception and stdout, which is exactly the span
         # browser-use's 100-plus-100 error clip removes; it has to travel separately.
         return ActionResult(
-            error=f"{type(e).__name__}: {e}",
+            error=f"{type(e).__name__}: {e}"[:_SANDBOX_ERROR_CHARS],
             long_term_memory=f"{type(e).__name__}: {e}{hint}{tail}"[:10000],
         )
 
@@ -2161,19 +2162,25 @@ def register_tab_tools(
                 "http(s) URLs. Pass real page links — a find_links call saves "
                 "them so read_pages() with no arguments reads them all."
             )
+        caller_gave_urls = bool(urls)
         try:
             offhost_skipped = 0
             if not urls:
-                # A queue left by an earlier capped call is the resume point; without
-                # it a second no-args call re-reads the same first batch forever.
-                queued = [u for u in (clipboard.get(_UNREAD_LINKS_KEY) or []) if u]
-                if queued:
+                # @nonobvious(must-hold): presence of the key, not its truthiness,
+                # means "a queue was established". An empty queue is the DRAINED
+                # state; treating it as "no queue" sends the fallback back to the
+                # full saved set and re-reads batch one for ever.
+                if _UNREAD_LINKS_KEY in clipboard:
                     visited = clipboard.get("_visited") or set()
-                    urls = [u for u in queued if _norm_url(u) not in visited]
+                    urls = [
+                        u
+                        for u in (clipboard[_UNREAD_LINKS_KEY] or [])
+                        if _norm_url(u) not in visited
+                    ]
                     if not urls:
                         clipboard[_UNREAD_LINKS_KEY] = []
                         done_note = (
-                            "read_pages: nothing left to read — every queued link has "
+                            "read_pages: nothing left to read — every saved link has "
                             "already been read this session. Their full text is in "
                             "pages.json; work from that instead of calling read_pages "
                             "again."
@@ -2191,14 +2198,28 @@ def register_tab_tools(
                 frame_url_contains = clipboard.get("found_links_frame")
             remainder = urls[_READ_PAGES_MAX:]
             urls = urls[:_READ_PAGES_MAX]
-            clipboard[_UNREAD_LINKS_KEY] = remainder
+            # An explicit-urls call is a side errand — the agent is told to make one
+            # by the completeness gate — and must not overwrite the resume queue.
+            if not caller_gave_urls:
+                clipboard[_UNREAD_LINKS_KEY] = remainder
             pages = await _read_pages_impl(
                 browser_session, urls, frame_url_contains, clipboard, progress=progress
             )
             saved: str | None = "pages.json"
+            # @nonobvious(must-hold): both files are rewritten, not appended, so a
+            # multi-batch crawl must carry every earlier batch forward or only the
+            # last one survives — and the result text tells the agent pages.json
+            # holds them all.
+            all_pages = list(clipboard.setdefault(_READ_PAGES_KEY, []))
+            seen_urls = {_norm_url(str(p.get("url") or "")) for p in all_pages}
+            for page in pages:
+                if _norm_url(str(page.get("url") or "")) not in seen_urls:
+                    all_pages.append(page)
+                    seen_urls.add(_norm_url(str(page.get("url") or "")))
+            clipboard[_READ_PAGES_KEY] = all_pages
             try:
                 await file_system.write_file(
-                    saved, json.dumps(_pages_for_save(pages), indent=2, default=str)
+                    saved, json.dumps(_pages_for_save(all_pages), indent=2, default=str)
                 )
             except Exception:
                 logger.warning("read_pages: failed to save pages.json", exc_info=True)
@@ -2208,7 +2229,7 @@ def register_tab_tools(
             if store is not None and store.item_model is not None:
                 drafts: list[dict[str, Any]] = []
                 thin_urls: list[str] = []
-                for p in pages:
+                for p in all_pages:
                     if p.get("error"):
                         continue
                     if len((p.get("text") or "").strip()) < _MIN_PAGE_TEXT_CHARS:
@@ -2305,8 +2326,11 @@ def register_tab_tools(
                     if remainder
                     else ""
                 )
-                + ".\n"
-                + "\n".join(lines)
+                + "."
+                # @nonobvious(must-hold): the next-step instruction comes BEFORE the
+                # per-page lines. This text is capped from the head, and the per-page
+                # list grows with the batch — trailing guidance is the first thing a
+                # 48-page call loses, which is the one part that must always arrive.
                 + draft_note
                 + (
                     ""
@@ -2316,9 +2340,10 @@ def register_tab_tools(
                     "details from page['jsonld']), save_json(rows, 'items.json'), "
                     "then add_items_from_file('items.json'). Do not re-read these pages."
                 )
+                + "\n"
+                + "\n".join(lines)
             )
-            done_total = int(clipboard.get(_READ_DONE_KEY) or 0) + len(pages)
-            clipboard[_READ_DONE_KEY] = done_total
+            done_total = len(all_pages)
             # The queue state has to be unmistakable in both directions: an agent that
             # thinks it has read everything stops early, and one that thinks work
             # remains calls into an error. Say the count, say the exact next call, and
@@ -2736,7 +2761,10 @@ _GUARDED_DUMP_ACTIONS = (
     "run_code_file",
     "read_pages",
 )
-_GUARDED_DEDUP_ACTIONS = ("read_output", "search_output")
+# recall included: it now returns the value whole, so an agent that recalls the
+# same key repeatedly would otherwise append kilobytes to permanent context each
+# time. Deduped, never capped — the point of the tool is the value itself.
+_GUARDED_DEDUP_ACTIONS = ("read_output", "search_output", "recall")
 
 _REPEAT_BREAK_AT = 2
 
@@ -2832,7 +2860,8 @@ def register_output_guard_overrides(tools: Tools) -> None:
     registry_actions = tools.registry.registry.actions
     seen: dict[str, dict[str, Any]] = {}
     counter = {"n": 0}
-    streak: dict[str, Any] = {"action": None, "key": None, "n": 0}
+    calls = {"n": 0}
+    streaks: dict[str, dict[str, Any]] = {}
 
     def _back_reference(prior: dict[str, Any]) -> str:
         where = prior.get("where")
@@ -2847,12 +2876,22 @@ def register_output_guard_overrides(tools: Tools) -> None:
         )
 
     def _bump_streak(action_name: str, visible: str) -> int:
+        """Count back-to-back identical results per action.
+
+        Per action, because one action's reply says nothing about another's. Adjacent,
+        because two identical reads thirty steps apart are a coincidence, not a loop,
+        and telling an agent to "move on" over one would push it to finish early.
+        """
+        calls["n"] += 1
         key = guard_key(visible)
-        if streak["action"] == action_name and streak["key"] == key:
-            streak["n"] += 1
+        prior = streaks.get(action_name)
+        if prior and prior["key"] == key and prior["seq"] == calls["n"] - 1:
+            prior["n"] += 1
         else:
-            streak.update({"action": action_name, "key": key, "n": 1})
-        return int(streak["n"])
+            prior = {"key": key, "n": 1}
+            streaks[action_name] = prior
+        prior["seq"] = calls["n"]
+        return int(prior["n"])
 
     async def _guard(
         result: ActionResult,
@@ -2862,11 +2901,22 @@ def register_output_guard_overrides(tools: Tools) -> None:
         cap: bool,
     ) -> ActionResult:
         attrs = model_visible_attrs(result)
-        if not attrs:
-            return result
+        # An action failing identically over and over is the commonest real loop, and
+        # a result carrying only `error` has no visible attrs at all — so the streak
+        # must be counted before that case is skipped, not after.
         repeats = _bump_streak(
-            action_name, "\n".join(str(getattr(result, a) or "") for a in attrs)
+            action_name,
+            "\n".join(str(getattr(result, a) or "") for a in attrs)
+            + str(getattr(result, "error", "") or ""),
         )
+        if not attrs:
+            if repeats >= _REPEAT_BREAK_AT and getattr(result, "error", None):
+                result.long_term_memory = (
+                    f"{action_name} has now failed with exactly the same error "
+                    f"{repeats} times in a row. Repeating it cannot help — change the "
+                    "parameters, use a different tool, or work with what you have."
+                )
+            return result
 
         for attr in attrs:
             text = getattr(result, attr, None)
@@ -2883,11 +2933,16 @@ def register_output_guard_overrides(tools: Tools) -> None:
             if cap and len(text) > _CAPPED_READ_PREVIEW_CHARS:
                 total = len(text)
                 tail = "narrow your query instead of dumping"
-                if file_system is not None and readout_name:
+                # @nonobvious(must-hold): numbered per output, not per action. A back
+                # reference pins this filename for the rest of the run, so reusing one
+                # name would later hand the agent a different call's content under the
+                # name of the one it asked for.
+                spill = f"{readout_name}_{counter['n']}.txt" if readout_name else ""
+                if file_system is not None and spill:
                     try:
-                        await file_system.write_file(readout_name, text)
-                        record["where"] = readout_name
-                        tail = f"saved to '{readout_name}' — read specific parts instead"
+                        await file_system.write_file(spill, text)
+                        record["where"] = spill
+                        tail = f"saved to '{spill}' — read specific parts instead"
                     except Exception:
                         logger.warning("output guard: failed to save readout", exc_info=True)
                         tail = (
@@ -2925,7 +2980,7 @@ def register_output_guard_overrides(tools: Tools) -> None:
         if entry is None:
             return
         original = entry.function
-        readout = f"readout_{name}.txt"
+        readout = f"readout_{name}"
 
         async def wrapped(
             params: Any = None,
