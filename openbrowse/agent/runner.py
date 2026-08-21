@@ -36,6 +36,7 @@ from openbrowse.agent.activity import (
     try_claim_profile,
 )
 from openbrowse.agent.leak_repair import (
+    backfill_brain_fields,
     is_missing_action_error,
     mistyped_action_params,
     repair_anthropic_message,
@@ -949,6 +950,7 @@ class _RepairingChatAnthropic(ChatAnthropic):
             if thinking.strip():
                 self._last_model_reasoning = thinking
                 self._last_reasoning_seconds = getattr(self, "_reasoning_seconds", None)
+                backfill_brain_fields(response, thinking)
         except Exception:
             logger.debug("thinking capture failed", exc_info=True)
         return response
@@ -1636,6 +1638,58 @@ def _patch_agent_output_cards() -> None:
 
 
 _patch_agent_output_cards()
+
+
+_history_backfill_patched = False
+
+
+def _patch_history_backfill() -> None:
+    """Feed the model's own stated intent back into its own history.
+
+    browser-use builds each history item from ``evaluation_previous_goal``, ``memory``
+    and ``next_goal`` alone. The card fields above are rendered in the dashboard and
+    never reach the agent, and native reasoning blocks are not replayed on later turns,
+    so a model that fills the cards and leaves the native fields blank begins every step
+    with no record of what it just decided to do. When the tool it is using also returns
+    a constant, the step lands in history as that constant and nothing else, and the
+    only evidence left pointing anywhere is the call it has already made.
+
+    Copies each card onto its native counterpart, and only where that counterpart is
+    blank, so a model using browser-use's own fields is untouched.
+    """
+    global _history_backfill_patched
+    if _history_backfill_patched:
+        return
+    try:
+        from browser_use.agent.message_manager.service import MessageManager
+
+        original = MessageManager._update_agent_history_description
+
+        def patched(self, model_output=None, result=None, step_info=None):
+            if model_output is not None:
+                for native, card in (
+                    ("next_goal", "next_move"),
+                    ("evaluation_previous_goal", "what_i_see"),
+                    ("memory", "plan_to_goal"),
+                ):
+                    if str(getattr(model_output, native, "") or "").strip():
+                        continue
+                    value = str(getattr(model_output, card, "") or "").strip()
+                    if not value:
+                        continue
+                    try:
+                        setattr(model_output, native, value)
+                    except Exception:
+                        logger.debug("history backfill: %s not settable", native, exc_info=True)
+            return original(self, model_output=model_output, result=result, step_info=step_info)
+
+        MessageManager._update_agent_history_description = patched
+        _history_backfill_patched = True
+    except Exception:
+        logger.warning("history backfill patch failed; cards stay dashboard-only", exc_info=True)
+
+
+_patch_history_backfill()
 
 
 _CONTINUATION_PREFIX = (

@@ -3599,3 +3599,83 @@ async def test_gate_emits_pass_event_on_clean_done() -> None:
     result = await entry.function(params=params, file_system=_FakeFileSystem())
     assert result.is_done, getattr(result, "extracted_content", "")
     assert passes and not bounces
+
+
+# --- the agent's memory of its own intent -----------------------------------
+
+
+async def test_card_fields_reach_the_agents_own_history() -> None:
+    """Without this the model's stated next move is dashboard-only, and every step
+    begins with no record of what it just decided to do."""
+    import tempfile
+
+    import openbrowse.agent.runner  # noqa: F401  — importing applies the patch
+    from browser_use import ActionResult
+    from browser_use.agent.message_manager.service import MessageManager
+    from browser_use.agent.views import AgentStepInfo
+    from browser_use.filesystem.file_system import FileSystem
+    from browser_use.llm.messages import SystemMessage
+
+    class _Brain:
+        def __init__(self, output):
+            self._o = output
+
+        evaluation_previous_goal = property(lambda s: s._o.evaluation_previous_goal or "")
+        memory = property(lambda s: s._o.memory or "")
+        next_goal = property(lambda s: s._o.next_goal or "")
+
+    class _Output:
+        def __init__(self, **kw):
+            self.evaluation_previous_goal = kw.get("evaluation_previous_goal", "")
+            self.memory = kw.get("memory", "")
+            self.next_goal = kw.get("next_goal", "")
+            self.what_i_see = kw.get("what_i_see")
+            self.plan_to_goal = kw.get("plan_to_goal")
+            self.next_move = kw.get("next_move")
+
+        @property
+        def current_state(self):
+            return _Brain(self)
+
+    fs = FileSystem(tempfile.mkdtemp())
+
+    def render(output):
+        manager = MessageManager(
+            task="t", system_message=SystemMessage(content="s"), file_system=fs
+        )
+        manager._update_agent_history_description(
+            output,
+            [ActionResult(long_term_memory="did a thing")],
+            AgentStepInfo(step_number=1, max_steps=10),
+        )
+        return "\n".join(i.to_string() for i in manager.state.agent_history_items)
+
+    blank = _Output(next_move="ask find_elements for the href attribute")
+    assert "ask find_elements for the href attribute" in render(blank)
+
+    populated = _Output(next_goal="native goal", next_move="card move")
+    rendered = render(populated)
+    assert "native goal" in rendered
+    assert "card move" not in rendered, "a populated native field must not be overwritten"
+
+
+def test_backfill_brain_fields_only_fires_on_a_silent_step() -> None:
+    from openbrowse.agent.leak_repair import backfill_brain_fields
+
+    class _Block:
+        type = "tool_use"
+
+        def __init__(self, payload):
+            self.input = payload
+
+    class _Response:
+        def __init__(self, blocks):
+            self.content = blocks
+
+    silent = {"action": [{"find_elements": {"selector": "a"}}]}
+    assert backfill_brain_fields(_Response([_Block(silent)]), "I should ask for href")
+    assert "href" in silent["memory"]
+
+    spoken = {"action": [], "next_goal": "already said something"}
+    assert not backfill_brain_fields(_Response([_Block(spoken)]), "reasoning")
+    assert "memory" not in spoken
