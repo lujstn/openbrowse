@@ -321,6 +321,106 @@ class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
 
 
+_IMAGE_TOKENS_ESTIMATE = 2000
+
+
+def _estimate_request_tokens(payload: Any) -> int:
+    """Conservative token estimate for an outgoing request: text at ~3 chars
+    per token (English runs nearer 4, so this overshoots) plus a flat
+    allowance per embedded image, recognised as a long unbroken base64 run."""
+    chars = 0
+    images = 0
+    stack: list[Any] = [payload]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if len(cur) > 5000 and " " not in cur[:200]:
+                images += 1
+            else:
+                chars += len(cur)
+        elif isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+        elif hasattr(cur, "model_dump"):
+            try:
+                stack.append(cur.model_dump())
+            except Exception:
+                stack.append(str(cur))
+        elif cur is not None and not isinstance(cur, (int, float, bool)):
+            stack.append(str(cur))
+    return int(chars / 3) + images * _IMAGE_TOKENS_ESTIMATE
+
+
+class _BudgetGuard:
+    """Hard budget enforcement at the choke point every model call passes
+    through — agent steps, judge reviews and repair retries alike. After each
+    call the cumulative spend is rechecked immediately, bounding overshoot to
+    a single call even when the next step-boundary check is far away; before
+    each call the call's worst case (estimated input plus the client's full
+    output allowance, at the model's dearest rates) is reserved against the
+    cap, so a call that could cross it is never dispatched and the recorded
+    total cannot exceed the budget. The step-end row check remains as the
+    backstop that also refreshes the cap, which a keep-alive follow-up may
+    raise mid-run."""
+
+    def __init__(
+        self,
+        model_id: str,
+        carried: dict[str, float],
+        capsolver_costs: list[float],
+        budget: Any,
+    ) -> None:
+        self.model_id = model_id
+        self.carried = carried
+        self.capsolver_costs = capsolver_costs
+        self.budget = float(budget) if budget else None
+        self._token_cost: Any = None
+
+    def bind(self, token_cost_service: Any) -> None:
+        self._token_cost = token_cost_service
+
+    def spent(self) -> float:
+        history = getattr(self._token_cost, "usage_history", None)
+        return (
+            self.carried["llm"]
+            + self.carried["capsolver"]
+            + cost.history_cost(history)
+            + sum(self.capsolver_costs)
+        )
+
+    def precheck(self, payload: Any, max_output_tokens: Any) -> None:
+        if not self.budget or self._token_cost is None:
+            return
+        worst = cost.worst_case_call_cost(
+            self.model_id,
+            _estimate_request_tokens(payload),
+            int(max_output_tokens or 0) or 16384,
+        )
+        if worst is None:
+            return
+        spent = self.spent()
+        if spent + worst > self.budget:
+            raise BudgetExceededError(
+                f"Budget ${self.budget:.2f} cannot cover the next model call "
+                f"(spent ${spent:.4f}, worst case +${worst:.4f}) — stopping "
+                "before it is made"
+            )
+
+    def postcheck(self, usage: Any) -> None:
+        if not self.budget:
+            return
+        # The call that just returned is not yet in usage_history — the
+        # token-cost wrapper sits outside this one — so count it directly.
+        total = self.spent()
+        if usage is not None:
+            total += cost.usage_cost(self.model_id, usage)
+        if total >= self.budget:
+            raise BudgetExceededError(
+                f"Cost ${total:.4f} reached budget ${self.budget:.2f}"
+            )
+
+
 
 def _timeout_text(error: BaseException) -> bool:
     message = str(error).lower()
@@ -799,11 +899,16 @@ class _ResponsesChatOpenAI(ChatOpenAI):
         summary_box = {"text": ""}
 
         async def _once(msgs: Any) -> Any:
+            guard = getattr(self, "_budget_guard", None)
+            if guard is not None:
+                guard.precheck(msgs, getattr(self, "max_completion_tokens", None))
             params = self._build_request(msgs, output_format)
             response = await self._create_with_summary_fallback(params)
             self._raise_if_truncated(response)
             text = self._output_text(response)
             usage = self._usage_from_responses(response)
+            if guard is not None:
+                guard.postcheck(usage)
             summary_box["text"] = self._reasoning_summary(response)
             stop_reason = getattr(response, "status", None)
             if output_format is None:
@@ -1190,9 +1295,15 @@ class _RepairingChatAnthropic(ChatAnthropic):
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True, kind="reasoning")
         async def _call(msgs: Any) -> Any:
-            return await super(_RepairingChatAnthropic, self).ainvoke(
+            guard = getattr(self, "_budget_guard", None)
+            if guard is not None:
+                guard.precheck(msgs, getattr(self, "max_tokens", None))
+            result = await super(_RepairingChatAnthropic, self).ainvoke(
                 msgs, output_format, **kwargs
             )
+            if guard is not None:
+                guard.postcheck(getattr(result, "usage", None))
+            return result
 
         try:
             try:
@@ -2355,6 +2466,13 @@ async def run_agent_session(session_id: str) -> None:
             "input_tokens": float(session.get("total_input_tokens") or 0),
             "output_tokens": float(session.get("total_output_tokens") or 0),
         }
+        budget_guard = _BudgetGuard(
+            getattr(llm, "model", "") or "",
+            carried,
+            capsolver_costs,
+            session.get("max_cost_usd"),
+        )
+        llm._budget_guard = budget_guard
         register_captcha_tools(tools, capsolver_costs, _captcha_progress)
 
         if store is not None:
@@ -2644,6 +2762,7 @@ async def run_agent_session(session_id: str) -> None:
                 ),
             )
             budget = (row or {}).get("max_cost_usd")
+            budget_guard.budget = float(budget) if budget else None
             if budget and total_cost >= budget:
                 raise BudgetExceededError(
                     f"Cost ${total_cost:.4f} exceeded budget ${budget:.2f}"
@@ -2718,6 +2837,7 @@ async def run_agent_session(session_id: str) -> None:
         screenshot_action_entry = tools.registry.registry.actions.get("screenshot")
         agent = Agent(**agent_kwargs)
         _restore_screenshot_action(tools, screenshot_action_entry, agent)
+        budget_guard.bind(agent.token_cost_service)
         entry = live.register(session_id, agent)
         if store is not None and agent.file_system is not None:
             try:
