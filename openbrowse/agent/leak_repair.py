@@ -256,51 +256,6 @@ def merge_parallel_tool_calls(
     return absorbed
 
 
-_NARRATIVE_FIELDS = (
-    "next_move",
-    "plan_to_goal",
-    "what_i_see",
-    "next_goal",
-    "memory",
-    "evaluation_previous_goal",
-    "thinking",
-)
-_REASONING_TAIL_CHARS = 400
-
-
-def backfill_brain_fields(response: object, thinking: str) -> bool:
-    """Give a step that returned no narrative at all something true to remember it by.
-
-    The narrative fields are required in the emitted schema but nothing stops a model
-    satisfying that with empty strings, and under extended thinking its actual
-    reasoning lives in blocks that are never replayed on a later turn. A step like that
-    reaches history as its action's result and nothing else, so the model cannot see
-    what it had just decided to do and re-derives the same move from a history that is
-    only that move's output. Filling in the tail of its own reasoning is not invention:
-    it is what the model said this step, on a field it will still be able to read.
-
-    Only fires when every narrative field is blank. Mutates in place; returns True if
-    anything changed.
-    """
-    if not thinking or not thinking.strip():
-        return False
-    changed = False
-    for block in getattr(response, "content", None) or []:
-        if getattr(block, "type", None) != "tool_use":
-            continue
-        tool_input = getattr(block, "input", None)
-        if not isinstance(tool_input, dict):
-            continue
-        if any(str(tool_input.get(f) or "").strip() for f in _NARRATIVE_FIELDS):
-            continue
-        tail = " ".join(thinking.split())[-_REASONING_TAIL_CHARS:]
-        tool_input["memory"] = (
-            f"(this step returned no written plan; tail of my own reasoning) {tail}"
-        )
-        changed = True
-    return changed
-
-
 def repair_anthropic_message(
     response: object,
     output_tool_name: str | None = None,
