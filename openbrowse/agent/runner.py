@@ -882,6 +882,59 @@ def _mistyped_correction(detail: str) -> str:
     )
 
 
+_EXTRA_INPUT_RE = re.compile(r"\.(\w+): Extra inputs are not permitted")
+
+
+def _actions_absent_from_schema(detail: str) -> list[str]:
+    """Action names the reply used that no schema variant accepts. When an
+    action exists but its arguments are mis-shaped, its own variant reports a
+    field-level error (a deeper ``.name.`` path) alongside the other variants'
+    "extra inputs" complaints; when the name is absent from the schema, every
+    variant flags it as extra and none goes deeper — telling the model to fix
+    its argument types would then be false and teaches it nothing."""
+    absent = []
+    for name in sorted(set(_EXTRA_INPUT_RE.findall(detail))):
+        if f".{name}." in detail:
+            continue
+        if f"{name.title().replace('_', '')}ActionModel" in detail:
+            continue
+        absent.append(name)
+    return absent
+
+
+def _unknown_action_correction(names: list[str]) -> str:
+    listed = ", ".join(repr(n) for n in names)
+    return (
+        f"Your reply was rejected because it used an action that is not in this "
+        f"session's action schema: {listed}. That action cannot run here no "
+        "matter how its arguments are shaped — do not retry it and do not "
+        "invent a replacement name. Your system prompt lists every available "
+        "action; resend your reply using the closest action from that list."
+    )
+
+
+def _restore_screenshot_action(tools: Any, action_entry: Any, agent: Any) -> None:
+    """browser-use's Agent constructor strips the ``screenshot`` action from
+    the registry whenever ``use_vision != 'auto'``, treating it as a redundant
+    observation aid — but the action is also the only way to SAVE a screenshot
+    to a file, and the system prompt's action inventory was generated before
+    the strip, so the model is promised a tool the schema then lacks. Put the
+    entry back and rebuild the action models the constructor derived from the
+    stripped registry; later per-page rebuilds inherit the restored entry."""
+    if action_entry is None:
+        return
+    actions = tools.registry.registry.actions
+    if "screenshot" in actions:
+        return
+    actions["screenshot"] = action_entry
+    try:
+        agent._setup_action_models()
+    except Exception:
+        logger.warning(
+            "action model rebuild after screenshot restore failed", exc_info=True
+        )
+
+
 _NARRATIVE_FIELDS = (
     "evaluation_previous_goal",
     "memory",
@@ -958,7 +1011,12 @@ async def _invoke_with_action_repair(
             detail = mistyped_action_params(e)
             if detail:
                 last_detail = detail
-                correction = _mistyped_correction(detail)
+                absent = _actions_absent_from_schema(detail)
+                correction = (
+                    _unknown_action_correction(absent)
+                    if absent
+                    else _mistyped_correction(detail)
+                )
             elif is_missing_action_error(e):
                 correction = (
                     _MISSING_ACTION_CORRECTION if attempt == 0 else _MISSING_ACTION_FINAL
@@ -2649,7 +2707,9 @@ async def run_agent_session(session_id: str) -> None:
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data
 
+        screenshot_action_entry = tools.registry.registry.actions.get("screenshot")
         agent = Agent(**agent_kwargs)
+        _restore_screenshot_action(tools, screenshot_action_entry, agent)
         entry = live.register(session_id, agent)
         if store is not None and agent.file_system is not None:
             try:
