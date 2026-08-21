@@ -2604,8 +2604,8 @@ def register_tab_tools(
             return ActionResult(error=f"close_tab failed: {type(e).__name__}: {e}")
 
     @tools.action(
-        "Collect links (index, text, href) from the current page using a selector "
-        "(one or more REQUIRED): href_contains / href_regex match the URL; "
+        "Collect links (index, text, href) from the current page — all of them "
+        "by default, or narrowed by selectors: href_contains / href_regex match the URL; "
         "frame_url_contains returns only links inside an embedded panel/iframe whose "
         "URL matches (e.g. 'embed'); container_index returns only links inside that "
         "element (usually an embed's own index); attr returns links carrying a shared "
@@ -2634,10 +2634,10 @@ def register_tab_tools(
             or container_index is not None
             or attr
         ):
-            return ActionResult(
-                error="find_links needs at least one selector: href_contains, "
-                "href_regex, frame_url_contains, container_index, or attr."
-            )
+            # A bare call means "all links". Rejecting it only taught models to
+            # spell the same thing as href_regex='.+' after one wasted step,
+            # stamped in the summary as a recovered "transient error".
+            href_regex = ".+"
         try:
             settle_frameless = bool(
                 await _settle_lazy_links(browser_session, frame_url_contains)
