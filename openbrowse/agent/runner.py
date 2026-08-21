@@ -852,6 +852,37 @@ def _mistyped_correction(detail: str) -> str:
     )
 
 
+_NARRATIVE_FIELDS = (
+    "evaluation_previous_goal",
+    "memory",
+    "next_goal",
+    "what_i_see",
+    "plan_to_goal",
+    "next_move",
+)
+
+_BLANK_NARRATIVE_CORRECTION = (
+    "Your reply left every narrative field empty. Those fields are how you tell your "
+    "next step what you just did and why — a step that fills none of them arrives in "
+    "your history as a bare tool result with no record of your intent, and you will "
+    "repeat yourself. Resend the same action, and fill what_i_see, plan_to_goal and "
+    "next_move with one real sentence each. Not an empty string, not a placeholder."
+)
+
+
+def _has_no_narrative(completion: Any) -> bool:
+    """True when a reply left every narrative field blank.
+
+    The schema marks these required, but 'required' means the key is present, not that
+    the value says anything, so a model can satisfy it with empty strings.
+    """
+    if completion is None:
+        return False
+    if not any(hasattr(completion, f) for f in _NARRATIVE_FIELDS):
+        return False
+    return not any(str(getattr(completion, f, "") or "").strip() for f in _NARRATIVE_FIELDS)
+
+
 async def _invoke_with_action_repair(
     invoke: Any, messages: Any, output_format: Any
 ) -> Any:
@@ -865,7 +896,16 @@ async def _invoke_with_action_repair(
     last_detail = ""
     for attempt in range(3):
         try:
-            return await invoke(list(messages) + extra)
+            result = await invoke(list(messages) + extra)
+            if attempt == 2 or not _has_no_narrative(getattr(result, "completion", None)):
+                return result
+            # The schema requires these fields but is satisfied by empty strings, and a
+            # step that says nothing lands in history as its action's result alone. Ask
+            # again rather than accept it; accept on the last attempt regardless,
+            # because a model that will not write prose should not kill a working run.
+            logger.info("Retrying LLM call after a reply with no narrative (attempt %d)", attempt + 1)
+            extra.append(UserMessage(content=_BLANK_NARRATIVE_CORRECTION))
+            continue
         except Exception as e:
             if output_format is None:
                 raise

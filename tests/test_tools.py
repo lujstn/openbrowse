@@ -1887,7 +1887,7 @@ async def test_find_links_frameless_retry_when_embed_present(monkeypatch) -> Non
     assert not result.error
     import json as _json
 
-    found = _json.loads(result.extracted_content)
+    found = _json.loads(result.extracted_content)["data"]
     assert len(found) == 4
     assert all("embed_jid" in l["href"] for l in found)
 
@@ -2663,7 +2663,7 @@ async def test_find_links_retries_recover_late_rewritten_embed_links(
     assert not result.error
     import json as _json
 
-    found = _json.loads(result.extracted_content)
+    found = _json.loads(result.extracted_content)["data"]
     assert len(found) == 3
     assert "WARNING" not in (result.long_term_memory or "")
 
@@ -2773,7 +2773,7 @@ async def test_find_links_salvages_by_href_when_frame_filter_stably_wrong(
     assert not result.error
     import json as _json
 
-    found = _json.loads(result.extracted_content)
+    found = _json.loads(result.extracted_content)["data"]
     hrefs = {l["href"] for l in found}
     assert "https://x.com/jobs?src=board.example.com&jid=0" in hrefs
     assert "https://x.com/jobs?src=board.example.com&jid=1" in hrefs
@@ -3028,7 +3028,7 @@ async def test_find_links_relaxes_starving_caller_filters(monkeypatch) -> None:
     assert not result.error
     import json as _json
 
-    found = _json.loads(result.extracted_content)
+    found = _json.loads(result.extracted_content)["data"]
     assert len(found) == 3
     assert any("embed_jid=aaa" in l["href"] for l in found)
     note = result.long_term_memory or ""
@@ -3624,6 +3624,17 @@ def _seen_by_model(result) -> str:
     return "\n".join(str(getattr(result, a) or "") for a in model_visible_attrs(result))
 
 
+def _delivered(result):
+    """Parse a `deliver`-shaped reply: the whole field is one JSON envelope."""
+    import json as _json
+
+    return _json.loads(_seen_by_model(result))
+
+
+def _delivered_data(result):
+    return _delivered(result)["data"]
+
+
 async def test_model_visible_attrs_matches_browser_use_history_rendering() -> None:
     """The contract every other fix here rests on. If browser-use ever changes which
     fields it forwards, this fails before the tools quietly stop being readable."""
@@ -3670,57 +3681,75 @@ async def test_find_elements_asks_for_the_attributes_its_selector_names() -> Non
     end: the href is unrecoverable and nothing says it was withheld."""
     from types import SimpleNamespace
 
+    import openbrowse.agent.tools as tools_mod
     from openbrowse.agent.tools import register_find_elements_flow
 
-    asked: list = []
+    ran: list[str] = []
 
-    async def fake_find(params=None, **kwargs):
-        asked.append(list(params.attributes or []))
-        rows = "\n".join(f'[{i}] <a> "X" {{href="https://x.com/{i}"}}' for i in range(3))
-        return ActionResult(
-            extracted_content=f'Found 3 elements matching "{params.selector}":\n\n{rows}',
-            long_term_memory=f'Found 3 elements matching "{params.selector}".',
-        )
+    async def fake_eval(session, js):
+        ran.append(js)
+        return {
+            "elements": [
+                {"index": i, "tag": "a", "text": "X", "attrs": {"href": f"https://x.com/{i}"}}
+                for i in range(3)
+            ],
+            "total": 3,
+            "showing": 3,
+        }
 
     tools = Tools()
     entry = tools.registry.registry.actions.get("find_elements")
     if entry is None:
         pytest.skip("browser-use build has no find_elements action")
-    entry.function = fake_find
     register_find_elements_flow(tools)
 
-    params = SimpleNamespace(
-        selector="a[href*='twitter.com'], a[href*='linkedin.com']", attributes=None
-    )
-    result = await entry.function(params=params)
+    import unittest.mock as _mock
 
-    assert asked[-1] == ["href"]
-    visible = _seen_by_model(result)
-    assert "https://x.com/0" in visible
-    assert "https://x.com/2" in visible
+    with _mock.patch.object(tools_mod, "_eval_js", fake_eval):
+        params = SimpleNamespace(
+            selector="a[href*='twitter.com'], a[href*='linkedin.com']",
+            attributes=None,
+            max_results=50,
+            include_text=True,
+        )
+        result = await entry.function(
+            params=params, browser_session=object(), file_system=_FakeFileSystem()
+        )
+
+    assert '"href"' in ran[-1], "the derived attribute must reach the query"
+    data = _delivered_data(result)
+    assert [e["attrs"]["href"] for e in data] == [f"https://x.com/{i}" for i in range(3)]
 
 
 async def test_find_elements_respects_attributes_the_caller_gave() -> None:
     from types import SimpleNamespace
 
+    import openbrowse.agent.tools as tools_mod
     from openbrowse.agent.tools import register_find_elements_flow
 
-    asked: list = []
+    ran: list[str] = []
 
-    async def fake_find(params=None, **kwargs):
-        asked.append(list(params.attributes or []))
-        return ActionResult(extracted_content="Found 0 elements.", long_term_memory="none")
+    async def fake_eval(session, js):
+        ran.append(js)
+        return {"elements": [], "total": 0, "showing": 0}
 
     tools = Tools()
     entry = tools.registry.registry.actions.get("find_elements")
     if entry is None:
         pytest.skip("browser-use build has no find_elements action")
-    entry.function = fake_find
     register_find_elements_flow(tools)
 
-    params = SimpleNamespace(selector="a[href]", attributes=["src"])
-    await entry.function(params=params)
-    assert asked[-1] == ["src"]
+    import unittest.mock as _mock
+
+    with _mock.patch.object(tools_mod, "_eval_js", fake_eval):
+        params = SimpleNamespace(
+            selector="a[href]", attributes=["src"], max_results=50, include_text=True
+        )
+        await entry.function(
+            params=params, browser_session=object(), file_system=_FakeFileSystem()
+        )
+    assert '"src"' in ran[-1]
+    assert '"href"' not in ran[-1].split("ATTRIBUTES")[1].split(";")[0]
 
 
 def test_attrs_from_selector_covers_filters_and_tag_identity() -> None:
@@ -3744,25 +3773,33 @@ async def test_recall_returns_the_whole_value_not_a_hundred_characters() -> None
     register_clipboard_tools(tools, clipboard)
     entry = tools.registry.registry.actions["recall"]
 
-    result = await entry.function(key="found_links")
+    result = await entry.function(key="found_links", file_system=_FakeFileSystem())
     visible = _seen_by_model(result)
 
     assert len(str(links)) > 100
     assert "page-0" in visible and "page-39" in visible
 
 
-async def test_recall_says_so_when_a_value_is_too_big_to_return_whole() -> None:
-    import openbrowse.agent.tools as tools_mod
-    from openbrowse.agent.tools import register_clipboard_tools
+async def test_recall_spills_a_big_value_to_a_file_and_names_it() -> None:
+    """Over the budget the value goes to a file and the reply says how to read it, so
+    nothing is silently cut."""
+    from openbrowse.agent.tools import INLINE_BUDGET, register_clipboard_tools
 
-    value = "x" * (tools_mod._RECALL_INLINE_CHARS + 500)
+    value = ["https://example.com/a-fairly-long-url-for-padding"] * 200
     tools = Tools()
     register_clipboard_tools(tools, {"blob": value})
     entry = tools.registry.registry.actions["recall"]
 
-    visible = _seen_by_model(await entry.function(key="blob"))
-    assert "cut here" in visible
-    assert str(len(value)) in visible
+    fs = _FakeFileSystem()
+    envelope = _delivered(await entry.function(key="blob", file_system=fs))
+
+    assert envelope["truncated"] is True
+    assert envelope["total_chars"] > INLINE_BUDGET
+    assert "read_file(" in envelope["read_with"]
+    saved = envelope["file"]
+    import json as _json
+
+    assert _json.loads(fs.files[saved]) == value, "the file must hold the whole value"
 
 
 async def test_output_guard_breaks_a_repeat_loop_on_the_persistent_channel() -> None:
@@ -3994,22 +4031,23 @@ async def test_read_pages_accumulates_batches_instead_of_overwriting(monkeypatch
     assert [p["url"] for p in saved] == urls, "every batch must survive in pages.json"
 
 
-async def test_read_pages_next_step_instruction_survives_the_guard_cap(monkeypatch) -> None:
-    """The note is capped from the head; trailing guidance is what a big batch loses,
-    and the prefill instruction is the one part that must always arrive."""
-    from openbrowse.agent.tools import register_output_guard_overrides
-
-    import openbrowse.agent.tools as tools_mod
-
-    tools, _entry, _clip, _calls, _urls = _queue_fixture(monkeypatch, count=48, cap=48, verbose=True)
-    register_output_guard_overrides(tools)
+async def test_read_pages_keeps_its_next_step_instruction_on_a_full_batch(monkeypatch) -> None:
+    """The per-page detail is data and goes to a file; the instruction is the note and
+    must arrive whole however big the batch is."""
+    tools, _entry, _clip, _calls, _urls = _queue_fixture(
+        monkeypatch, count=48, cap=48, verbose=True
+    )
     entry = tools.registry.registry.actions["read_pages"]
 
-    result = await entry.function(browser_session=object(), file_system=_FakeFileSystem())
-    visible = _seen_by_model(result)
-    assert len(visible) > tools_mod._CAPPED_READ_PREVIEW_CHARS / 2, "expect a big note"
-    head = visible[: tools_mod._CAPPED_READ_PREVIEW_CHARS]
-    assert "add_items_from_file" in head or "run_code_file" in head
+    fs = _FakeFileSystem()
+    envelope = _delivered(
+        await entry.function(browser_session=object(), file_system=fs)
+    )
+
+    note = envelope["note"]
+    assert "add_items_from_file" in note or "run_code_file" in note
+    assert "pages.json" in note
+    assert envelope["file"] in fs.files
 
 
 async def test_guard_readout_files_are_not_reused_between_outputs() -> None:
@@ -4103,10 +4141,10 @@ async def test_recall_is_deduped_so_repeats_do_not_grow_context() -> None:
     register_output_guard_overrides(tools)
     entry = tools.registry.registry.actions["recall"]
 
-    first = _seen_by_model(await entry.function(key="blob"))
+    first = _seen_by_model(await entry.function(key="blob", file_system=_FakeFileSystem()))
     assert "example.com" in first
 
-    second = _seen_by_model(await entry.function(key="blob"))
+    second = _seen_by_model(await entry.function(key="blob", file_system=_FakeFileSystem()))
     assert "identical to earlier output" in second
     assert len(second) < len(first)
 
@@ -4115,3 +4153,157 @@ async def test_sandbox_error_field_is_bounded(tmp_path) -> None:
     result = await _run_sandbox(tmp_path, "raise ValueError('x' * 50000)")
     assert result.error
     assert len(result.error) <= 2000 + 200
+
+
+# --- the delivery contract --------------------------------------------------
+
+
+async def test_deliver_inlines_under_budget_and_still_writes_the_file() -> None:
+    """The file exists on both routes, which is what makes a pointer never a lie and
+    'give me the full object' always one read_file away."""
+    import json as _json
+
+    from openbrowse.agent.tools import deliver
+
+    fs = _FakeFileSystem()
+    payload = [{"href": "https://x.com/a", "text": "A"}]
+    envelope = _delivered(
+        await deliver(payload, note="found 1 link.", file_system=fs, filename="small.json")
+    )
+
+    assert envelope["data"] == payload
+    assert "truncated" not in envelope
+    assert _json.loads(fs.files["small.json"]) == payload
+
+
+async def test_deliver_spills_over_budget_and_points_at_the_file() -> None:
+    import json as _json
+
+    from openbrowse.agent.tools import INLINE_BUDGET, POINTER_SAMPLE, deliver
+
+    fs = _FakeFileSystem()
+    payload = [{"href": f"https://example.com/page-{i}", "text": f"Item {i}"} for i in range(200)]
+    envelope = _delivered(
+        await deliver(payload, note="found 200 links.", file_system=fs, filename="big.json")
+    )
+
+    assert envelope["truncated"] is True
+    assert envelope["total_chars"] > INLINE_BUDGET
+    assert len(envelope["sample"]) <= POINTER_SAMPLE
+    assert "read_file('big.json')" in envelope["read_with"]
+    assert _json.loads(fs.files["big.json"]) == payload, "the file holds everything"
+
+
+async def test_deliver_says_so_when_the_file_write_fails() -> None:
+    from openbrowse.agent.tools import deliver
+
+    class _BrokenFS(_FakeFileSystem):
+        async def write_file(self, name: str, content: str) -> None:
+            raise OSError("disk full")
+
+    envelope = _delivered(
+        await deliver(
+            [{"n": i} for i in range(500)],
+            note="found lots.",
+            file_system=_BrokenFS(),
+            filename="nope.json",
+        )
+    )
+    assert "file" not in envelope
+    assert "FAILED" in envelope["read_with"]
+
+
+async def test_deliver_survives_a_broken_formatter() -> None:
+    """A formatter that raises must never cost the agent its data."""
+    from openbrowse.agent.tools import deliver
+
+    def explode(_payload):
+        raise ValueError("cannot render")
+
+    envelope = _delivered(
+        await deliver(
+            [{"a": 1}],
+            note="got one row.",
+            file_system=_FakeFileSystem(),
+            filename="x.json",
+            formatter=explode,
+        )
+    )
+    assert envelope["data"] == [{"a": 1}]
+    assert "could not render" in envelope["note"]
+
+
+async def test_deliver_always_sets_both_fields_identically() -> None:
+    from openbrowse.agent.tools import deliver
+
+    for payload in ([{"a": 1}], [{"n": i} for i in range(500)]):
+        result = await deliver(
+            payload, note="n.", file_system=_FakeFileSystem(), filename="f.json"
+        )
+        assert result.extracted_content == result.long_term_memory
+        assert result.extracted_content
+
+
+async def test_the_route_is_chosen_by_size_not_by_which_tool_it_is(monkeypatch) -> None:
+    """find_links used to withhold its array however small it was. Five links inline,
+    two hundred spill, same tool."""
+    import openbrowse.agent.tools as tools_mod
+
+    async def links_for(n):
+        from openbrowse.agent.tools import deliver
+
+        return _delivered(
+            await deliver(
+                [{"href": f"https://example.com/{i}", "text": f"Item {i}"} for i in range(n)],
+                note=f"find_links found {n} link(s).",
+                file_system=_FakeFileSystem(),
+                filename="found_links.json",
+            )
+        )
+
+    assert "data" in await links_for(5), "a small result must come back inline"
+    assert (await links_for(200)).get("truncated") is True
+    assert tools_mod.INLINE_BUDGET == 2000
+
+
+def test_blank_narrative_is_detected_but_a_written_one_is_not() -> None:
+    from types import SimpleNamespace
+
+    from openbrowse.agent.runner import _has_no_narrative
+
+    blank = SimpleNamespace(
+        evaluation_previous_goal="", memory="   ", next_goal="",
+        what_i_see="", plan_to_goal=None, next_move="",
+    )
+    assert _has_no_narrative(blank)
+
+    written = SimpleNamespace(
+        evaluation_previous_goal="", memory="", next_goal="",
+        what_i_see="", plan_to_goal=None, next_move="get the hrefs",
+    )
+    assert not _has_no_narrative(written)
+    assert not _has_no_narrative(None)
+
+
+async def test_a_blank_narrative_reply_is_retried_then_accepted() -> None:
+    from types import SimpleNamespace
+
+    from openbrowse.agent.runner import _invoke_with_action_repair
+
+    calls = {"n": 0}
+
+    def blank_completion():
+        return SimpleNamespace(
+            completion=SimpleNamespace(
+                evaluation_previous_goal="", memory="", next_goal="",
+                what_i_see="", plan_to_goal="", next_move="",
+            )
+        )
+
+    async def always_blank(msgs):
+        calls["n"] += 1
+        return blank_completion()
+
+    result = await _invoke_with_action_repair(always_blank, [], object())
+    assert calls["n"] == 3, "two corrective retries, then accept rather than kill the run"
+    assert result is not None

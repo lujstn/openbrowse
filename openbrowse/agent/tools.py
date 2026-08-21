@@ -29,6 +29,18 @@ from openbrowse.agent.browser_cdp import (
     _eval_on_target,
     _iframe_targets,
 )
+try:
+    # Private upstream helpers: we reuse their query JS so our own delivery keeps
+    # browser-use's exact selector semantics. Guarded because a rename upstream must
+    # degrade to the built-in action, not break every run.
+    from browser_use.tools.service import (  # type: ignore[attr-defined]
+        _build_find_elements_js,
+        _build_search_page_js,
+    )
+except Exception:  # pragma: no cover - depends on the installed browser-use
+    _build_find_elements_js = None  # type: ignore[assignment]
+    _build_search_page_js = None  # type: ignore[assignment]
+
 from openbrowse.agent.captcha.bridge import install_captcha_bridge
 from openbrowse.agent.output_store import (
     OutputStore,
@@ -44,12 +56,16 @@ from openbrowse import system_metrics
 logger = logging.getLogger(__name__)
 
 
-_MAX_INLINE_FETCH_CHARS = 3000
-_FETCH_PREVIEW_CHARS = 2000
-_SANDBOX_STDOUT_PREVIEW_CHARS = 2500
+# The delivery contract. Every data-bearing action goes through `deliver`, which
+# returns the payload inline at or under INLINE_BUDGET and otherwise points at the
+# file it always writes. Two numbers, applied to the size of THIS call's output —
+# never to which tool produced it, so a five-row result and a thousand-row result
+# from the same tool take different routes and every tool has both available.
+INLINE_BUDGET = 2000
+POINTER_SAMPLE = 300
+
 _CAPPED_READ_PREVIEW_CHARS = 8000
 _GUARD_MIN_CHARS = 500
-_RECALL_INLINE_CHARS = 8000
 _EXTRA_VALUE_CHARS = 500
 _SANDBOX_ERROR_CHARS = 2000
 _UNREAD_LINKS_KEY = "_unread_links"
@@ -1445,43 +1461,16 @@ def register_fetch_tool(tools: Tools) -> None:
                     content=body,
                 )
             text = resp.text
-            total = len(text)
-            if total <= _MAX_INLINE_FETCH_CHARS:
-                result = {
+            return await deliver(
+                {
                     "status_code": resp.status_code,
                     "headers": dict(resp.headers),
                     "body": text,
-                }
-                return ActionResult(extracted_content=json.dumps(result, indent=2))
-
-            saved: str | None = _fs_name_from_url(
-                url, resp.headers.get("content-type", ""), text
+                },
+                note=f"Fetched {url} — HTTP {resp.status_code}, {len(text)} chars of body.",
+                file_system=file_system,
+                filename=_fs_name_from_url(url, resp.headers.get("content-type", ""), text),
             )
-            try:
-                await file_system.write_file(saved, text)
-            except Exception:
-                logger.warning("http_fetch: failed to save large body to FileSystem", exc_info=True)
-                saved = None
-            result = {
-                "status_code": resp.status_code,
-                "headers": dict(resp.headers),
-                "body_preview": text[:_FETCH_PREVIEW_CHARS],
-                "total_chars": total,
-                "saved_file": saved,
-                "note": (
-                    f"Body is {total} chars; only the first {_FETCH_PREVIEW_CHARS} are shown. "
-                    + (
-                        f"Full body saved to '{saved}' — read specific parts via read_file "
-                        "or the code sandbox (read_json) rather than re-fetching."
-                        if saved
-                        else "Saving the full body FAILED, so this preview is all that "
-                        "survives and the rest is gone — there is no file to read. "
-                        "Fetch a narrower URL if you need more of it."
-                    )
-                ),
-            }
-            payload = json.dumps(result, indent=2)
-            return ActionResult(extracted_content=payload, long_term_memory=payload)
         except httpx.HTTPError as e:
             return ActionResult(error=f"HTTP request failed: {e}")
 
@@ -1612,8 +1601,11 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
 
     out = stdout.getvalue()
     total = len(out)
-    preview = out[:_SANDBOX_STDOUT_PREVIEW_CHARS]
-    if total > _SANDBOX_STDOUT_PREVIEW_CHARS:
+    # stdout is a report, not a data payload: whatever the script actually produced
+    # belongs in save_json. So it stays a note rather than going through deliver, but
+    # on the same budget as everything else rather than a number of its own.
+    preview = out[:INLINE_BUDGET]
+    if total > INLINE_BUDGET:
         preview += (
             f"\n\n[stdout truncated: {total} chars total. Assign large results to a "
             "variable (it persists across runs) or save_json(obj,'name.json') then "
@@ -1888,23 +1880,19 @@ def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
         "Fetch a value previously saved with remember (or an auto-populated key such "
         "as startUrl) from the session clipboard."
     )
-    async def recall(key: str) -> ActionResult:
+    async def recall(key: str, file_system: FileSystem) -> ActionResult:
         if str(key) not in clipboard:
             known = ", ".join(sorted(clipboard)) or "(empty)"
             return ActionResult(
                 extracted_content=f"No value stored for '{key}'. Known keys: {known}"
             )
-        value = str(clipboard[str(key)])
-        if len(value) <= _RECALL_INLINE_CHARS:
-            note = f"recall({key}) = {value}"
-        else:
-            note = (
-                f"recall({key}) = {value[:_RECALL_INLINE_CHARS]}"
-                f"\n[cut here — the stored value is {len(value)} chars and only the first "
-                f"{_RECALL_INLINE_CHARS} are above. If this key came from a tool that also "
-                "saved a file, read that file for the rest.]"
-            )
-        return ActionResult(extracted_content=note, long_term_memory=note)
+        value = clipboard[str(key)]
+        return await deliver(
+            value,
+            note=f"recall({key}):",
+            file_system=file_system,
+            filename=f"recall_{_normalise_fs_name(str(key), 'json')}",
+        )
 
 
 class TabManager:
@@ -2286,25 +2274,28 @@ def register_tab_tools(
                     except Exception:
                         logger.warning("read_pages: failed to save rows_draft.json", exc_info=True)
             ok_count = sum(1 for p in pages if not p.get("error"))
-            lines: list[str] = []
-            for i, p in enumerate(pages):
+            # A per-page status row each, as data rather than prose: the agent needs to
+            # see which pages failed and which came back thin, and the full text of the
+            # ones that worked is in pages.json.
+            status: list[dict[str, Any]] = []
+            for p in pages:
                 if p.get("error"):
-                    lines.append(f"#{i} FAILED {p['url']} — {p['error']}")
-                else:
-                    link_text = " ".join((p.get("link_text") or "").split())[:80]
-                    lines.append(
-                        f"#{i} ok {p['url']} — text {len(p.get('text') or '')} chars, "
-                        f"jsonld {'yes' if p.get('jsonld') else 'no'}, "
-                        f"frame {'yes' if p.get('frame_matched') else 'no'}"
-                        + (
-                            " (filter skipped: page is on the panel's own host)"
-                            if p.get("frame_skipped_own_host")
-                            else ""
-                        )
-                        + ", "
-                        f"{len(p.get('links') or [])} links"
-                        + (f" | source row: {link_text}" if link_text else "")
-                    )
+                    status.append({"url": p["url"], "ok": False, "error": str(p["error"])})
+                    continue
+                row: dict[str, Any] = {
+                    "url": p["url"],
+                    "ok": True,
+                    "text_chars": len(p.get("text") or ""),
+                    "jsonld": bool(p.get("jsonld")),
+                    "frame_matched": bool(p.get("frame_matched")),
+                    "links": len(p.get("links") or []),
+                }
+                if p.get("frame_skipped_own_host"):
+                    row["frame_filter_skipped"] = "page is on the panel's own host"
+                link_text = " ".join((p.get("link_text") or "").split())[:80]
+                if link_text:
+                    row["source_row"] = link_text
+                status.append(row)
             note = (
                 f"Read {ok_count} of {len(pages)} pages"
                 + (f"; full content saved to '{saved}'" if saved else "")
@@ -2327,10 +2318,6 @@ def register_tab_tools(
                     else ""
                 )
                 + "."
-                # @nonobvious(must-hold): the next-step instruction comes BEFORE the
-                # per-page lines. This text is capped from the head, and the per-page
-                # list grows with the batch — trailing guidance is the first thing a
-                # 48-page call loses, which is the one part that must always arrive.
                 + draft_note
                 + (
                     ""
@@ -2340,8 +2327,6 @@ def register_tab_tools(
                     "details from page['jsonld']), save_json(rows, 'items.json'), "
                     "then add_items_from_file('items.json'). Do not re-read these pages."
                 )
-                + "\n"
-                + "\n".join(lines)
             )
             done_total = len(all_pages)
             # The queue state has to be unmistakable in both directions: an agent that
@@ -2356,14 +2341,15 @@ def register_tab_tools(
                 if remainder
                 else " Nothing is queued — every saved link has now been read."
             )
-            return ActionResult(
-                extracted_content=note,
-                long_term_memory=(
+            return await deliver(
+                status,
+                note=(
                     f"read_pages: read {ok_count} of {len(pages)} page(s) this call, "
-                    f"{done_total} read so far this session -> {saved}."
-                    + queue_state
-                    + f"\n{note}"
+                    f"{done_total} read so far this session. Full page text is in "
+                    f"'{saved}'." + queue_state + " " + note
                 ),
+                file_system=file_system,
+                filename="read_pages_status.json",
             )
         except Exception as e:
             return ActionResult(error=f"read_pages failed: {type(e).__name__}: {e}")
@@ -2666,12 +2652,6 @@ def register_tab_tools(
         }
         clipboard["found_links_frame"] = frame_url_contains
         clipboard["found_links_meta"] = {link["href"]: link["text"] for link in links}
-        saved: str | None = "found_links.json"
-        try:
-            await file_system.write_file(saved, json.dumps(links, indent=2))
-        except Exception:
-            logger.warning("find_links: failed to save found_links.json", exc_info=True)
-            saved = None
         frame_hint = ""
         if frame_url_contains:
             frame_hint = (
@@ -2730,7 +2710,6 @@ def register_tab_tools(
             )
         pointer = (
             f"find_links found {len(links)} link(s), saved as found_links"
-            + (f" and {saved}" if saved else "")
             + ". Next: call read_pages() with no args to read them — "
             "each item's detail (description, published date and more) lives on its own "
             "page, not this list page."
@@ -2743,12 +2722,13 @@ def register_tab_tools(
             )
             + unverified_hint + frame_hint + offhost_hint
             + " read_pages prefills rows_draft.json for add_items_from_file — no "
-            "mapping script needed. The link list itself is in found_links.json and "
-            "via recall('found_links') — no need to re-run find_links to see it again."
+            "mapping script needed."
         )
-        return ActionResult(
-            extracted_content=json.dumps(links, indent=2),
-            long_term_memory=pointer,
+        return await deliver(
+            links,
+            note=pointer,
+            file_system=file_system,
+            filename="found_links.json",
         )
 
 
@@ -2778,6 +2758,82 @@ def _clip_marked(value: Any, limit: int = _EXTRA_VALUE_CHARS) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}… <{len(text)} chars total, cut here>"
+
+
+async def deliver(
+    payload: Any,
+    *,
+    note: str,
+    file_system: Any,
+    filename: str,
+    formatter: Any = None,
+) -> ActionResult:
+    """The one way a tool hands data to the model.
+
+    Serialises the real object as JSON rather than prose, because prose cannot be
+    re-read from disk faithfully and models parse it less reliably. Writes the file on
+    every call, inline or not, so the pointer is never a lie and "give me the full
+    object" is always ``read_file('<name>')`` with no extra tool and no flag a model
+    could set defensively on every call. Returns the payload inline at or under
+    ``INLINE_BUDGET``, otherwise a pointer naming the file and the call that reads it.
+
+    ``note`` is the tool's own sentence: what happened and what to do next. A bare
+    count is what made ``find_elements`` unanswerable and is never an acceptable note.
+    ``formatter`` is an optional human-readable summary; if it raises, the JSON is
+    delivered anyway, so a broken formatter can never cost the agent its data.
+
+    Sets both result fields to the identical string. Divergence between them is the
+    defect this whole contract exists to make impossible.
+    """
+    if isinstance(payload, str):
+        body = payload
+    else:
+        try:
+            body = json.dumps(payload, indent=2, default=str)
+        except Exception:
+            logger.warning("deliver: %s payload is not JSON-serialisable", filename, exc_info=True)
+            body = str(payload)
+
+    saved: str | None = filename
+    if file_system is not None and filename:
+        try:
+            await file_system.write_file(filename, body)
+        except Exception:
+            logger.warning("deliver: failed to save %s", filename, exc_info=True)
+            saved = None
+    else:
+        saved = None
+
+    headline = note
+    if formatter is not None:
+        try:
+            summary = formatter(payload)
+            if summary:
+                headline = f"{note} {summary}"
+        except Exception:
+            logger.warning("deliver: formatter failed for %s", filename, exc_info=True)
+            headline = f"{note} (could not render a readable summary; the JSON below is complete)"
+
+    # One JSON document, always. Wrapping the payload inside prose would make the model
+    # find the data within a sentence; this way the whole reply parses, in both routes.
+    envelope: dict[str, Any] = {"note": headline}
+    if saved:
+        envelope["file"] = saved
+    if len(body) <= INLINE_BUDGET:
+        envelope["data"] = payload if not isinstance(payload, str) else body
+    else:
+        envelope["truncated"] = True
+        envelope["total_chars"] = len(body)
+        envelope["sample"] = body[:POINTER_SAMPLE]
+        envelope["read_with"] = (
+            f"read_file('{saved}') for the complete data, or read_json('{saved}') "
+            "inside run_code_file"
+            if saved
+            else "nothing — saving the data to a file FAILED, so only the sample above "
+            "exists. Narrow the query and run it again rather than expecting a file"
+        )
+    text = json.dumps(envelope, indent=2, default=str)
+    return ActionResult(extracted_content=text, long_term_memory=text)
 
 
 def model_visible_attrs(result: ActionResult) -> tuple[str, ...]:
@@ -3096,19 +3152,23 @@ def _attrs_from_selector(selector: str) -> list[str]:
     return names
 
 
-def _deliver_listing(result: ActionResult) -> None:
-    """Move a listing the model cannot see onto the field it reads.
+async def _run_upstream_query(browser_session: Any, js: str) -> dict[str, Any] | None:
+    """Run one of browser-use's own query scripts ourselves and return its raw result.
 
-    ``find_elements`` and ``search_page`` put their actual findings in
-    ``extracted_content`` and a bare count in ``long_term_memory``, and browser-use
-    discards ``extracted_content`` whenever ``long_term_memory`` is set — so the
-    findings never arrive and the count is all there is. Both formatters lead with
-    that same count line, so carrying the listing over loses nothing even when the
-    output guard later truncates it from the head.
+    ``find_elements`` and ``search_page`` render their findings to a string and hand
+    back only that, so a wrapper can never recover the objects behind it. Reusing their
+    JS keeps us on their query semantics while letting the real rows reach ``deliver``.
+    Returns None when the query cannot be run, which tells the caller to fall back to
+    the upstream action rather than fail the step.
     """
-    listing = getattr(result, "extracted_content", None)
-    if listing:
-        result.long_term_memory = listing
+    if browser_session is None or _build_find_elements_js is None:
+        return None
+    try:
+        data = await _eval_js(browser_session, js)
+    except Exception:
+        logger.warning("upstream query failed; falling back to the built-in", exc_info=True)
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def register_find_elements_flow(tools: Tools) -> None:
@@ -3126,17 +3186,35 @@ def register_find_elements_flow(tools: Tools) -> None:
     original = entry.function
 
     async def wrapped(params: Any = None, **kwargs: Any) -> Any:
-        if params is not None and not getattr(params, "attributes", None):
-            derived = _attrs_from_selector(str(getattr(params, "selector", "") or ""))
-            if derived:
-                try:
-                    params.attributes = derived
-                except Exception:
-                    logger.debug("find_elements: could not set derived attributes", exc_info=True)
-        result = await original(params=params, **kwargs)
-        if isinstance(result, ActionResult):
-            _deliver_listing(result)
-        return result
+        selector = str(getattr(params, "selector", "") or "")
+        attributes = list(getattr(params, "attributes", None) or []) or _attrs_from_selector(
+            selector
+        )
+        session = kwargs.get("browser_session")
+        data = await _run_upstream_query(
+            session,
+            _build_find_elements_js(
+                selector=selector,
+                attributes=attributes or None,
+                max_results=int(getattr(params, "max_results", 50) or 50),
+                include_text=bool(getattr(params, "include_text", True)),
+            ),
+        )
+        if data is None:
+            return await original(params=params, **kwargs)
+        if isinstance(data, dict) and data.get("error"):
+            return ActionResult(error=f"find_elements: {data['error']}")
+        total = int(data.get("total", 0) or 0)
+        return await deliver(
+            data.get("elements", []),
+            note=(
+                f"find_elements matched {total} element(s) for {selector!r}"
+                + (f", reporting {', '.join(attributes)}" if attributes else "")
+                + ("." if total else " — nothing on the page matches that selector.")
+            ),
+            file_system=kwargs.get("file_system"),
+            filename="found_elements.json",
+        )
 
     entry.function = wrapped
 
@@ -3161,10 +3239,33 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
                 params.css_scope = None
             except Exception:
                 pass
-        result = await original(params=params, **kwargs)
-        if isinstance(result, ActionResult):
-            _deliver_listing(result)
         pattern = str(getattr(params, "pattern", "") or "")
+        data = await _run_upstream_query(
+            kwargs.get("browser_session"),
+            _build_search_page_js(
+                pattern=pattern,
+                regex=bool(getattr(params, "regex", False)),
+                case_sensitive=bool(getattr(params, "case_sensitive", False)),
+                context_chars=int(getattr(params, "context_chars", 150) or 150),
+                css_scope=getattr(params, "css_scope", None),
+                max_results=int(getattr(params, "max_results", 50) or 50),
+            ),
+        )
+        if data is None:
+            result = await original(params=params, **kwargs)
+        elif isinstance(data, dict) and data.get("error"):
+            result = ActionResult(error=f"search_page: {data['error']}")
+        else:
+            total = int(data.get("total", 0) or 0)
+            result = await deliver(
+                data.get("matches", []),
+                note=(
+                    f"search_page found {total} match(es) for {pattern!r} on the page "
+                    "currently on screen."
+                ),
+                file_system=kwargs.get("file_system"),
+                filename="page_matches.json",
+            )
         counts = clipboard.setdefault("_page_search_counts", {})
         n = counts.get(pattern, 0) + 1
         counts[pattern] = n
