@@ -1645,7 +1645,7 @@ def _budget_salvage(
     # does not already validate is kept as it stands and recorded as a failure.
     output = ""
     if store is not None and not store.is_empty():
-        output = store.read_output()
+        output = store.final_output()
     else:
         try:
             result_file = agent.file_system.get_file("result.json") if agent.file_system else None
@@ -1991,7 +1991,7 @@ async def _finalise_task(
     done_output = _gated_done_output(history)
     from_store = store is not None and not store.is_empty()
     if from_store:
-        output = store.read_output()
+        output = store.final_output()
     else:
         output = done_output or file_output
 

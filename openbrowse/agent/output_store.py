@@ -274,6 +274,25 @@ class OutputStore:
                 )
         return json.dumps(shown, indent=2, default=str)
 
+    def final_output(self) -> str:
+        """The output as published JSON: identical to the stored data except
+        that array items are stripped to the schema's own fields. Extra keys
+        stay in the store while a run is live (the completeness gate uses them
+        to hint at mis-keyed data, and bulk loads carry provenance columns),
+        but the published answer honours the requested shape exactly — a
+        budget-salvaged run must not ship scaffolding fields the schema never
+        asked for."""
+        shown = dict(self._data)
+        if self._array_field and self._item_model is not None:
+            allowed = set(self._item_model.model_fields)
+            shown[self._array_field] = [
+                {k: v for k, v in item.items() if k in allowed}
+                if isinstance(item, dict)
+                else item
+                for item in (shown.get(self._array_field) or [])
+            ]
+        return json.dumps(shown, indent=2, default=str)
+
     def add_item(self, item: Any) -> tuple[bool, str]:
         if not self._array_field:
             return False, "This output has no list to add items to; use set_field."
