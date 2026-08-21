@@ -72,6 +72,8 @@ _UNREAD_LINKS_KEY = "_unread_links"
 _READ_PAGES_KEY = "_read_pages_all"
 _DRAFTS_KEY = "_read_pages_drafts"
 _REFUSED_KEY = "_refused_items"
+_READS_KEY = "_reads_done"
+_GATE_READS_KEY = "_gate_bounce_reads"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -803,6 +805,8 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
         "_read_pages_all",
         "_read_pages_drafts",
         "_refused_items",
+        "_reads_done",
+        "_gate_bounce_reads",
         "_read_items",
         "_read_failed",
         "_read_failed_frame",
@@ -3967,10 +3971,16 @@ def _absence_unearned(
     store: OutputStore, clipboard: dict[str, Any] | None, field: str
 ) -> str | None:
     """The refusal message when ``field`` may not be marked absent yet because the
-    items' own pages have not actually been read — absence must be observed, not
-    assumed, or gate pressure invites marking everything absent without looking.
-    Item fields only; a top-level field has no per-item page to verify against.
+    absence has not actually been observed — absence must be seen, not assumed, or
+    gate pressure invites marking everything absent without looking.
+
+    Two rules. Any field, top-level included, needs at least one read since the
+    completeness gate asked for it. Beyond that, an item field also needs the items'
+    own pages to have been read, which a top-level field has no equivalent of.
     """
+    unlooked = _absent_needs_a_look(clipboard)
+    if unlooked:
+        return unlooked
     if store.item_model is None or field not in store.item_model.model_fields:
         return None
     url_field = _item_url_field(store)
@@ -4350,6 +4360,56 @@ def register_output_store_tools(
         return ActionResult(extracted_content=note, long_term_memory=note)
 
 
+_LOOKING_ACTIONS = (
+    "evaluate",
+    "extract",
+    "find_",
+    "search_page",
+    "read_pages",
+    "read_file",
+    "http_fetch",
+    "run_code_file",
+    "get_html",
+    "scroll",
+)
+
+
+def note_read_action(clipboard: dict[str, Any] | None, action_name: str | None) -> None:
+    """Count the actions that amount to looking at the source.
+
+    The completeness gate needs to know whether the agent has looked since it was
+    asked, because otherwise mark_absent is a one-call escape from the gate entirely.
+    """
+    if clipboard is None or not action_name:
+        return
+    lowered = action_name.lower()
+    if any(k in lowered for k in _LOOKING_ACTIONS):
+        clipboard[_READS_KEY] = int(clipboard.get(_READS_KEY) or 0) + 1
+
+
+def _absent_needs_a_look(clipboard: dict[str, Any] | None) -> str | None:
+    """The refusal when mark_absent is used to answer a completeness bounce without
+    having looked in between.
+
+    "I checked and it is not published" is a claim about the source, and the gate had
+    just said otherwise. Marking a field absent with no read since is how a run ends up
+    declaring a page's own title missing.
+    """
+    if clipboard is None:
+        return None
+    since = clipboard.get(_GATE_READS_KEY)
+    if since is None:
+        return None
+    if int(clipboard.get(_READS_KEY) or 0) > int(since):
+        return None
+    return (
+        "You have not read anything since the completeness check asked for those "
+        "fields, so you cannot yet say the source does not publish them. Look where "
+        "each value would be first — evaluate, extract, find_links, read_pages, scroll "
+        "or read_file — then mark absent only what is genuinely not there."
+    )
+
+
 def _gate_refused_items(clipboard: dict[str, Any] | None) -> str | None:
     """The bounce when the agent proposed items we refused and never got back to.
 
@@ -4488,6 +4548,10 @@ def register_completeness_gate(
             deficit = _gate_link_deficit(store, clipboard) or _gate_refused_items(clipboard)
             if empties or deficit:
                 state["bounced"] = True
+                # Note where the read count stood, so mark_absent can tell "I looked
+                # and it is not published" from "I was asked and said no".
+                if clipboard is not None:
+                    clipboard[_GATE_READS_KEY] = int(clipboard.get(_READS_KEY) or 0)
                 if on_incomplete is not None:
                     try:
                         await on_incomplete(empties or ([deficit] if deficit else []))

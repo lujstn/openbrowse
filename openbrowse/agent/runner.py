@@ -44,6 +44,7 @@ from openbrowse.agent.output_store import OutputStore
 from openbrowse.agent.schema import json_schema_to_pydantic
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
+    note_read_action,
     TabManager,
     _eval_js,
     _gate_empty_fields,
@@ -2400,6 +2401,11 @@ async def run_agent_session(session_id: str) -> None:
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
+                for act in step.model_output.action:
+                    try:
+                        note_read_action(clipboard, _primary_action_name([act]))
+                    except Exception:
+                        logger.debug("read-action count failed", exc_info=True)
                 for act in step.model_output.action:
                     try:
                         dumped = act.model_dump(exclude_none=True)

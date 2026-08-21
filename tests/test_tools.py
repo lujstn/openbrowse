@@ -4619,3 +4619,72 @@ def test_the_gate_never_invents_candidates_from_page_links() -> None:
 
     assert _gate_refused_items({}) is None
     assert _gate_refused_items({"found_links": [f"https://x.com/{i}" for i in range(30)]}) is None
+
+
+# --- mark_absent as an escape from the completeness gate ---------------------
+
+
+async def test_mark_absent_is_refused_until_the_agent_looks_again() -> None:
+    """The wise sequence: gate bounces, agent marks everything absent without reading
+    anything, gate passes on a page whose own title is declared missing."""
+    from openbrowse.agent.tools import note_read_action, register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard: dict = {"_reads_done": 3}  # it had already read earlier in the run
+    register_output_store_tools(tools, store, clipboard)
+    absent = tools.registry.registry.actions["mark_absent"]
+
+    # the gate bounces and notes where the read count stood
+    clipboard["_gate_bounce_reads"] = clipboard["_reads_done"]
+
+    refused = await absent.function(field="description", reason="not published anywhere")
+    assert refused.error
+    assert "have not read anything since" in refused.error
+    assert "description" not in store.absent_fields
+
+    # the agent does something about it
+    note_read_action(clipboard, "evaluate")
+
+    allowed = await absent.function(field="description", reason="checked the page body")
+    assert not allowed.error
+    assert "description" in store.absent_fields
+
+
+async def test_mark_absent_is_free_before_any_gate_bounce() -> None:
+    """Settling a field you already know is unpublished is normal use, and the rule
+    only applies once the gate has actually asked."""
+    from openbrowse.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    register_output_store_tools(tools, store, {})
+    absent = tools.registry.registry.actions["mark_absent"]
+
+    result = await absent.function(field="description", reason="no detail pages exist")
+    assert not result.error
+    assert "description" in store.absent_fields
+
+
+def test_only_looking_actions_count_as_looking() -> None:
+    from openbrowse.agent.tools import note_read_action
+
+    clipboard: dict = {}
+    for action in ("set_field", "mark_absent", "add_item", "done", "remember"):
+        note_read_action(clipboard, action)
+    assert clipboard.get("_reads_done") is None, "writing to the output is not looking"
+
+    for action in ("evaluate", "read_file", "find_links", "scroll", "read_pages"):
+        note_read_action(clipboard, action)
+    assert clipboard["_reads_done"] == 5
+
+
+def test_absence_needs_a_look_message_names_the_tools() -> None:
+    from openbrowse.agent.tools import _absent_needs_a_look
+
+    assert _absent_needs_a_look({}) is None
+    assert _absent_needs_a_look({"_gate_bounce_reads": 2, "_reads_done": 3}) is None
+    msg = _absent_needs_a_look({"_gate_bounce_reads": 2, "_reads_done": 2})
+    assert msg is not None
+    for tool in ("evaluate", "read_pages", "read_file"):
+        assert tool in msg
