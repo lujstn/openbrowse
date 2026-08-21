@@ -44,6 +44,7 @@ from openbrowse.agent.output_store import OutputStore
 from openbrowse.agent.schema import json_schema_to_pydantic
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
+    note_read_action,
     TabManager,
     _eval_js,
     _gate_empty_fields,
@@ -52,6 +53,7 @@ from openbrowse.agent.tools import (
     register_code_tools,
     register_completeness_gate,
     register_fetch_tool,
+    register_find_elements_flow,
     register_output_guard_overrides,
     register_output_store_tools,
     register_search_page_flow,
@@ -851,6 +853,39 @@ def _mistyped_correction(detail: str) -> str:
     )
 
 
+_NARRATIVE_FIELDS = (
+    "evaluation_previous_goal",
+    "memory",
+    "next_goal",
+    "what_i_see",
+    "plan_to_goal",
+    "next_move",
+)
+
+_MAX_NARRATIVE_RETRIES = 2
+
+_BLANK_NARRATIVE_CORRECTION = (
+    "Your reply left every narrative field empty. Those fields are how you tell your "
+    "next step what you just did and why — a step that fills none of them arrives in "
+    "your history as a bare tool result with no record of your intent, and you will "
+    "repeat yourself. Resend the same action, and fill what_i_see, plan_to_goal and "
+    "next_move with one real sentence each. Not an empty string, not a placeholder."
+)
+
+
+def _has_no_narrative(completion: Any) -> bool:
+    """True when a reply left every narrative field blank.
+
+    The schema marks these required, but 'required' means the key is present, not that
+    the value says anything, so a model can satisfy it with empty strings.
+    """
+    if completion is None:
+        return False
+    if not any(hasattr(completion, f) for f in _NARRATIVE_FIELDS):
+        return False
+    return not any(str(getattr(completion, f, "") or "").strip() for f in _NARRATIVE_FIELDS)
+
+
 async def _invoke_with_action_repair(
     invoke: Any, messages: Any, output_format: Any
 ) -> Any:
@@ -862,9 +897,32 @@ async def _invoke_with_action_repair(
     """
     extra: list[Any] = []
     last_detail = ""
-    for attempt in range(3):
+    attempt = -1
+    narrative_retries = 0
+    # @nonobvious(must-hold): the narrative retry has its own budget. Sharing the
+    # action-repair attempts would mean one prose-less reply costs a later mis-typed
+    # action its last chance, and that path abandons the step outright.
+    while attempt < 2:
+        attempt += 1
         try:
-            return await invoke(list(messages) + extra)
+            result = await invoke(list(messages) + extra)
+            if narrative_retries >= _MAX_NARRATIVE_RETRIES or not _has_no_narrative(
+                getattr(result, "completion", None)
+            ):
+                return result
+            # The schema requires these fields but is satisfied by empty strings, and a
+            # step that says nothing lands in history as its action's result alone. Ask
+            # again rather than accept it; accept once the budget is spent, because a
+            # model that will not write prose should not kill an otherwise working run.
+            narrative_retries += 1
+            attempt -= 1
+            logger.info(
+                "Retrying LLM call after a reply with no narrative (%d/%d)",
+                narrative_retries,
+                _MAX_NARRATIVE_RETRIES,
+            )
+            extra.append(UserMessage(content=_BLANK_NARRATIVE_CORRECTION))
+            continue
         except Exception as e:
             if output_format is None:
                 raise
@@ -2194,8 +2252,12 @@ async def run_agent_session(session_id: str) -> None:
                 tools, store, _on_incomplete_done, clipboard, _on_complete_done
             )
 
-        register_output_guard_overrides(tools)
         register_search_page_flow(tools, clipboard)
+        register_find_elements_flow(tools)
+        # @nonobvious(must-hold): last, so it wraps the final version of every action.
+        # Registered any earlier and a later wrapper sits OUTSIDE the guard, handed a
+        # result the guard may already have replaced with a back-reference.
+        register_output_guard_overrides(tools)
         try:
             llm._action_param_kinds = action_param_kinds(tools)
             llm._action_names = set(tools.registry.registry.actions)
@@ -2339,6 +2401,11 @@ async def run_agent_session(session_id: str) -> None:
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
+                for act in step.model_output.action:
+                    try:
+                        note_read_action(clipboard, _primary_action_name([act]))
+                    except Exception:
+                        logger.debug("read-action count failed", exc_info=True)
                 for act in step.model_output.action:
                     try:
                         dumped = act.model_dump(exclude_none=True)
