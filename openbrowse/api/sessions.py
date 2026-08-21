@@ -261,6 +261,7 @@ async def create_session(
     body: RunTaskRequest | None = None,
     _: str = Depends(require_api_key),
 ):
+    """Start a browser session and give the agent its task. The run begins immediately, and the response carries the session id you poll for progress."""
     body = body or RunTaskRequest()
     sent = body.model_fields_set
 
@@ -374,6 +375,7 @@ async def list_sessions(
     page_size: int = Query(20, ge=1, le=100),
     _: str = Depends(require_api_key),
 ):
+    """List sessions with their current status, paginated. Running and finished sessions are both included."""
     sessions, total = await crud.list_sessions(page=page, page_size=page_size)
     return SessionListResponse(
         sessions=[_to_session_response(s) for s in sessions],
@@ -385,6 +387,7 @@ async def list_sessions(
 
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str, _: str = Depends(require_api_key)):
+    """Fetch one session by id, with its status, step count, live view URL and structured output as they stand right now."""
     session = await crud.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -397,6 +400,7 @@ async def stop_session(
     body: StopSessionRequest | None = None,
     _: str = Depends(require_api_key),
 ):
+    """Cancel a running session and close its browser. The default leaves it stopped; strategy "task" leaves it idle, so a later call can give it new work."""
     session = await crud.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -416,6 +420,7 @@ async def stop_session(
 
 @router.delete("/{session_id}", status_code=204)
 async def delete_session(session_id: str, _: str = Depends(require_api_key)):
+    """Cancel the session if it is still running, then delete it and everything stored against it."""
     session = await crud.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -431,6 +436,7 @@ async def list_messages(
     limit: int = Query(100, ge=1, le=1000),
     _: str = Depends(require_api_key),
 ):
+    """Read the messages a session has produced, paged with after, before and limit, for following a run live or diagnosing one afterwards."""
     session = await crud.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

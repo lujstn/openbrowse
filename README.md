@@ -29,6 +29,8 @@ Given the same real-world extraction task (a careers page with 14 records behind
 
 <sub><i><sup>1</sup> Extracted successfully, though some returned fields (e.g. job seniority) were hallucinated when not shown on the page.</i></sub>
 
+<sub>[All runs, every model tried, and the task specification](https://openbrowse.co/benchmarks).</sub>
+
 ## Why OpenBrowse over BU Cloud?
 
 | | BU Cloud | OpenBrowse |
@@ -41,6 +43,8 @@ Given the same real-world extraction task (a careers page with 14 records behind
 | Profiles | Cloud profiles | Import your BU Cloud profiles (cookies and localStorage) with one command |
 | Live view | Replay | Real-time VNC of the actual browser, a step feed with the model's reasoning, and an IDE-style code tab that streams the agent's sandbox scripts live as they're written |
 | API | v3 REST | The same v3 REST surface: point `browser-use-sdk` at your box and change nothing but `baseUrl` and `apiKey` |
+
+<sub>[The full dimension-by-dimension comparison](https://openbrowse.co/vs/browser-use-cloud).</sub>
 
 ### ⚡ See it in action
 
