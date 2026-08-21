@@ -59,6 +59,7 @@ from openbrowse.agent.tools import (
     register_output_store_tools,
     register_search_page_flow,
     register_tab_tools,
+    register_upload_path_resolution,
 )
 from openbrowse.browser.factory import display_manager, launch_chrome, stop_chrome
 from openbrowse.config import settings
@@ -2257,6 +2258,7 @@ async def run_agent_session(session_id: str) -> None:
         register_code_tools(tools, clipboard, store, _code_progress)
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
+        register_upload_path_resolution(tools)
         capsolver_costs: list[float] = []
         # @nonobvious(forced-by): the solver refuses to spend once its own sink
         # passes CAPTCHA_MAX_COST_USD, and that sink is bound at registration —

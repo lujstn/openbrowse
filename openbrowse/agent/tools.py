@@ -3048,6 +3048,65 @@ def _compact_json_text(text: str) -> str | None:
     )
 
 
+def _resolve_upload_path(path: str, file_system: FileSystem | None) -> str | None:
+    """A managed-file name becomes its absolute real path; an absolute path is
+    kept as given; anything else is unresolvable (None). Real paths so a
+    symlinked filesystem directory cannot make the granted and submitted paths
+    disagree."""
+    if Path(path).is_absolute():
+        return path
+    if file_system is None:
+        return None
+    try:
+        file_obj = file_system.get_file(path)
+        if file_obj is None:
+            return None
+        fs_dir = Path(str(file_system.get_dir())).resolve()
+        real_path = (fs_dir / file_obj.full_name).resolve()
+    except Exception:
+        return None
+    if fs_dir not in real_path.parents:
+        return None
+    return str(real_path)
+
+
+def register_upload_path_resolution(tools: Tools) -> None:
+    """browser-use treats any cdp_url session as a remote browser, so its
+    upload_file forwards the model's path into DOM.setFileInputFiles verbatim
+    instead of resolving it against the agent file system. Our browser shares
+    the server's disk, and a bare managed name like 'greeting.txt' reaches
+    Chromium as a relative path: the read grant registered at attach time can
+    never match the path in the form submission's body, so the browser kills
+    the renderer with ILLEGAL_UPLOAD_PARAMS (bad_message reason 170) the moment
+    the form is submitted — and the tool chain reports success throughout.
+    Rewrite managed names to absolute real paths before the builtin runs, and
+    refuse anything unresolvable with an error the model can act on rather
+    than a dead tab."""
+    entry = tools.registry.registry.actions.get("upload_file")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def upload_file_abspath(params: Any = None, **kwargs: Any) -> Any:
+        path = getattr(params, "path", None)
+        if isinstance(path, str):
+            resolved = _resolve_upload_path(path, kwargs.get("file_system"))
+            if resolved is None:
+                return ActionResult(
+                    error=(
+                        f"upload_file could not resolve {path!r}: it is not a file "
+                        "in the agent file system and not an absolute path. Create "
+                        "the file first (e.g. with write_file) or pass an absolute "
+                        "path to an existing file."
+                    )
+                )
+            if resolved != path:
+                params = params.model_copy(update={"path": resolved})
+        return await original(params=params, **kwargs)
+
+    entry.function = upload_file_abspath
+
+
 def register_output_guard_overrides(tools: Tools) -> None:
     """Stop a run's context ballooning: replace any large chunk already seen this
     session with a short back-reference, and (for dump actions only) cap genuinely huge
