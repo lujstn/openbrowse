@@ -239,14 +239,29 @@ class LiveClient:
             payload["outputSchema"] = output_schema
         created = self.create_task(payload)
         session_id = created["id"]
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{name}-{model}.json"
         try:
             session = self.poll_until_terminal(session_id, timeout_s)
+        except TimeoutError:
+            # A timed-out run is the one most worth diagnosing — save whatever
+            # exists before re-raising.
+            self.stop(session_id)
+            try:
+                session = self.get_session(session_id)
+                messages = self.fetch_all_messages(session_id)
+                artifact_path.write_text(
+                    json.dumps(
+                        {"session": session, "messages": messages, "timedOut": True},
+                        indent=1,
+                    )
+                )
+            except Exception:
+                pass
+            raise
         finally:
             self.stop(session_id)
         messages = self.fetch_all_messages(session_id)
-
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = artifact_dir / f"{name}-{model}.json"
         artifact_path.write_text(
             json.dumps({"session": session, "messages": messages}, indent=1)
         )
