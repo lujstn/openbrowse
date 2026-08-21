@@ -520,6 +520,7 @@ async def _read_one_page(
     baseline: set[str],
     allow_sole_candidate: bool = False,
     sibling_urls: list[str] | None = None,
+    _frame_retry: bool = False,
 ) -> dict[str, Any]:
     """Wait for a spawned tab (and, when asked, its embedded panel) to render, then
     read {url, title, text, jsonld, links} from it — the panel when one matches,
@@ -546,6 +547,7 @@ async def _read_one_page(
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
     panel_in_dom: bool | None = None
     prev_thin_text: str | None = None
+    thin_frame_hosts: list[str] = []
     frame_world: tuple[str, int] | None = None
 
     def _substantial(txt: Any) -> bool:
@@ -568,7 +570,19 @@ async def _read_one_page(
             hosts = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
         except Exception:
             return False
-        return not hosts
+        if hosts:
+            # Stable thin text plus an embed: the main document has shown all
+            # it has and the content lives in the frame. Recording the hosts
+            # lets the wait loop hand straight over to the frame-recovery pass
+            # instead of burning the rest of the deadline on a document that
+            # will never grow.
+            thin_frame_hosts.extend(
+                h
+                for h in hosts
+                if isinstance(h, str) and h and h not in thin_frame_hosts
+            )
+            return False
+        return True
 
     while loop.time() < deadline:
         try:
@@ -653,6 +667,8 @@ async def _read_one_page(
                         break
                     if ready == "complete" and await _settled_thin(txt):
                         break
+                    if thin_frame_hosts:
+                        break
         except Exception:
             logger.debug("_read_one_page: poll failed", exc_info=True)
         await asyncio.sleep(0.5)
@@ -712,15 +728,36 @@ async def _read_one_page(
         not url_contains
         and len((page.get("text") or "").strip()) < 2 * _MIN_PAGE_TEXT_CHARS
     ):
-        try:
-            raw = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
-        except Exception:
-            raw = None
-        hosts = (
-            [h for h in raw if isinstance(h, str) and h]
-            if isinstance(raw, list)
-            else []
-        )
+        hosts = list(thin_frame_hosts)
+        if not hosts:
+            try:
+                raw = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
+            except Exception:
+                raw = None
+            hosts = (
+                [h for h in raw if isinstance(h, str) and h]
+                if isinstance(raw, list)
+                else []
+            )
+        if hosts and not _frame_retry:
+            # The filter the old error message asked the model to re-run with is
+            # right here — read the frame ourselves on the same open tab. A
+            # no-reasoning model told to repeat an expensive sweep reliably
+            # improvises around the instruction instead; the sweep has to hand
+            # back the frame content itself.
+            retried = await _read_one_page(
+                browser_session,
+                url,
+                target_id,
+                hosts[0],
+                claimed,
+                baseline,
+                allow_sole_candidate=True,
+                sibling_urls=sibling_urls,
+                _frame_retry=True,
+            )
+            if not retried.get("error") and (retried.get("text") or "").strip():
+                return retried
         if hosts:
             page["error"] = (
                 f"page embeds its content in a panel from {hosts[0]}; the main "
