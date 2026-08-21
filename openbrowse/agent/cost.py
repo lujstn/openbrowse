@@ -132,27 +132,6 @@ def usage_cost(model_id: str, usage: Any) -> float:
     return cost * multiplier
 
 
-def worst_case_call_cost(
-    model_id: str, est_input_tokens: int, max_output_tokens: int
-) -> float | None:
-    """Upper bound in USD for one upcoming call, or None when the model has no
-    price table (callers must then fall back to after-the-fact checking).
-    Input is charged at the dearest applicable rate — cache writes cost more
-    than plain input — so the bound holds whatever the cache does."""
-    pricing = _lookup(model_id)
-    if pricing is None:
-        return None
-    price = pricing.standard
-    if (
-        pricing.long is not None
-        and pricing.long_threshold is not None
-        and est_input_tokens > pricing.long_threshold
-    ):
-        price = pricing.long
-    in_rate = max(price.input, price.cache_write_5m, price.cache_write_1h)
-    return est_input_tokens * in_rate + max_output_tokens * price.output
-
-
 def history_cost(usage_history: Any) -> float:
     """Total USD cost across a token_cost_service.usage_history list."""
     total = 0.0
