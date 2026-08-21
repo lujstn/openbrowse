@@ -71,6 +71,7 @@ _SANDBOX_ERROR_CHARS = 2000
 _UNREAD_LINKS_KEY = "_unread_links"
 _READ_PAGES_KEY = "_read_pages_all"
 _DRAFTS_KEY = "_read_pages_drafts"
+_REFUSED_KEY = "_refused_items"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -801,6 +802,7 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
         "_unread_links",
         "_read_pages_all",
         "_read_pages_drafts",
+        "_refused_items",
         "_read_items",
         "_read_failed",
         "_read_failed_frame",
@@ -3466,6 +3468,23 @@ _MAX_UNVISITED_STUBS = 2
 _STUB_CONTENT_CHARS = 120
 
 
+def _item_detail_field(store: OutputStore) -> str | None:
+    """The item field a detail page could actually fill — the shortest
+    description-like field, or None when the schema has no such field.
+
+    Used to tell a list crawl apart from a list of links. Rows of
+    ``{platform, url}`` have nowhere to drill into: the URL IS the datum, and there is
+    no page whose contents would make the row more complete.
+    """
+    model = store.item_model
+    if model is None:
+        return None
+    candidates = sorted(
+        (f for f in model.model_fields if "description" in f.lower()), key=len
+    )
+    return candidates[0] if candidates else None
+
+
 def _item_has_substantial_content(item: dict) -> bool:
     """True if the item carries a real page-read field (a description far exceeds a
     list row's short title/location), so it is drilled-in data, not a bare list row.
@@ -3655,10 +3674,7 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
     ld = page.get("jsonld") if isinstance(page.get("jsonld"), dict) else {}
     used: set[str] = set()
 
-    desc_candidates = sorted(
-        (f for f in fields if "description" in f.lower()), key=len
-    )
-    desc_field = desc_candidates[0] if desc_candidates else None
+    desc_field = _item_detail_field(store)
     desc = ld.get("description")
     if isinstance(desc, str) and desc.strip():
         used.add("description")
@@ -3827,12 +3843,40 @@ def _load_saved_json(file_system: FileSystem, name: str) -> tuple[Any | None, st
     return None, fn
 
 
+def _item_identity(store: OutputStore, item: dict[str, Any]) -> str:
+    """A stable handle for one proposed item: its own URL when it has one, else a
+    hash of its values."""
+    url_field = _item_url_field(store)
+    val = item.get(url_field) if url_field else None
+    return _norm_url(str(val)) if val else guard_key(json.dumps(item, sort_keys=True, default=str))
+
+
+def _note_refused(clipboard: dict[str, Any] | None, key: str, label: str) -> None:
+    if clipboard is not None:
+        clipboard.setdefault(_REFUSED_KEY, {})[key] = label
+
+
+def _clear_refused(clipboard: dict[str, Any] | None, key: str) -> None:
+    if clipboard is not None:
+        (clipboard.get(_REFUSED_KEY) or {}).pop(key, None)
+
+
 def _stub_block_msg(
     store: OutputStore, clipboard: dict[str, Any] | None, item: dict[str, Any]
 ) -> str | None:
     """The refusal message when adding ``item`` would exceed the allowance of
     list-row stubs whose own pages have not been opened, else None.
+
+    Records what it refused. The agent proposing an item is the only evidence we have
+    that the item is a real record — page links are not, which is why the gate never
+    invents candidates from them.
     """
+    # @nonobvious(forced-by): a schema whose items have no detail field cannot have
+    # bare stubs. Social profiles are {platform, url} — the URL is the datum, nothing
+    # lives on the far end to drill into, and throttling them silently drops real rows
+    # while the agent reports partial success it cannot explain.
+    if _item_detail_field(store) is None:
+        return None
     visited: set = (
         clipboard.setdefault("_visited", set()) if clipboard is not None else set()
     )
@@ -3840,6 +3884,11 @@ def _stub_block_msg(
         return None
     if _bare_stub_count(store, visited) < _MAX_UNVISITED_STUBS:
         return None
+    _note_refused(
+        clipboard,
+        _item_identity(store, item),
+        str(item.get(_item_url_field(store) or "") or json.dumps(item, default=str)[:80]),
+    )
     return (
         f"Slow down — you already have {_MAX_UNVISITED_STUBS} list-row stubs with no "
         "detail. Read the items' own pages before adding more: read_pages() covers "
@@ -3991,6 +4040,7 @@ def _store_bridge(
         block = _stub_block_msg(store, clipboard, item)
         if block:
             return _AwaitableStr(block)
+        _clear_refused(clipboard, _item_identity(store, item))
         ok, msg = store.add_item(item)
         if ok:
             _mirror()
@@ -4076,6 +4126,7 @@ def register_output_store_tools(
         block = _stub_block_msg(store, clipboard, item)
         if block:
             return ActionResult(error=block)
+        _clear_refused(clipboard, _item_identity(store, item))
         ok, msg = store.add_item(item)
         if not ok:
             return ActionResult(error=msg)
@@ -4249,6 +4300,7 @@ def register_output_store_tools(
             if _stub_block_msg(store, clipboard, it):
                 blocked += 1
                 continue
+            _clear_refused(clipboard, _item_identity(store, it))
             ok, msg = store.add_item(it)
             if ok:
                 idx = store.item_count() - 1
@@ -4296,6 +4348,28 @@ def register_output_store_tools(
         await _mirror_output(store, file_system)
         note = f"{msg} {store.coverage_summary()}"
         return ActionResult(extracted_content=note, long_term_memory=note)
+
+
+def _gate_refused_items(clipboard: dict[str, Any] | None) -> str | None:
+    """The bounce when the agent proposed items we refused and never got back to.
+
+    Deliberately NOT "you found N links but stored M". Page links are not evidence of
+    records, and nagging about them pushes rubbish into the output. An item the agent
+    itself tried to add is evidence, and this is the whole list of those we blocked.
+    """
+    if clipboard is None:
+        return None
+    outstanding = clipboard.get(_REFUSED_KEY) or {}
+    if not outstanding:
+        return None
+    labels = list(outstanding.values())
+    shown = "\n- ".join(labels[:8])
+    more = f"\n- …and {len(labels) - 8} more" if len(labels) > 8 else ""
+    return (
+        f"{len(labels)} item(s) you tried to add were refused and are still missing. "
+        f"Add them if they are real records, or say why not in your done text:"
+        f"\n- {shown}{more}"
+    )
 
 
 def _gate_empty_fields(
@@ -4411,7 +4485,7 @@ def register_completeness_gate(
     async def done(params: Any, file_system: FileSystem) -> ActionResult:
         if not state["bounced"]:
             empties = _gate_empty_fields(store, clipboard)
-            deficit = _gate_link_deficit(store, clipboard)
+            deficit = _gate_link_deficit(store, clipboard) or _gate_refused_items(clipboard)
             if empties or deficit:
                 state["bounced"] = True
                 if on_incomplete is not None:

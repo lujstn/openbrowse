@@ -4493,3 +4493,129 @@ async def test_narrative_retries_do_not_consume_the_action_repair_budget() -> No
     result = await _invoke_with_action_repair(flaky, [], object())
     assert result is good, "two blank replies must leave the repair budget intact"
     assert calls["n"] == 5
+
+
+# --- the wise.com partial-success failure -----------------------------------
+
+
+def _social_store():
+    """The shape that broke: rows where the URL IS the datum and there is no detail
+    page to open."""
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "socialLinks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "platform": {"type": "string"},
+                        "url": {"type": "string"},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "S"))
+
+
+async def test_social_links_are_not_throttled_as_list_row_stubs() -> None:
+    """wise.com returned 2 of 5 social links: every {platform, url} row looked like a
+    list-row stub, so the third onwards was refused and the run self-reported failure."""
+    from openbrowse.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _social_store()
+    clipboard: dict = {}
+    register_output_store_tools(tools, store, clipboard)
+    add = tools.registry.registry.actions["add_item"]
+
+    socials = [
+        ("facebook", "https://www.facebook.com/wise"),
+        ("x", "https://x.com/wise"),
+        ("linkedin", "https://www.linkedin.com/company/wise"),
+        ("instagram", "https://www.instagram.com/wise"),
+        ("youtube", "https://www.youtube.com/wise"),
+    ]
+    for platform, url in socials:
+        result = await add.function(
+            item={"platform": platform, "url": url}, file_system=_FakeFileSystem()
+        )
+        assert not result.error, f"{platform} was refused: {result.error}"
+
+    assert len(store.data["socialLinks"]) == 5
+
+
+async def test_a_real_list_crawl_is_still_throttled() -> None:
+    """The limiter must keep working where drilling in genuinely adds something."""
+    from openbrowse.agent.tools import register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    register_output_store_tools(tools, store, {})
+    add = tools.registry.registry.actions["add_item"]
+
+    errors = []
+    for i in range(4):
+        result = await add.function(
+            item={"title": f"Job {i}", "sourceUrl": f"https://jobs.example.com/{i}"},
+            file_system=_FakeFileSystem(),
+        )
+        errors.append(bool(result.error))
+    assert errors == [False, False, True, True], "stubs past the allowance still blocked"
+
+
+def test_item_detail_field_tells_the_two_schemas_apart() -> None:
+    from openbrowse.agent.tools import _item_detail_field
+
+    assert _item_detail_field(_items_store()) == "description"
+    assert _item_detail_field(_social_store()) is None
+
+
+async def test_the_gate_names_items_it_refused_and_forgets_ones_that_landed() -> None:
+    """Only items the agent itself proposed are surfaced — page links are not evidence
+    of records, and nagging about them pushes rubbish into the output."""
+    from openbrowse.agent.tools import _gate_refused_items, register_output_store_tools
+
+    tools = Tools()
+    store = _items_store()
+    clipboard: dict = {}
+    register_output_store_tools(tools, store, clipboard)
+    add = tools.registry.registry.actions["add_item"]
+
+    for i in range(4):
+        await add.function(
+            item={"title": f"Job {i}", "sourceUrl": f"https://jobs.example.com/{i}"},
+            file_system=_FakeFileSystem(),
+        )
+
+    bounce = _gate_refused_items(clipboard)
+    assert bounce is not None
+    assert bounce.startswith("2 item(s) you tried to add were refused")
+    assert bounce.rstrip().endswith("jobs.example.com/3")
+    assert "jobs.example.com/2" in bounce
+
+    # the agent goes back and adds one properly, with the detail it was told to fetch
+    clipboard.setdefault("_visited", set()).add(
+        __import__("openbrowse.agent.tools", fromlist=["_norm_url"])._norm_url(
+            "https://jobs.example.com/2"
+        )
+    )
+    await add.function(
+        item={"title": "Job 2", "sourceUrl": "https://jobs.example.com/2"},
+        file_system=_FakeFileSystem(),
+    )
+    remaining = _gate_refused_items(clipboard)
+    assert "jobs.example.com/2" not in (remaining or "")
+
+
+def test_the_gate_never_invents_candidates_from_page_links() -> None:
+    """The compromise: no refusals recorded means no bounce, however many links the
+    page happened to have."""
+    from openbrowse.agent.tools import _gate_refused_items
+
+    assert _gate_refused_items({}) is None
+    assert _gate_refused_items({"found_links": [f"https://x.com/{i}" for i in range(30)]}) is None
