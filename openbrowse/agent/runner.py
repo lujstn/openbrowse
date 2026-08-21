@@ -112,6 +112,15 @@ _TOOLS_EASIEST_EXTENSION = (
     "read inside an embed with browser.frame_text(url_part)."
 )
 
+_FULL_TOOLBOX_EXTENSION = (
+    "The guidance above highlights the most effective tools, not all of them: your "
+    "definitive toolbox is your action schema, and every action named there — "
+    "screenshot, save_as_pdf, upload_file, dropdown_options and the rest — exists "
+    "and works in this session. When the task names an action from the schema, "
+    "call that action; never report a tool as unavailable while the schema "
+    "lists it."
+)
+
 _CODE_REUSE_EXTENSION = (
     "Any code you write is a reusable script: parameterise it so it works on every "
     "similar/templated page and run it with run_code_file(name, code=…) — it saves "
@@ -2576,6 +2585,7 @@ async def run_agent_session(session_id: str) -> None:
             _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
+            _FULL_TOOLBOX_EXTENSION,
             _OVERLAY_EXTENSION,
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,

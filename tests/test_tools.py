@@ -2420,15 +2420,13 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
     from openbrowse.agent.tools import _SandboxBrowser
 
     async def fake_eval(session, js):
+        if js == tools_mod._IFRAME_HOSTS_JS:
+            return ["board.example.com"]
         if "outerHTML" in js:
             return "<div>shell</div>"
         return "thin shell text"
 
-    async def dom_hosts(session):
-        return ["board.example.com"]
-
     monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
-    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
 
     sb = _SandboxBrowser(None)
     body = await sb.evaluate("document.body.innerText")

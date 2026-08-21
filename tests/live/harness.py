@@ -227,7 +227,7 @@ class LiveClient:
         artifact_dir: Path,
         output_schema: dict[str, Any] | None = None,
         max_cost_usd: float = 0.10,
-        timeout_s: float = 240.0,
+        timeout_s: float = 360.0,
     ) -> RunTrace:
         payload: dict[str, Any] = {
             "task": task,

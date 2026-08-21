@@ -1219,10 +1219,24 @@ class _SandboxBrowser:
     """
 
     def __init__(
-        self, session: BrowserSession, clipboard: dict[str, Any] | None = None
+        self,
+        session: BrowserSession,
+        clipboard: dict[str, Any] | None = None,
+        home_target: str | None = None,
     ) -> None:
         self._session = session
         self._clipboard = clipboard
+        self._home_target = home_target
+
+    async def _eval(self, js: str) -> Any:
+        # @nonobvious(must-hold): while a script runs, run_code_file keeps the
+        # code-view tab focused so the user can watch it run. Following the
+        # current focus here would make every read return the code tab — the
+        # script's own source — so page reads stay pinned to the tab the agent
+        # was actually on.
+        if self._home_target:
+            return await _eval_on_target(self._session, self._home_target, js)
+        return await _eval_js(self._session, js)
 
     def _mark_visited(self, url: str) -> None:
         if self._clipboard is None or not url:
@@ -1230,7 +1244,11 @@ class _SandboxBrowser:
         self._clipboard.setdefault("_visited", set()).add(_norm_url(url))
 
     async def _main_frame_caveat(self) -> str:
-        hosts = await _dom_iframe_hosts(self._session)
+        try:
+            val = await self._eval(_IFRAME_HOSTS_JS)
+        except Exception:
+            val = []
+        hosts = [h for h in val if isinstance(h, str)] if isinstance(val, list) else []
         if not hosts:
             return ""
         return (
@@ -1240,7 +1258,7 @@ class _SandboxBrowser:
         )
 
     async def evaluate(self, js: str) -> Any:
-        result = await _eval_js(self._session, js)
+        result = await self._eval(js)
         # @nonobvious(deliberately-missing): only whole-page body reads get the
         # embed caveat appended — annotating scoped reads (an h1's textContent,
         # an id) would corrupt short values the script stores verbatim.
@@ -1263,7 +1281,7 @@ class _SandboxBrowser:
             )
         else:
             js = "document.documentElement.outerHTML"
-        html = await _eval_js(self._session, js) or ""
+        html = await self._eval(js) or ""
         if len(html.strip()) < _MIN_PAGE_TEXT_CHARS:
             caveat = await self._main_frame_caveat()
             if caveat:
@@ -1394,7 +1412,7 @@ class _SandboxBrowser:
         does — silently proceeding would read the shell as if it were the panel.
         Otherwise settle briefly.
         """
-        await _eval_js(self._session, "window.location.assign(" + json.dumps(url) + ")")
+        await self._eval("window.location.assign(" + json.dumps(url) + ")")
         self._mark_visited(url)
         if wait_for:
             if not await self.wait_for_frame(wait_for, timeout_s=max(settle_s, 12.0)):
@@ -1785,9 +1803,15 @@ def register_code_tools(
                 return _builtin_open(candidate, mode, *args, **kwargs)
             return _builtin_open(file, mode, *args, **kwargs)
 
+        observer = (clipboard or {}).get("_code_stream")
+        home_target = getattr(browser_session, "agent_focus_target_id", None)
+        if home_target and home_target in getattr(observer, "_own_tabs", set()):
+            # Focus was left on a code tab; the observer's remembered page focus
+            # is the real page the script means to read.
+            home_target = getattr(observer, "_prev_focus", None)
         namespace.update(
             {
-                "browser": _SandboxBrowser(browser_session, clipboard),
+                "browser": _SandboxBrowser(browser_session, clipboard, home_target),
                 "fetch": _fetch,
                 "save_json": _save_json,
                 "save_checkpoint_json": _save_json,
@@ -1804,8 +1828,6 @@ def register_code_tools(
         if store is not None:
             namespace.update(_store_bridge(store, clipboard, file_system))
 
-        home_target = getattr(browser_session, "agent_focus_target_id", None)
-        observer = (clipboard or {}).get("_code_stream")
         code_tab: str | None = (clipboard or {}).pop("_code_stream_tab", None)
         if code_tab is not None and browser_session is not None:
             await _focus_target(browser_session, code_tab)

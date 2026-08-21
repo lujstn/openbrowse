@@ -218,7 +218,9 @@ def run_scenario(client, ledger, artifact_root, model_effort, request):
     model, effort = model_effort
 
     def _run(name: str, task: str, **kwargs):
-        timeout_s = kwargs.pop("timeout_s", 240.0)
+        # One CDP screenshot flake costs the run over a minute in watchdog
+        # retries; the ceiling must survive one of those without masking a hang.
+        timeout_s = kwargs.pop("timeout_s", 360.0)
         if model.startswith("claude"):
             timeout_s *= 2
         trace = client.run_scenario(
