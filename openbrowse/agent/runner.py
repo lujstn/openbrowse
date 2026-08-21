@@ -112,14 +112,19 @@ _TOOLS_EASIEST_EXTENSION = (
     "read inside an embed with browser.frame_text(url_part)."
 )
 
-_FULL_TOOLBOX_EXTENSION = (
-    "The guidance above highlights the most effective tools, not all of them: your "
-    "definitive toolbox is your action schema, and every action named there — "
-    "screenshot, save_as_pdf, upload_file, dropdown_options and the rest — exists "
-    "and works in this session. When the task names an action from the schema, "
-    "call that action; never report a tool as unavailable while the schema "
-    "lists it."
-)
+def _full_toolbox_extension(tools: Tools) -> str:
+    """The definitive action inventory, stated outright. The only other place the
+    full toolset appears is the JSON schema at the tail of a very long prompt, and
+    a no-reasoning model reads a curated tools section as exhaustive — it will
+    refuse a task naming a real action it believes does not exist."""
+    names = ", ".join(sorted(tools.registry.registry.actions))
+    return (
+        "Your complete action list for this session is: "
+        f"{names}. Every action on this list exists and works here, whether or "
+        "not it is described above. When the task names one of these actions, "
+        "call that action; never report a tool as unavailable when it is on "
+        "this list."
+    )
 
 _CODE_REUSE_EXTENSION = (
     "Any code you write is a reusable script: parameterise it so it works on every "
@@ -2585,7 +2590,7 @@ async def run_agent_session(session_id: str) -> None:
             _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
-            _FULL_TOOLBOX_EXTENSION,
+            _full_toolbox_extension(tools),
             _OVERLAY_EXTENSION,
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,

@@ -82,3 +82,15 @@ def test_store_only_actions_use_registered_builtin_names() -> None:
     assert "replace_file_str" not in _STORE_ONLY_ACTIONS
     for name in _STORE_ONLY_ACTIONS & {"read_file", "write_file", "replace_file"}:
         assert name in builtin
+
+
+def test_full_toolbox_extension_names_every_registered_action() -> None:
+    from browser_use import Tools
+
+    from openbrowse.agent.runner import _full_toolbox_extension
+
+    tools = Tools()
+    line = _full_toolbox_extension(tools)
+    for name in tools.registry.registry.actions:
+        assert name in line
+    assert "never report a tool as unavailable" in line
