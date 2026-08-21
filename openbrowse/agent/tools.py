@@ -543,9 +543,29 @@ async def _read_one_page(
     fallback_ok = False
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
     panel_in_dom: bool | None = None
+    prev_thin_text: str | None = None
 
     def _substantial(txt: Any) -> bool:
         return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
+
+    async def _settled_thin(txt: Any) -> bool:
+        # @nonobvious(must-hold): some real pages are legitimately smaller than
+        # the substantial threshold (sparse profiles, terse listings). Once the
+        # document is complete, its text is stable across two polls and it
+        # embeds nothing, the page has shown everything it has — waiting the
+        # whole deadline on it just slows every wave it is in.
+        nonlocal prev_thin_text
+        current = str(txt or "").strip()
+        if not current:
+            return False
+        if current != prev_thin_text:
+            prev_thin_text = current
+            return False
+        try:
+            hosts = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
+        except Exception:
+            return False
+        return not hosts
 
     while loop.time() < deadline:
         try:
@@ -605,6 +625,8 @@ async def _read_one_page(
                 if ready in ("interactive", "complete"):
                     txt = await _eval_on_target(browser_session, target_id, _BODY_TEXT_JS)
                     if _substantial(txt):
+                        break
+                    if ready == "complete" and await _settled_thin(txt):
                         break
         except Exception:
             logger.debug("_read_one_page: poll failed", exc_info=True)
