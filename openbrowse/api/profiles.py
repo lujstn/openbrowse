@@ -74,6 +74,7 @@ async def create_profile(
     body: ProfileCreateRequest | None = None,
     _: str = Depends(require_api_key),
 ):
+    """Create an empty profile, with no cookies and no per-origin storage yet. Fill it by importing a cookie jar, or by letting a session log in while using it."""
     body = body or ProfileCreateRequest()
     profile = await crud.create_profile(name=body.name, user_id=body.userId)
     storage.write_profile_state(profile["id"], {"cookies": [], "origins": []}, backup=False)
@@ -87,6 +88,7 @@ async def list_profiles(
     query: str | None = None,
     _: str = Depends(require_api_key),
 ):
+    """List profiles, paginated, with an optional query to narrow the results."""
     profiles, total = await crud.list_profiles(page=page, page_size=page_size, query=query)
     return ProfileListResponse(
         items=[_to_view(p) for p in profiles],
@@ -98,6 +100,7 @@ async def list_profiles(
 
 @router.get("/{profile_id}", response_model=ProfileView)
 async def get_profile(profile_id: str, _: str = Depends(require_api_key)):
+    """Fetch a single profile by id. Returns 404 if no profile has that id."""
     profile = await crud.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -111,6 +114,7 @@ async def update_profile(
     body: ProfileUpdateRequest,
     _: str = Depends(require_api_key),
 ):
+    """Update a profile's editable fields. PUT and PATCH behave identically here: both apply only the fields present in the request body."""
     existing = await crud.get_profile(profile_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -125,6 +129,7 @@ async def update_profile(
 
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(profile_id: str, _: str = Depends(require_api_key)):
+    """Delete a profile and the browser state stored against it. The cookies and per-origin storage go with it."""
     existing = await crud.get_profile(profile_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
