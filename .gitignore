@@ -35,3 +35,6 @@ uv.lock
 
 # Internal planning notes, never tracked
 docs/
+
+# Live test-suite run artefacts (session exports saved per scenario)
+tests/live/artifacts/

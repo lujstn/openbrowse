@@ -42,6 +42,7 @@ from openbrowse.agent.leak_repair import (
 )
 from openbrowse.agent.output_store import OutputStore
 from openbrowse.agent.schema import json_schema_to_pydantic
+from openbrowse.agent.textguard import guard_key
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
     note_read_action,
@@ -497,7 +498,7 @@ _STORE_ONLY_ACTIONS = {
     "recall",
     "read_file",
     "write_file",
-    "replace_file_str",
+    "replace_file",
     "run_code_file",
     "read_pages",
     "http_fetch",
@@ -1581,6 +1582,41 @@ def _primary_action_name(actions: list) -> str | None:
     return next(iter(dumped), None) if dumped else None
 
 
+def _executed_actions(
+    model_output: Any, results: list | None
+) -> tuple[list[str], list[str], list[str], str | None]:
+    """(requested names, executed names, executed argument fingerprints, first
+    erroring action).
+
+    @nonobvious(must-hold): a step's requested action chain is cut short on error,
+    on a sequence-terminating action, or on a page change, and only actions that
+    ran get a result. Anything past the executed slice was requested but never
+    performed and must not be recorded as having happened — assertions about which
+    tools a run really used depend on that.
+    """
+    names: list[str] = []
+    args: list[str] = []
+    actions = getattr(model_output, "action", None) or []
+    for act in actions:
+        try:
+            dumped = act.model_dump(exclude_none=True)
+        except Exception:
+            continue
+        names.extend(dumped.keys())
+        args.extend(
+            guard_key(json.dumps(params, sort_keys=True, default=str))
+            for params in dumped.values()
+        )
+    executed_n = len(results or [])
+    error_action: str | None = None
+    for i, result in enumerate(results or []):
+        if getattr(result, "error", None):
+            if i < len(names):
+                error_action = names[i]
+            break
+    return names, names[:executed_n], args[:executed_n], error_action
+
+
 def _category_for(action_name: str | None) -> str:
     n = (action_name or "").lower()
     if any(k in n for k in ("add_item", "update_item", "set_field", "read_output", "search_output", "mark_absent")):
@@ -2397,7 +2433,6 @@ async def run_agent_session(session_id: str) -> None:
 
             action_name = None
             category = None
-            all_action_names: list[str] = []
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
@@ -2406,12 +2441,9 @@ async def run_agent_session(session_id: str) -> None:
                         note_read_action(clipboard, _primary_action_name([act]))
                     except Exception:
                         logger.debug("read-action count failed", exc_info=True)
-                for act in step.model_output.action:
-                    try:
-                        dumped = act.model_dump(exclude_none=True)
-                    except Exception:
-                        continue
-                    all_action_names.extend(dumped.keys())
+            all_action_names, executed_actions, executed_args, error_action = (
+                _executed_actions(step.model_output, step.result)
+            )
             lean_flag["eligible"] = bool(all_action_names) and all(
                 n in _STORE_ONLY_ACTIONS for n in all_action_names
             )
@@ -2429,6 +2461,11 @@ async def run_agent_session(session_id: str) -> None:
                 "action": action_name,
                 "code": is_code,
             }
+            if all_action_names:
+                row_data["actions"] = executed_actions
+                row_data["args"] = executed_args
+            if error_action:
+                row_data["error_action"] = error_action
             if full_error and len(full_error) > len(summary):
                 row_data["error_full"] = full_error[:6000]
             if action_name == "done" and review_state["round"]:
