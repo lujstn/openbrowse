@@ -446,3 +446,91 @@ def test_read_output_compact_elides_long_values() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+SCALAR_SCHEMA = {
+    "type": "object",
+    "required": ["headlines"],
+    "properties": {
+        "headlines": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+def _scalar_store() -> OutputStore:
+    return OutputStore(json_schema_to_pydantic(SCALAR_SCHEMA, "TaskOutput"))
+
+
+def test_scalar_array_accepts_plain_values() -> None:
+    store = _scalar_store()
+    ok, msg = store.add_item("First headline")
+    assert ok, msg
+    ok, msg = store.add_item("Second headline")
+    assert ok, msg
+    data = json.loads(store.read_output())
+    assert data["headlines"] == ["First headline", "Second headline"]
+    store.output_model.model_validate(data)
+
+
+def test_scalar_array_unwraps_single_key_object() -> None:
+    """A model given no object schema tends to invent a wrapper key; the value it
+    clearly meant must land as the plain item the schema demands."""
+    store = _scalar_store()
+    ok, msg = store.add_item({"headline": "Wrapped headline"})
+    assert ok, msg
+    data = json.loads(store.read_output())
+    assert data["headlines"] == ["Wrapped headline"]
+    store.output_model.model_validate(data)
+
+
+def test_scalar_array_rejects_multi_key_object_and_wrong_type() -> None:
+    store = _scalar_store()
+    ok, msg = store.add_item({"a": 1, "b": 2})
+    assert not ok and "plain values" in msg
+    ok, msg = store.add_item({"headline": 42})
+    assert not ok and "must be" in msg
+
+
+def _permissive_store() -> OutputStore:
+    # No additionalProperties clause — the shape that let a live budget-salvage
+    # ship url/text scaffolding alongside the schema fields.
+    schema = {
+        "type": "object",
+        "required": ["staff"],
+        "properties": {
+            "staff": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "role"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "role": {"type": "string"},
+                    },
+                },
+            }
+        },
+    }
+    return OutputStore(json_schema_to_pydantic(schema, "StaffOutput"))
+
+
+def test_final_output_strips_extra_item_fields() -> None:
+    # Extra keys stay in the live store (the completeness gate hints off
+    # them), but the published answer must honour the schema's shape exactly.
+    s = _permissive_store()
+    ok, _ = s.add_item(
+        {"name": "A", "role": "Glazier", "url": "http://x/1", "text": "raw page"}
+    )
+    assert ok
+    live = json.loads(s.read_output())
+    published = json.loads(s.final_output())
+    assert "url" in live["staff"][0] and "text" in live["staff"][0]
+    assert set(published["staff"][0]) == {"name", "role"}
+    assert published["staff"][0]["name"] == "A"
+
+
+def test_final_output_matches_read_output_when_items_are_clean() -> None:
+    s = _store()
+    ok, _ = s.add_item({"title": "A", "url": "http://x/1"})
+    assert ok
+    assert json.loads(s.final_output()) == json.loads(s.read_output())

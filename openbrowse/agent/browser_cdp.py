@@ -45,6 +45,70 @@ async def _eval_on_target(
     return result.get("result", {}).get("value")
 
 
+async def _same_process_frame(
+    browser_session: BrowserSession, target_id: str, url_contains: str
+) -> tuple[str, int] | None:
+    """Locate a same-process iframe by URL substring and open an isolated world in
+    it. Returns (frame_url, execution_context_id), or None when no such frame is
+    in the tab's frame tree.
+
+    @nonobvious(forced-by): Chromium only gives an iframe its own CDP target when
+    it is cross-SITE (scheme plus registrable domain; ports and subdomains do not
+    count). A cross-origin but same-site embed — careers.acme.com inside
+    www.acme.com — stays in the parent's process, is invisible to
+    Target.getTargets, and its content is still walled off from main-frame JS by
+    the same-origin policy. An isolated world in the frame is the only read path.
+    """
+    needle = (url_contains or "").lower()
+    if not needle:
+        return None
+    sess = await browser_session.get_or_create_cdp_session(target_id, focus=False)
+    tree = await sess.cdp_client.send.Page.getFrameTree(session_id=sess.session_id)
+
+    def _walk(node: dict) -> list[dict]:
+        found = [node.get("frame") or {}]
+        for child in node.get("childFrames") or []:
+            found.extend(_walk(child))
+        return found
+
+    frames = _walk(tree.get("frameTree") or {})
+    for frame in frames[1:]:  # frames[0] is the main frame, never a panel
+        frame_url = frame.get("url") or ""
+        if frame.get("id") and needle in frame_url.lower():
+            try:
+                world = await sess.cdp_client.send.Page.createIsolatedWorld(
+                    params={"frameId": frame["id"]}, session_id=sess.session_id
+                )
+            except Exception:
+                # An OOPIF's frameId is not creatable from the parent target;
+                # those frames are read via their own target instead.
+                logger.debug("createIsolatedWorld failed", exc_info=True)
+                continue
+            context_id = world.get("executionContextId")
+            if context_id is not None:
+                return frame_url, context_id
+    return None
+
+
+async def _eval_in_frame_world(
+    browser_session: BrowserSession, target_id: str, context_id: int, expression: str
+) -> Any:
+    """Runtime.evaluate inside an isolated world created by _same_process_frame."""
+    sess = await browser_session.get_or_create_cdp_session(target_id, focus=False)
+    result = await sess.cdp_client.send.Runtime.evaluate(
+        params={
+            "expression": expression,
+            "returnByValue": True,
+            "awaitPromise": True,
+            "contextId": context_id,
+        },
+        session_id=sess.session_id,
+    )
+    if result.get("exceptionDetails"):
+        raise RuntimeError(f"JS error: {result['exceptionDetails']}")
+    return result.get("result", {}).get("value")
+
+
 async def _iframe_targets(browser_session: BrowserSession) -> list[dict[str, str]]:
     cdp = await browser_session.get_or_create_cdp_session()
     targets = await cdp.cdp_client.send.Target.getTargets()

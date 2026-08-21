@@ -36,12 +36,14 @@ from openbrowse.agent.activity import (
     try_claim_profile,
 )
 from openbrowse.agent.leak_repair import (
+    coerce_action_param_shapes,
     is_missing_action_error,
     mistyped_action_params,
     repair_anthropic_message,
 )
 from openbrowse.agent.output_store import OutputStore
 from openbrowse.agent.schema import json_schema_to_pydantic
+from openbrowse.agent.textguard import guard_key
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
     note_read_action,
@@ -58,6 +60,7 @@ from openbrowse.agent.tools import (
     register_output_store_tools,
     register_search_page_flow,
     register_tab_tools,
+    register_upload_path_resolution,
 )
 from openbrowse.browser.factory import display_manager, launch_chrome, stop_chrome
 from openbrowse.config import settings
@@ -110,6 +113,20 @@ _TOOLS_EASIEST_EXTENSION = (
     "a page; find_elements and evaluate see only the MAIN page, while a script can "
     "read inside an embed with browser.frame_text(url_part)."
 )
+
+def _full_toolbox_extension(tools: Tools) -> str:
+    """The definitive action inventory, stated outright. The only other place the
+    full toolset appears is the JSON schema at the tail of a very long prompt, and
+    a no-reasoning model reads a curated tools section as exhaustive — it will
+    refuse a task naming a real action it believes does not exist."""
+    names = ", ".join(sorted(tools.registry.registry.actions))
+    return (
+        "Your complete action list for this session is: "
+        f"{names}. Every action on this list exists and works here, whether or "
+        "not it is described above. When the task names one of these actions, "
+        "call that action; never report a tool as unavailable when it is on "
+        "this list."
+    )
 
 _CODE_REUSE_EXTENSION = (
     "Any code you write is a reusable script: parameterise it so it works on every "
@@ -304,6 +321,31 @@ class BudgetExceededError(Exception):
     """Raised when a session exceeds its max_cost_usd budget."""
 
 
+def _budget_stop_reason(
+    budget: Any, total_cost: float, turn_spent: float, steps: int
+) -> str | None:
+    """Step-boundary budget rule, measured rather than predicted: stop when
+    spend has reached the cap, or when the remainder cannot cover one more
+    step at this turn's average step cost. With plenty of headroom the average
+    test passes trivially, so one rule serves both regimes."""
+    if not budget:
+        return None
+    budget = float(budget)
+    if total_cost >= budget:
+        return f"Cost ${total_cost:.4f} exceeded budget ${budget:.2f}"
+    if steps and turn_spent > 0:
+        average = turn_spent / steps
+        remaining = budget - total_cost
+        # A remainder equal to the average proceeds; the epsilon keeps float
+        # noise in dollar sums from flipping the exactly-equal case to a stop.
+        if remaining + 1e-9 < average:
+            return (
+                f"Cost ${total_cost:.4f} of the ${budget:.2f} budget: the "
+                f"remaining ${remaining:.4f} cannot cover another step at "
+                f"this run's average of ${average:.4f}/step"
+            )
+    return None
+
 
 def _timeout_text(error: BaseException) -> bool:
     message = str(error).lower()
@@ -497,7 +539,7 @@ _STORE_ONLY_ACTIONS = {
     "recall",
     "read_file",
     "write_file",
-    "replace_file_str",
+    "replace_file",
     "run_code_file",
     "read_pages",
     "http_fetch",
@@ -744,6 +786,17 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             if start < 0:
                 raise
             obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            # @nonobvious(mirrors): the Anthropic client repairs argument shapes
+            # before validation; without the same pass here, one slightly
+            # mis-shaped argument hard-fails the reply, the correction reads as
+            # a rejection of the action itself, and the model durably concludes
+            # the tool does not exist.
+            param_kinds = getattr(self, "_action_param_kinds", None)
+            if isinstance(obj, dict) and param_kinds:
+                try:
+                    coerce_action_param_shapes(obj, param_kinds)
+                except Exception:
+                    logger.debug("action param coercion failed", exc_info=True)
             return output_format.model_validate(obj)
 
     @staticmethod
@@ -846,11 +899,73 @@ _MISSING_ACTION_FINAL = (
 def _mistyped_correction(detail: str) -> str:
     return (
         "Your reply was rejected because these action ARGUMENTS had the wrong "
-        f"type: {detail}. The action itself was present — resend the same reply "
-        "with each argument as its real JSON type: a list must be a JSON array "
-        "(not that array quoted as a string), an object a JSON object, a number "
-        "a bare number."
+        f"type: {detail}. The action itself exists and is valid — never conclude "
+        "from this message that a tool is unavailable, and do not drop the "
+        "action. Resend the same reply with each argument as its real JSON "
+        "type: a list must be a JSON array (not that array quoted as a "
+        "string), an object a JSON object, a number a bare number."
     )
+
+
+_EXTRA_INPUT_RE = re.compile(r"\.(\w+): Extra inputs are not permitted")
+
+
+def _actions_absent_from_schema(detail: str) -> list[str]:
+    """Action names the reply used that no schema variant accepts. When an
+    action exists but its arguments are mis-shaped, its own variant reports a
+    field-level error (a deeper ``.name.`` path) alongside the other variants'
+    "extra inputs" complaints; when the name is absent from the schema, every
+    variant flags it as extra and none goes deeper — telling the model to fix
+    its argument types would then be false and teaches it nothing."""
+    absent = []
+    for name in sorted(set(_EXTRA_INPUT_RE.findall(detail))):
+        if f".{name}." in detail:
+            continue
+        if f"{name.title().replace('_', '')}ActionModel" in detail:
+            continue
+        absent.append(name)
+    return absent
+
+
+def _unknown_action_correction(names: list[str]) -> str:
+    listed = ", ".join(repr(n) for n in names)
+    return (
+        f"Your reply was rejected because it used an action that is not in this "
+        f"session's action schema: {listed}. That action cannot run here no "
+        "matter how its arguments are shaped — do not retry it and do not "
+        "invent a replacement name. Your system prompt lists every available "
+        "action; resend your reply using the closest action from that list."
+    )
+
+
+def _restore_screenshot_action(tools: Any, action_entry: Any, agent: Any) -> None:
+    """browser-use's Agent constructor strips the ``screenshot`` action from
+    the registry whenever ``use_vision != 'auto'``, treating it as a redundant
+    observation aid — but the action is also the only way to SAVE a screenshot
+    to a file, and the system prompt's action inventory was generated before
+    the strip, so the model is promised a tool the schema then lacks. Put the
+    entry back and rebuild the action models the constructor derived from the
+    stripped registry; later per-page rebuilds inherit the restored entry."""
+    if action_entry is None:
+        return
+    actions = tools.registry.registry.actions
+    if "screenshot" in actions:
+        return
+    actions["screenshot"] = action_entry
+    try:
+        agent._setup_action_models()
+        # The constructor parsed initial_actions with the classes the rebuild
+        # just replaced; validating stale instances against the new AgentOutput
+        # fails every session at startup. Re-convert them the way upstream's own
+        # skill registration does after the same rebuild.
+        if getattr(agent, "initial_actions", None):
+            agent.initial_actions = agent._convert_initial_actions(
+                [a.model_dump(exclude_unset=True) for a in agent.initial_actions]
+            )
+    except Exception:
+        logger.warning(
+            "action model rebuild after screenshot restore failed", exc_info=True
+        )
 
 
 _NARRATIVE_FIELDS = (
@@ -929,7 +1044,12 @@ async def _invoke_with_action_repair(
             detail = mistyped_action_params(e)
             if detail:
                 last_detail = detail
-                correction = _mistyped_correction(detail)
+                absent = _actions_absent_from_schema(detail)
+                correction = (
+                    _unknown_action_correction(absent)
+                    if absent
+                    else _mistyped_correction(detail)
+                )
             elif is_missing_action_error(e):
                 correction = (
                     _MISSING_ACTION_CORRECTION if attempt == 0 else _MISSING_ACTION_FINAL
@@ -952,9 +1072,10 @@ async def _invoke_with_action_repair(
                     "{...params}}] — include it in your next reply."
                 ) from e
             logger.info(
-                "Retrying LLM call after %s (attempt %d)",
+                "Retrying LLM call after %s (attempt %d)%s",
                 "mis-typed action arguments" if detail else "missing/malformed action",
                 attempt + 1,
+                f": {detail}" if detail else "",
             )
             extra.append(UserMessage(content=correction))
 
@@ -1524,7 +1645,7 @@ def _budget_salvage(
     # does not already validate is kept as it stands and recorded as a failure.
     output = ""
     if store is not None and not store.is_empty():
-        output = store.read_output()
+        output = store.final_output()
     else:
         try:
             result_file = agent.file_system.get_file("result.json") if agent.file_system else None
@@ -1579,6 +1700,41 @@ def _primary_action_name(actions: list) -> str | None:
     except Exception:
         return None
     return next(iter(dumped), None) if dumped else None
+
+
+def _executed_actions(
+    model_output: Any, results: list | None
+) -> tuple[list[str], list[str], list[str], str | None]:
+    """(requested names, executed names, executed argument fingerprints, first
+    erroring action).
+
+    @nonobvious(must-hold): a step's requested action chain is cut short on error,
+    on a sequence-terminating action, or on a page change, and only actions that
+    ran get a result. Anything past the executed slice was requested but never
+    performed and must not be recorded as having happened — assertions about which
+    tools a run really used depend on that.
+    """
+    names: list[str] = []
+    args: list[str] = []
+    actions = getattr(model_output, "action", None) or []
+    for act in actions:
+        try:
+            dumped = act.model_dump(exclude_none=True)
+        except Exception:
+            continue
+        names.extend(dumped.keys())
+        args.extend(
+            guard_key(json.dumps(params, sort_keys=True, default=str))
+            for params in dumped.values()
+        )
+    executed_n = len(results or [])
+    error_action: str | None = None
+    for i, result in enumerate(results or []):
+        if getattr(result, "error", None):
+            if i < len(names):
+                error_action = names[i]
+            break
+    return names, names[:executed_n], args[:executed_n], error_action
 
 
 def _category_for(action_name: str | None) -> str:
@@ -1835,7 +1991,7 @@ async def _finalise_task(
     done_output = _gated_done_output(history)
     from_store = store is not None and not store.is_empty()
     if from_store:
-        output = store.read_output()
+        output = store.final_output()
     else:
         output = done_output or file_output
 
@@ -2207,6 +2363,7 @@ async def run_agent_session(session_id: str) -> None:
         register_code_tools(tools, clipboard, store, _code_progress)
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
+        register_upload_path_resolution(tools)
         capsolver_costs: list[float] = []
         # @nonobvious(forced-by): the solver refuses to spend once its own sink
         # passes CAPTCHA_MAX_COST_USD, and that sink is bound at registration —
@@ -2397,7 +2554,6 @@ async def run_agent_session(session_id: str) -> None:
 
             action_name = None
             category = None
-            all_action_names: list[str] = []
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
@@ -2406,12 +2562,9 @@ async def run_agent_session(session_id: str) -> None:
                         note_read_action(clipboard, _primary_action_name([act]))
                     except Exception:
                         logger.debug("read-action count failed", exc_info=True)
-                for act in step.model_output.action:
-                    try:
-                        dumped = act.model_dump(exclude_none=True)
-                    except Exception:
-                        continue
-                    all_action_names.extend(dumped.keys())
+            all_action_names, executed_actions, executed_args, error_action = (
+                _executed_actions(step.model_output, step.result)
+            )
             lean_flag["eligible"] = bool(all_action_names) and all(
                 n in _STORE_ONLY_ACTIONS for n in all_action_names
             )
@@ -2429,6 +2582,11 @@ async def run_agent_session(session_id: str) -> None:
                 "action": action_name,
                 "code": is_code,
             }
+            if all_action_names:
+                row_data["actions"] = executed_actions
+                row_data["args"] = executed_args
+            if error_action:
+                row_data["error_action"] = error_action
             if full_error and len(full_error) > len(summary):
                 row_data["error_full"] = full_error[:6000]
             if action_name == "done" and review_state["round"]:
@@ -2511,10 +2669,14 @@ async def run_agent_session(session_id: str) -> None:
                 ),
             )
             budget = (row or {}).get("max_cost_usd")
-            if budget and total_cost >= budget:
-                raise BudgetExceededError(
-                    f"Cost ${total_cost:.4f} exceeded budget ${budget:.2f}"
-                )
+            stop_reason = _budget_stop_reason(
+                budget,
+                total_cost,
+                total_cost - (carried["llm"] + carried["capsolver"]),
+                step_count,
+            )
+            if stop_reason:
+                raise BudgetExceededError(stop_reason)
 
         agent_kwargs: dict[str, Any] = {
             "task": prompt,
@@ -2539,6 +2701,7 @@ async def run_agent_session(session_id: str) -> None:
             _CARDS_EXTENSION,
             _DRILL_IN_EXTENSION,
             _TOOLS_EASIEST_EXTENSION,
+            _full_toolbox_extension(tools),
             _OVERLAY_EXTENSION,
             _CLIPBOARD_EXTENSION,
             _CODE_REUSE_EXTENSION,
@@ -2581,7 +2744,9 @@ async def run_agent_session(session_id: str) -> None:
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data
 
+        screenshot_action_entry = tools.registry.registry.actions.get("screenshot")
         agent = Agent(**agent_kwargs)
+        _restore_screenshot_action(tools, screenshot_action_entry, agent)
         entry = live.register(session_id, agent)
         if store is not None and agent.file_system is not None:
             try:

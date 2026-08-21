@@ -88,6 +88,9 @@ class CodeStreamObserver:
         self._progress = progress
         self._tab: str | None = None
         self._prev_focus: str | None = None
+        # Every code tab this observer ever spawned, surviving reset(): the guard
+        # that stops a code tab being mistaken for the page to restore.
+        self._own_tabs: set[str] = set()
         self._announced = False
         self._last_push = 0.0
         self._last_len = 0
@@ -97,7 +100,11 @@ class CodeStreamObserver:
 
     def reset(self) -> None:
         self._tab = None
-        self._prev_focus = None
+        # @nonobvious(must-hold): _prev_focus survives reset. A reset can fire
+        # mid-generation while a code tab still holds focus; wiping the last
+        # known page here would make the next _open_tab capture the code tab
+        # itself as the focus to restore, and every later page read would read
+        # the code view instead of the page.
         self._announced = False
         self._last_push = 0.0
         self._last_len = 0
@@ -167,11 +174,14 @@ class CodeStreamObserver:
 
         if self._session is None:
             return
-        self._prev_focus = getattr(self._session, "agent_focus_target_id", None)
+        current = getattr(self._session, "agent_focus_target_id", None)
+        if current and current not in self._own_tabs:
+            self._prev_focus = current
         self._tab = await _spawn_tab(self._session, codeview_url())
         if self._tab is None:
             logger.warning("code stream: could not open the code tab")
             return
+        self._own_tabs.add(self._tab)
         await _focus_target(self._session, self._tab)
         logger.info("code stream: code tab opened (target %s)", self._tab)
         if self._clipboard is not None:

@@ -2420,15 +2420,13 @@ async def test_sandbox_evaluate_and_get_html_note_embeds(monkeypatch) -> None:
     from openbrowse.agent.tools import _SandboxBrowser
 
     async def fake_eval(session, js):
+        if js == tools_mod._IFRAME_HOSTS_JS:
+            return ["board.example.com"]
         if "outerHTML" in js:
             return "<div>shell</div>"
         return "thin shell text"
 
-    async def dom_hosts(session):
-        return ["board.example.com"]
-
     monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
-    monkeypatch.setattr(tools_mod, "_dom_iframe_hosts", dom_hosts)
 
     sb = _SandboxBrowser(None)
     body = await sb.evaluate("document.body.innerText")
@@ -4688,3 +4686,52 @@ def test_absence_needs_a_look_message_names_the_tools() -> None:
     assert msg is not None
     for tool in ("evaluate", "read_pages", "read_file"):
         assert tool in msg
+
+
+async def test_find_links_bare_call_collects_all_links(monkeypatch) -> None:
+    # A bare call means "all links" — requiring a selector only taught models
+    # to retry with href_regex='.+' after one wasted step logged as a
+    # recovered "transient error".
+    import openbrowse.agent.tools as tools_mod
+    from browser_use import Tools
+
+    link_map = {
+        1: _link_node(1, "https://x.com/detail/1.html"),
+        2: _link_node(2, "https://x.com/detail/2.html"),
+        3: _link_node(3, "https://x.com/about.html"),
+    }
+
+    async def fake_settle(session, frame):
+        return None
+
+    async def fake_eval(session, js):
+        return "https://x.com/list"
+
+    monkeypatch.setattr(tools_mod, "_settle_lazy_links", fake_settle)
+    monkeypatch.setattr(tools_mod, "_eval_js", fake_eval)
+
+    class FakeSession:
+        async def get_browser_state_summary(self, include_screenshot=False):
+            return None
+
+        async def get_selector_map(self):
+            return link_map
+
+        async def get_element_by_index(self, index):
+            return None
+
+    tools = Tools()
+    tools_mod.register_tab_tools(tools, object(), {}, None, None)
+    entry = tools.registry.registry.actions["find_links"]
+    result = await entry.function(
+        browser_session=FakeSession(), file_system=_FakeFileSystem()
+    )
+    assert not result.error
+    import json as _json
+
+    found = _json.loads(result.extracted_content)["data"]
+    assert {l["href"] for l in found} == {
+        "https://x.com/detail/1.html",
+        "https://x.com/detail/2.html",
+        "https://x.com/about.html",
+    }

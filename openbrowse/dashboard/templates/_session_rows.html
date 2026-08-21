@@ -1,12 +1,9 @@
 {% for s in sessions %}
-{% set d_status = 'queued' if s.status == 'created' else 'running' if s.status == 'running' else
-'failed' if s.status == 'error' else 'success' if s.status in ('stopped',
-'idle') and s.is_task_successful == 1 else 'failed' if s.status in
-('stopped', 'idle') and s.is_task_successful == 0 else 'stopped' %}
+{% set ds = display_state(s.status, s.is_task_successful, s.failure_kind) %}
 <tr onclick="handleSessionRowClick(event, '{{ s.id }}')">
   <td>
-    <span class="status status-d-{{ d_status }}"
-      ><span class="status-dot"></span> {{ d_status }}</span
+    <span class="status status-d-{{ ds.key }}"
+      ><span class="status-dot"></span> {{ ds.label }}</span
     >
   </td>
   <td>

@@ -46,6 +46,22 @@ def _item_model_of(annotation: Any) -> type[BaseModel] | None:
     return None
 
 
+def _scalar_item_of(annotation: Any) -> Any | None:
+    """The plain element type of a ``list[str]``-style field annotation — arrays
+    whose items are values, not objects. None when the list holds models or the
+    annotation is not a list."""
+    inner = _peel_optional(annotation)
+    if get_origin(inner) is not list:
+        return None
+    args = get_args(inner)
+    if not args:
+        return None
+    elem = _peel_optional(args[0])
+    if isinstance(elem, type) and issubclass(elem, BaseModel):
+        return None
+    return elem
+
+
 def _empty_for(annotation: Any) -> Any:
     inner = _peel_optional(annotation)
     if get_origin(inner) is list:
@@ -165,10 +181,13 @@ class OutputStore:
         self._model = output_model
         self._array_field: str | None = None
         self._item_model: type[BaseModel] | None = None
+        self._scalar_item: Any | None = None
         for name, field in output_model.model_fields.items():
             if _is_list(field.annotation):
                 self._array_field = name
                 self._item_model = _item_model_of(field.annotation)
+                if self._item_model is None:
+                    self._scalar_item = _scalar_item_of(field.annotation)
                 break
         self._data: dict[str, Any] = {
             name: _empty_for(field.annotation)
@@ -188,6 +207,10 @@ class OutputStore:
     @property
     def item_model(self) -> type[BaseModel] | None:
         return self._item_model
+
+    @property
+    def scalar_item(self) -> Any | None:
+        return self._scalar_item
 
     @property
     def data(self) -> dict[str, Any]:
@@ -251,9 +274,53 @@ class OutputStore:
                 )
         return json.dumps(shown, indent=2, default=str)
 
+    def final_output(self) -> str:
+        """The output as published JSON: identical to the stored data except
+        that array items are stripped to the schema's own fields. Extra keys
+        stay in the store while a run is live (the completeness gate uses them
+        to hint at mis-keyed data, and bulk loads carry provenance columns),
+        but the published answer honours the requested shape exactly — a
+        budget-salvaged run must not ship scaffolding fields the schema never
+        asked for."""
+        shown = dict(self._data)
+        if self._array_field and self._item_model is not None:
+            allowed = set(self._item_model.model_fields)
+            shown[self._array_field] = [
+                {k: v for k, v in item.items() if k in allowed}
+                if isinstance(item, dict)
+                else item
+                for item in (shown.get(self._array_field) or [])
+            ]
+        return json.dumps(shown, indent=2, default=str)
+
     def add_item(self, item: Any) -> tuple[bool, str]:
         if not self._array_field:
             return False, "This output has no list to add items to; use set_field."
+        if self._item_model is None and self._scalar_item is not None:
+            # The list holds plain values (e.g. an array of strings). A model
+            # given no object schema tends to invent a wrapper key; unwrap a
+            # single-key object rather than bounce the value it clearly meant.
+            value = item
+            if isinstance(item, dict):
+                if len(item) != 1:
+                    return False, (
+                        f"'{self._array_field}' holds plain values, not objects — "
+                        "pass one value per add_item."
+                    )
+                value = next(iter(item.values()))
+            coerced = _coerce_scalar(value, self._scalar_item)
+            expected = _peel_optional(self._scalar_item)
+            if isinstance(expected, type) and not isinstance(coerced, expected):
+                return False, (
+                    f"'{self._array_field}' items must be "
+                    f"{getattr(expected, '__name__', expected)}, got "
+                    f"{type(coerced).__name__}."
+                )
+            arr = self._data[self._array_field]
+            arr.append(coerced)
+            return True, (
+                f"Added item #{len(arr) - 1} to '{self._array_field}' ({len(arr)} total)."
+            )
         if not isinstance(item, dict):
             return False, "add_item expects an object of field/value pairs."
         clean, err = self._validate_item(item, check_keys=set(item))

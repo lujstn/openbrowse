@@ -25,9 +25,11 @@ from browser_use.filesystem.file_system import FileSystem
 
 from openbrowse.agent.browser_cdp import (
     _emit_progress,
+    _eval_in_frame_world,
     _eval_js,
     _eval_on_target,
     _iframe_targets,
+    _same_process_frame,
 )
 try:
     # Private upstream helpers: we reuse their query JS so our own delivery keeps
@@ -518,6 +520,7 @@ async def _read_one_page(
     baseline: set[str],
     allow_sole_candidate: bool = False,
     sibling_urls: list[str] | None = None,
+    _frame_retry: bool = False,
 ) -> dict[str, Any]:
     """Wait for a spawned tab (and, when asked, its embedded panel) to render, then
     read {url, title, text, jsonld, links} from it — the panel when one matches,
@@ -543,9 +546,43 @@ async def _read_one_page(
     fallback_ok = False
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
     panel_in_dom: bool | None = None
+    prev_thin_text: str | None = None
+    thin_frame_hosts: list[str] = []
+    frame_world: tuple[str, int] | None = None
 
     def _substantial(txt: Any) -> bool:
         return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
+
+    async def _settled_thin(txt: Any) -> bool:
+        # @nonobvious(must-hold): some real pages are legitimately smaller than
+        # the substantial threshold (sparse profiles, terse listings). Once the
+        # document is complete, its text is stable across two polls and it
+        # embeds nothing, the page has shown everything it has — waiting the
+        # whole deadline on it just slows every wave it is in.
+        nonlocal prev_thin_text
+        current = str(txt or "").strip()
+        if not current:
+            return False
+        if current != prev_thin_text:
+            prev_thin_text = current
+            return False
+        try:
+            hosts = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
+        except Exception:
+            return False
+        if hosts:
+            # Stable thin text plus an embed: the main document has shown all
+            # it has and the content lives in the frame. Recording the hosts
+            # lets the wait loop hand straight over to the frame-recovery pass
+            # instead of burning the rest of the deadline on a document that
+            # will never grow.
+            thin_frame_hosts.extend(
+                h
+                for h in hosts
+                if isinstance(h, str) and h and h not in thin_frame_hosts
+            )
+            return False
+        return True
 
     while loop.time() < deadline:
         try:
@@ -565,6 +602,28 @@ async def _read_one_page(
                     if _substantial(txt):
                         break
                 elif loop.time() >= frame_grace_end:
+                    # A cross-origin but same-SITE embed never attaches a CDP
+                    # target at all; an isolated world in the frame is the only
+                    # way to read it.
+                    if frame_world is None:
+                        try:
+                            frame_world = await _same_process_frame(
+                                browser_session, target_id, url_contains
+                            )
+                        except Exception:
+                            logger.debug("same-process frame probe failed", exc_info=True)
+                    if frame_world is not None:
+                        try:
+                            txt = await _eval_in_frame_world(
+                                browser_session, target_id, frame_world[1], _BODY_TEXT_JS
+                            )
+                        except Exception:
+                            # The frame committed a new document and destroyed
+                            # the world; the next poll re-creates it.
+                            frame_world = None
+                            txt = None
+                        if txt and str(txt).strip():
+                            break
                     # @nonobvious(forced-by): the DOM shows a matching iframe
                     # long before its CDP target attaches; when the panel is
                     # demonstrably in the page, keep waiting for it instead of
@@ -606,6 +665,10 @@ async def _read_one_page(
                     txt = await _eval_on_target(browser_session, target_id, _BODY_TEXT_JS)
                     if _substantial(txt):
                         break
+                    if ready == "complete" and await _settled_thin(txt):
+                        break
+                    if thin_frame_hosts:
+                        break
         except Exception:
             logger.debug("_read_one_page: poll failed", exc_info=True)
         await asyncio.sleep(0.5)
@@ -614,16 +677,25 @@ async def _read_one_page(
     if frame_tid:
         claimed.add(frame_tid)
         page["frame_matched"] = True
+    use_world = frame_tid is None and frame_world is not None
+    if use_world:
+        page["frame_matched"] = True
+
+    async def _read_eval(expression: str) -> Any:
+        if use_world:
+            return await _eval_in_frame_world(
+                browser_session, target_id, frame_world[1], expression
+            )
+        return await _eval_on_target(browser_session, read_tid, expression)
+
     try:
         page["title"] = await _eval_on_target(browser_session, target_id, "document.title")
-        text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+        text = await _read_eval(_BODY_TEXT_JS) or ""
         page["text"] = text[:_READ_PAGES_TEXT_CAP]
 
         async def _jsonld_now() -> Any:
-            found = _parse_jsonld_blobs(
-                await _eval_on_target(browser_session, read_tid, _JSONLD_JS)
-            )
-            if found is None and read_tid != target_id:
+            found = _parse_jsonld_blobs(await _read_eval(_JSONLD_JS))
+            if found is None and (use_world or read_tid != target_id):
                 found = _parse_jsonld_blobs(
                     await _eval_on_target(browser_session, target_id, _JSONLD_JS)
                 )
@@ -638,14 +710,14 @@ async def _read_one_page(
             arrived_late = jsonld is not None
         page["jsonld"] = jsonld
         if arrived_late:
-            text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+            text = await _read_eval(_BODY_TEXT_JS) or ""
             if len(text) > len(page["text"]):
                 page["text"] = text[:_READ_PAGES_TEXT_CAP]
-        page["links"] = await _eval_on_target(browser_session, read_tid, _LINKS_JS) or []
+        page["links"] = await _read_eval(_LINKS_JS) or []
     except Exception as e:
         page["error"] = f"{type(e).__name__}: {e}"
         return page
-    if url_contains and not frame_tid and not fallback_ok:
+    if url_contains and not frame_tid and not use_world and not fallback_ok:
         page["error"] = (
             "no embedded panel matching "
             f"'{url_contains}' rendered — the main document was NOT read in its place"
@@ -656,15 +728,36 @@ async def _read_one_page(
         not url_contains
         and len((page.get("text") or "").strip()) < 2 * _MIN_PAGE_TEXT_CHARS
     ):
-        try:
-            raw = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
-        except Exception:
-            raw = None
-        hosts = (
-            [h for h in raw if isinstance(h, str) and h]
-            if isinstance(raw, list)
-            else []
-        )
+        hosts = list(thin_frame_hosts)
+        if not hosts:
+            try:
+                raw = await _eval_on_target(browser_session, target_id, _IFRAME_HOSTS_JS)
+            except Exception:
+                raw = None
+            hosts = (
+                [h for h in raw if isinstance(h, str) and h]
+                if isinstance(raw, list)
+                else []
+            )
+        if hosts and not _frame_retry:
+            # The filter the old error message asked the model to re-run with is
+            # right here — read the frame ourselves on the same open tab. A
+            # no-reasoning model told to repeat an expensive sweep reliably
+            # improvises around the instruction instead; the sweep has to hand
+            # back the frame content itself.
+            retried = await _read_one_page(
+                browser_session,
+                url,
+                target_id,
+                hosts[0],
+                claimed,
+                baseline,
+                allow_sole_candidate=True,
+                sibling_urls=sibling_urls,
+                _frame_retry=True,
+            )
+            if not retried.get("error") and (retried.get("text") or "").strip():
+                return retried
         if hosts:
             page["error"] = (
                 f"page embeds its content in a panel from {hosts[0]}; the main "
@@ -1219,10 +1312,24 @@ class _SandboxBrowser:
     """
 
     def __init__(
-        self, session: BrowserSession, clipboard: dict[str, Any] | None = None
+        self,
+        session: BrowserSession,
+        clipboard: dict[str, Any] | None = None,
+        home_target: str | None = None,
     ) -> None:
         self._session = session
         self._clipboard = clipboard
+        self._home_target = home_target
+
+    async def _eval(self, js: str) -> Any:
+        # @nonobvious(must-hold): while a script runs, run_code_file keeps the
+        # code-view tab focused so the user can watch it run. Following the
+        # current focus here would make every read return the code tab — the
+        # script's own source — so page reads stay pinned to the tab the agent
+        # was actually on.
+        if self._home_target:
+            return await _eval_on_target(self._session, self._home_target, js)
+        return await _eval_js(self._session, js)
 
     def _mark_visited(self, url: str) -> None:
         if self._clipboard is None or not url:
@@ -1230,7 +1337,11 @@ class _SandboxBrowser:
         self._clipboard.setdefault("_visited", set()).add(_norm_url(url))
 
     async def _main_frame_caveat(self) -> str:
-        hosts = await _dom_iframe_hosts(self._session)
+        try:
+            val = await self._eval(_IFRAME_HOSTS_JS)
+        except Exception:
+            val = []
+        hosts = [h for h in val if isinstance(h, str)] if isinstance(val, list) else []
         if not hosts:
             return ""
         return (
@@ -1240,7 +1351,7 @@ class _SandboxBrowser:
         )
 
     async def evaluate(self, js: str) -> Any:
-        result = await _eval_js(self._session, js)
+        result = await self._eval(js)
         # @nonobvious(deliberately-missing): only whole-page body reads get the
         # embed caveat appended — annotating scoped reads (an h1's textContent,
         # an id) would corrupt short values the script stores verbatim.
@@ -1263,7 +1374,7 @@ class _SandboxBrowser:
             )
         else:
             js = "document.documentElement.outerHTML"
-        html = await _eval_js(self._session, js) or ""
+        html = await self._eval(js) or ""
         if len(html.strip()) < _MIN_PAGE_TEXT_CHARS:
             caveat = await self._main_frame_caveat()
             if caveat:
@@ -1301,6 +1412,24 @@ class _SandboxBrowser:
         # @nonobvious(deliberately-missing): no fall-back to unmatched frames —
         # running JS in an unrelated frame (consent, analytics) returns
         # plausible-but-wrong data that would be stored as this page's content.
+        if not matched and needle:
+            # A cross-origin but same-SITE embed has no CDP target of its own;
+            # an isolated world in the frame is the only way in.
+            page_target = self._home_target or getattr(
+                self._session, "agent_focus_target_id", None
+            )
+            if page_target:
+                try:
+                    world = await _same_process_frame(
+                        self._session, page_target, url_contains
+                    )
+                except Exception:
+                    world = None
+                if world is not None:
+                    value = await _eval_in_frame_world(
+                        self._session, page_target, world[1], js
+                    )
+                    return [(world[0], value)] if all_matches else value
         if not matched:
             if all_frames:
                 raise RuntimeError(
@@ -1394,7 +1523,7 @@ class _SandboxBrowser:
         does — silently proceeding would read the shell as if it were the panel.
         Otherwise settle briefly.
         """
-        await _eval_js(self._session, "window.location.assign(" + json.dumps(url) + ")")
+        await self._eval("window.location.assign(" + json.dumps(url) + ")")
         self._mark_visited(url)
         if wait_for:
             if not await self.wait_for_frame(wait_for, timeout_s=max(settle_s, 12.0)):
@@ -1785,9 +1914,15 @@ def register_code_tools(
                 return _builtin_open(candidate, mode, *args, **kwargs)
             return _builtin_open(file, mode, *args, **kwargs)
 
+        observer = (clipboard or {}).get("_code_stream")
+        home_target = getattr(browser_session, "agent_focus_target_id", None)
+        if home_target and home_target in getattr(observer, "_own_tabs", set()):
+            # Focus was left on a code tab; the observer's remembered page focus
+            # is the real page the script means to read.
+            home_target = getattr(observer, "_prev_focus", None)
         namespace.update(
             {
-                "browser": _SandboxBrowser(browser_session, clipboard),
+                "browser": _SandboxBrowser(browser_session, clipboard, home_target),
                 "fetch": _fetch,
                 "save_json": _save_json,
                 "save_checkpoint_json": _save_json,
@@ -1804,8 +1939,6 @@ def register_code_tools(
         if store is not None:
             namespace.update(_store_bridge(store, clipboard, file_system))
 
-        home_target = getattr(browser_session, "agent_focus_target_id", None)
-        observer = (clipboard or {}).get("_code_stream")
         code_tab: str | None = (clipboard or {}).pop("_code_stream_tab", None)
         if code_tab is not None and browser_session is not None:
             await _focus_target(browser_session, code_tab)
@@ -2471,8 +2604,8 @@ def register_tab_tools(
             return ActionResult(error=f"close_tab failed: {type(e).__name__}: {e}")
 
     @tools.action(
-        "Collect links (index, text, href) from the current page using a selector "
-        "(one or more REQUIRED): href_contains / href_regex match the URL; "
+        "Collect links (index, text, href) from the current page — all of them "
+        "by default, or narrowed by selectors: href_contains / href_regex match the URL; "
         "frame_url_contains returns only links inside an embedded panel/iframe whose "
         "URL matches (e.g. 'embed'); container_index returns only links inside that "
         "element (usually an embed's own index); attr returns links carrying a shared "
@@ -2501,10 +2634,10 @@ def register_tab_tools(
             or container_index is not None
             or attr
         ):
-            return ActionResult(
-                error="find_links needs at least one selector: href_contains, "
-                "href_regex, frame_url_contains, container_index, or attr."
-            )
+            # A bare call means "all links". Rejecting it only taught models to
+            # spell the same thing as href_regex='.+' after one wasted step,
+            # stamped in the summary as a recovered "transient error".
+            href_regex = ".+"
         try:
             settle_frameless = bool(
                 await _settle_lazy_links(browser_session, frame_url_contains)
@@ -2952,6 +3085,65 @@ def _compact_json_text(text: str) -> str | None:
     )
 
 
+def _resolve_upload_path(path: str, file_system: FileSystem | None) -> str | None:
+    """A managed-file name becomes its absolute real path; an absolute path is
+    kept as given; anything else is unresolvable (None). Real paths so a
+    symlinked filesystem directory cannot make the granted and submitted paths
+    disagree."""
+    if Path(path).is_absolute():
+        return path
+    if file_system is None:
+        return None
+    try:
+        file_obj = file_system.get_file(path)
+        if file_obj is None:
+            return None
+        fs_dir = Path(str(file_system.get_dir())).resolve()
+        real_path = (fs_dir / file_obj.full_name).resolve()
+    except Exception:
+        return None
+    if fs_dir not in real_path.parents:
+        return None
+    return str(real_path)
+
+
+def register_upload_path_resolution(tools: Tools) -> None:
+    """browser-use treats any cdp_url session as a remote browser, so its
+    upload_file forwards the model's path into DOM.setFileInputFiles verbatim
+    instead of resolving it against the agent file system. Our browser shares
+    the server's disk, and a bare managed name like 'greeting.txt' reaches
+    Chromium as a relative path: the read grant registered at attach time can
+    never match the path in the form submission's body, so the browser kills
+    the renderer with ILLEGAL_UPLOAD_PARAMS (bad_message reason 170) the moment
+    the form is submitted — and the tool chain reports success throughout.
+    Rewrite managed names to absolute real paths before the builtin runs, and
+    refuse anything unresolvable with an error the model can act on rather
+    than a dead tab."""
+    entry = tools.registry.registry.actions.get("upload_file")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def upload_file_abspath(params: Any = None, **kwargs: Any) -> Any:
+        path = getattr(params, "path", None)
+        if isinstance(path, str):
+            resolved = _resolve_upload_path(path, kwargs.get("file_system"))
+            if resolved is None:
+                return ActionResult(
+                    error=(
+                        f"upload_file could not resolve {path!r}: it is not a file "
+                        "in the agent file system and not an absolute path. Create "
+                        "the file first (e.g. with write_file) or pass an absolute "
+                        "path to an existing file."
+                    )
+                )
+            if resolved != path:
+                params = params.model_copy(update={"path": resolved})
+        return await original(params=params, **kwargs)
+
+    entry.function = upload_file_abspath
+
+
 def register_output_guard_overrides(tools: Tools) -> None:
     """Stop a run's context ballooning: replace any large chunk already seen this
     session with a short back-reference, and (for dump actions only) cap genuinely huge
@@ -3385,6 +3577,13 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
 def _describe_item_fields(store: OutputStore) -> str:
     model = store.item_model
     if model is None:
+        scalar = getattr(store, "scalar_item", None)
+        if scalar is not None:
+            kind = getattr(scalar, "__name__", str(scalar))
+            return (
+                f"Each item is a single plain {kind} — pass the value itself, "
+                "not an object."
+            )
         return "Each item is a free-form object."
     parts = [
         name if field.is_required() else f"{name}?"
@@ -4132,7 +4331,7 @@ def register_output_store_tools(
         "most two items whose own page you have not read yet — read_pages() covers "
         "them all in one step."
     )
-    async def add_item(item: dict[str, Any], file_system: FileSystem) -> ActionResult:
+    async def add_item(item: dict[str, Any] | str | int | float, file_system: FileSystem) -> ActionResult:
         block = _stub_block_msg(store, clipboard, item)
         if block:
             return ActionResult(error=block)

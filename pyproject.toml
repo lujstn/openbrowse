@@ -52,6 +52,7 @@ packages = ["openbrowse"]
 
 [tool.hatch.build.targets.sdist]
 include = ["openbrowse", "tests", "scripts", "README.md", "LICENSE", "CITATION.cff"]
+exclude = ["tests/live/artifacts"]
 
 [tool.ruff]
 line-length = 100
@@ -62,3 +63,8 @@ select = ["F"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+markers = [
+    "live: real-browser, real-LLM integration tests (deselected by default; see tests/live/README.md)",
+    "sonnet_smoke: live scenarios also worth running on claude-sonnet-5",
+]
+addopts = "-m 'not live'"

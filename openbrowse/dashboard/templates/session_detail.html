@@ -263,6 +263,29 @@ OpenBrowse{% endblock %} {% block head %}
   .completion-card.schema .cc-head {
     color: #f59e0b;
   }
+  .completion-card.warning {
+    --cc-accent: 245, 158, 11;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+  }
+  .completion-card.warning .cc-head {
+    color: #f59e0b;
+  }
+  .cc-sub {
+    color: #c6c6cc;
+    opacity: 0.9;
+    font-size: 12px;
+    line-height: 1.5;
+    /* Sits directly under the headline text: the 23px matches the fixed
+       15px glyph plus the head's 8px gap, so both lines share a left edge.
+       The negative top margin swallows the dead space the caret button's
+       height adds below the headline's own text line; the right margin keeps
+       wrapped lines clear of the caret button's column. */
+    margin: -2px 32px 0 23px;
+  }
+  .completion-card.collapsed .cc-sub {
+    display: none;
+  }
   .cc-head {
     font-weight: 600;
     font-size: 13px;
@@ -279,6 +302,7 @@ OpenBrowse{% endblock %} {% block head %}
   }
   .cc-glyph {
     flex: 0 0 auto;
+    width: 15px;
   }
   .completion-card.collapsed .cc-out {
     display: none;
@@ -322,7 +346,7 @@ OpenBrowse{% endblock %} {% block head %}
   }
   .cc-out {
     position: relative;
-    margin-top: 10px;
+    margin-top: 14px;
   }
   .cc-out pre {
     background: #0a0a0a;
@@ -515,9 +539,10 @@ OpenBrowse{% endblock %} {% block head %}
   @keyframes qpulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
   .queued-title { color: #d4d4d8; font-weight: 600; letter-spacing: 0.02em; font-size: 15px; }
   .queued-sub { color: #666; font-size: 13px; max-width: 340px; text-align: center; line-height: 1.5; }
-  .status-d-success .status-dot { background: #34d399; }
+  .status-d-completed .status-dot { background: #34d399; }
+  .status-d-attention .status-dot { background: #facc15; }
   .status-d-failed .status-dot { background: #f87171; }
-  .status-d-stopped .status-dot { background: #6b7280; }
+  .status-d-stopped .status-dot { background: #f87171; }
   .msg-code {
     font-family: "SF Mono", "Menlo", monospace;
     font-size: 12px;
@@ -596,16 +621,10 @@ OpenBrowse{% endblock %} {% block head %}
 {% endblock %} {% block content %}
 <div class="session-header">
   <a href="/sessions">&larr; Sessions</a>
-  {% set ok = session.is_task_successful %}
-  {% if session.status == 'created' %}{% set dstat = 'queued' %}
-  {% elif session.status == 'running' %}{% set dstat = 'running' %}
-  {% elif session.status == 'error' %}{% set dstat = 'failed' %}
-  {% elif ok == 1 %}{% set dstat = 'success' %}
-  {% elif ok == 0 %}{% set dstat = 'failed' %}
-  {% else %}{% set dstat = 'stopped' %}{% endif %}
-  <span class="status status-d-{{ dstat }}">
+  {% set ds = display_state(session.status, session.is_task_successful, session.failure_kind) %}
+  <span class="status status-d-{{ ds.key }}">
     <span class="status-dot"></span>
-    <span id="session-status">{{ dstat }}</span>
+    <span id="session-status">{{ ds.label }}</span>
   </span>
   <span class="mono">{{ session.id }}</span>
   <span class="badge">{{ session.model or '\u2014' }}</span>
@@ -642,6 +661,7 @@ OpenBrowse{% endblock %} {% block head %}
     data-browser-live="{{ 1 if browser_live else 0 }}"
     data-max-concurrent="{{ max_concurrent }}"
     data-success="{{ session.is_task_successful if session.is_task_successful is not none else '' }}"
+    data-failure-kind="{{ session.failure_kind or '' }}"
   >
     {% if session.status == 'created' %}
     <div class="no-live queued">
@@ -715,6 +735,7 @@ document.addEventListener("DOMContentLoaded", function () {
   let lastStatus = browserPanel.dataset.status;
   let lastIsSuccessful =
     browserPanel.dataset.success === "" ? null : browserPanel.dataset.success === "1";
+  let lastFailureKind = browserPanel.dataset.failureKind || "";
   let browserLive = browserPanel.dataset.browserLive === "1";
   let firstMessagesBatchDone = false;
   const agentActivity = new OpenBrowseAgents.AgentActivity(
@@ -787,13 +808,20 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function displayStatus(status, success) {
-    if (status === "created") return "queued";
-    if (status === "running") return "running";
-    if (status === "error") return "failed";
-    if (success === true || success === 1) return "success";
-    if (success === false || success === 0) return "failed";
-    return "stopped";
+  // Mirrors openbrowse/dashboard/states.py display_state — keep them in step.
+  function displayStatus(status, success, failureKind) {
+    const okTrue = success === true || success === 1;
+    const okFalse = success === false || success === 0;
+    if (status === "created") return { key: "queued", label: "queued" };
+    if (status === "running") return { key: "running", label: "running" };
+    if (status === "error") return { key: "failed", label: "error" };
+    if (okTrue && failureKind)
+      return { key: "attention", label: "completed with errors" };
+    if (okTrue) return { key: "completed", label: "success" };
+    if (okFalse && failureKind === "budget_exceeded")
+      return { key: "stopped", label: "stopped" };
+    if (okFalse) return { key: "failed", label: "error" };
+    return { key: "stopped", label: "stopped" };
   }
 
   async function copyText(text) {
@@ -916,15 +944,39 @@ document.addEventListener("DOMContentLoaded", function () {
     return text;
   }
 
-  function completionVerdict() {
-    if (lastIsSuccessful === true) return "success";
-    if (
-      typeof completionSummary === "string" &&
-      completionSummary.indexOf("did not match the requested schema") !== -1
-    ) {
-      return "schema";
+  // The card states mirror the session states: green success, amber
+  // completed-with-errors (an early stop with a standing answer), red failed
+  // (a stop before any answer, or a real error — the subtitle carries the
+  // distinction). The transient recovery note is demoted from the headline to
+  // a small subtitle, hidden when there were none.
+  function completionParts() {
+    const s = typeof completionSummary === "string" ? completionSummary : "";
+    const recovered = s.match(/\(recovered from (\d+) transient errors?\)/);
+    if (lastIsSuccessful === true && lastFailureKind) {
+      return { verdict: "warning", head: "Completed with errors", sub: s };
     }
-    return "failed";
+    if (lastIsSuccessful === true) {
+      return {
+        verdict: "success",
+        head: "Task completed",
+        sub: recovered
+          ? "Recovered from " + recovered[1] + " transient error" +
+            (recovered[1] === "1" ? "" : "s") + " along the way."
+          : "",
+      };
+    }
+    if (s.indexOf("did not match the requested schema") !== -1) {
+      return {
+        verdict: "schema",
+        head: "Finished, but the result did not match the requested schema",
+        sub: s,
+      };
+    }
+    return {
+      verdict: "failed",
+      head: "Task failed",
+      sub: s.replace(/^Task failed:\s*/, ""),
+    };
   }
 
   const COPY_ICON =
@@ -939,16 +991,19 @@ document.addEventListener("DOMContentLoaded", function () {
     '<path d="M3.4 8.6l3 3 6.2-7" fill="none" stroke="currentColor"' +
     ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-  function paintCard(card, verdict, summary, output) {
-    const glyph = verdict === "success" ? "✓" : verdict === "schema" ? "⚠" : "✕";
+  function paintCard(card, verdict, head, sub, output) {
+    const glyph =
+      verdict === "success" ? "✓" :
+      verdict === "warning" || verdict === "schema" ? "⚠" : "✕";
     card.className = "completion-card " + verdict;
     card.dataset.output = output || "";
     let html =
       '<div class="cc-head"><span class="cc-title">' +
       '<span class="cc-glyph">' + glyph + "</span>" +
-      esc(summary || "Run ended") + "</span>" +
+      esc(head || "Run ended") + "</span>" +
       '<button class="cc-caret" type="button" aria-label="Expand result"></button>' +
       "</div>";
+    if (sub) html += '<div class="cc-sub">' + esc(sub) + "</div>";
     if (output) {
       let parsed = null;
       try { parsed = JSON.parse(output); } catch (e) {}
@@ -968,7 +1023,8 @@ document.addEventListener("DOMContentLoaded", function () {
       completionCard.classList.add("hidden");
       return;
     }
-    paintCard(completionCard, completionVerdict(), completionSummary, currentOutput);
+    const parts = completionParts();
+    paintCard(completionCard, parts.verdict, parts.head, parts.sub, currentOutput);
   }
 
   // @nonobvious(means): each turn of a keep-alive session finishes, so the card
@@ -1111,12 +1167,13 @@ document.addEventListener("DOMContentLoaded", function () {
         .getElementById("cost-cell")
         .classList.toggle("has-breakdown", parseFloat(data.capsolverCostUsd || 0) > 0);
       if (data.provider) document.getElementById("cost-provider").textContent = data.provider;
-      const dstat = displayStatus(data.status, data.isTaskSuccessful);
+      lastFailureKind = data.failureKind || "";
+      const dstat = displayStatus(data.status, data.isTaskSuccessful, lastFailureKind);
       browserLive = !!data.browserLive;
       syncFollowup(data.status);
-      document.getElementById("session-status").textContent = dstat;
+      document.getElementById("session-status").textContent = dstat.label;
       const wrap = document.querySelector(".session-header .status");
-      if (wrap) wrap.className = "status status-d-" + dstat;
+      if (wrap) wrap.className = "status status-d-" + dstat.key;
       // @nonobvious(forced-by): fold the finished turn away as the next one
       // starts, not when its completion line arrives. The session carries one
       // output field, so a poll landing between the new turn's output and its
