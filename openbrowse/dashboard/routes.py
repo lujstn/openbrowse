@@ -37,6 +37,7 @@ from openbrowse.auth import dashboard_auth_ok, require_dashboard_auth
 from openbrowse.browser.factory import display_manager
 from openbrowse.config import settings
 from openbrowse.dashboard.lifecycle import schedule_restart
+from openbrowse.dashboard.states import display_state
 from openbrowse.db import crud
 from openbrowse.profiles.storage import cookie_domains, read_state_file
 
@@ -306,6 +307,7 @@ def message_display(m: dict) -> dict:
 
 
 templates.env.globals["message_display"] = message_display
+templates.env.globals["display_state"] = display_state
 
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
 vnc_router = APIRouter(tags=["dashboard-vnc"])
@@ -1043,6 +1045,7 @@ async def sse_session_messages(request: Request, session_id: str):
                     "output": session.get("output") or "",
                     "activity": get_activity(session_id),
                     "isTaskSuccessful": session.get("is_task_successful"),
+                    "failureKind": session.get("failure_kind"),
                     "browserLive": live.is_live(session_id),
                 })
                 if payload != last_status_payload:
