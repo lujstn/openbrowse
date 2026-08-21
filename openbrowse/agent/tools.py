@@ -25,9 +25,11 @@ from browser_use.filesystem.file_system import FileSystem
 
 from openbrowse.agent.browser_cdp import (
     _emit_progress,
+    _eval_in_frame_world,
     _eval_js,
     _eval_on_target,
     _iframe_targets,
+    _same_process_frame,
 )
 try:
     # Private upstream helpers: we reuse their query JS so our own delivery keeps
@@ -544,6 +546,7 @@ async def _read_one_page(
     frame_grace_end = loop.time() + _FRAME_MATCH_GRACE_S
     panel_in_dom: bool | None = None
     prev_thin_text: str | None = None
+    frame_world: tuple[str, int] | None = None
 
     def _substantial(txt: Any) -> bool:
         return bool(txt) and len(str(txt).strip()) >= _MIN_PAGE_TEXT_CHARS
@@ -585,6 +588,28 @@ async def _read_one_page(
                     if _substantial(txt):
                         break
                 elif loop.time() >= frame_grace_end:
+                    # A cross-origin but same-SITE embed never attaches a CDP
+                    # target at all; an isolated world in the frame is the only
+                    # way to read it.
+                    if frame_world is None:
+                        try:
+                            frame_world = await _same_process_frame(
+                                browser_session, target_id, url_contains
+                            )
+                        except Exception:
+                            logger.debug("same-process frame probe failed", exc_info=True)
+                    if frame_world is not None:
+                        try:
+                            txt = await _eval_in_frame_world(
+                                browser_session, target_id, frame_world[1], _BODY_TEXT_JS
+                            )
+                        except Exception:
+                            # The frame committed a new document and destroyed
+                            # the world; the next poll re-creates it.
+                            frame_world = None
+                            txt = None
+                        if txt and str(txt).strip():
+                            break
                     # @nonobvious(forced-by): the DOM shows a matching iframe
                     # long before its CDP target attaches; when the panel is
                     # demonstrably in the page, keep waiting for it instead of
@@ -636,16 +661,25 @@ async def _read_one_page(
     if frame_tid:
         claimed.add(frame_tid)
         page["frame_matched"] = True
+    use_world = frame_tid is None and frame_world is not None
+    if use_world:
+        page["frame_matched"] = True
+
+    async def _read_eval(expression: str) -> Any:
+        if use_world:
+            return await _eval_in_frame_world(
+                browser_session, target_id, frame_world[1], expression
+            )
+        return await _eval_on_target(browser_session, read_tid, expression)
+
     try:
         page["title"] = await _eval_on_target(browser_session, target_id, "document.title")
-        text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+        text = await _read_eval(_BODY_TEXT_JS) or ""
         page["text"] = text[:_READ_PAGES_TEXT_CAP]
 
         async def _jsonld_now() -> Any:
-            found = _parse_jsonld_blobs(
-                await _eval_on_target(browser_session, read_tid, _JSONLD_JS)
-            )
-            if found is None and read_tid != target_id:
+            found = _parse_jsonld_blobs(await _read_eval(_JSONLD_JS))
+            if found is None and (use_world or read_tid != target_id):
                 found = _parse_jsonld_blobs(
                     await _eval_on_target(browser_session, target_id, _JSONLD_JS)
                 )
@@ -660,14 +694,14 @@ async def _read_one_page(
             arrived_late = jsonld is not None
         page["jsonld"] = jsonld
         if arrived_late:
-            text = await _eval_on_target(browser_session, read_tid, _BODY_TEXT_JS) or ""
+            text = await _read_eval(_BODY_TEXT_JS) or ""
             if len(text) > len(page["text"]):
                 page["text"] = text[:_READ_PAGES_TEXT_CAP]
-        page["links"] = await _eval_on_target(browser_session, read_tid, _LINKS_JS) or []
+        page["links"] = await _read_eval(_LINKS_JS) or []
     except Exception as e:
         page["error"] = f"{type(e).__name__}: {e}"
         return page
-    if url_contains and not frame_tid and not fallback_ok:
+    if url_contains and not frame_tid and not use_world and not fallback_ok:
         page["error"] = (
             "no embedded panel matching "
             f"'{url_contains}' rendered — the main document was NOT read in its place"
@@ -1341,6 +1375,24 @@ class _SandboxBrowser:
         # @nonobvious(deliberately-missing): no fall-back to unmatched frames —
         # running JS in an unrelated frame (consent, analytics) returns
         # plausible-but-wrong data that would be stored as this page's content.
+        if not matched and needle:
+            # A cross-origin but same-SITE embed has no CDP target of its own;
+            # an isolated world in the frame is the only way in.
+            page_target = self._home_target or getattr(
+                self._session, "agent_focus_target_id", None
+            )
+            if page_target:
+                try:
+                    world = await _same_process_frame(
+                        self._session, page_target, url_contains
+                    )
+                except Exception:
+                    world = None
+                if world is not None:
+                    value = await _eval_in_frame_world(
+                        self._session, page_target, world[1], js
+                    )
+                    return [(world[0], value)] if all_matches else value
         if not matched:
             if all_frames:
                 raise RuntimeError(
@@ -3429,6 +3481,13 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
 def _describe_item_fields(store: OutputStore) -> str:
     model = store.item_model
     if model is None:
+        scalar = getattr(store, "scalar_item", None)
+        if scalar is not None:
+            kind = getattr(scalar, "__name__", str(scalar))
+            return (
+                f"Each item is a single plain {kind} — pass the value itself, "
+                "not an object."
+            )
         return "Each item is a free-form object."
     parts = [
         name if field.is_required() else f"{name}?"
@@ -4176,7 +4235,7 @@ def register_output_store_tools(
         "most two items whose own page you have not read yet — read_pages() covers "
         "them all in one step."
     )
-    async def add_item(item: dict[str, Any], file_system: FileSystem) -> ActionResult:
+    async def add_item(item: dict[str, Any] | str | int | float, file_system: FileSystem) -> ActionResult:
         block = _stub_block_msg(store, clipboard, item)
         if block:
             return ActionResult(error=block)
