@@ -36,6 +36,7 @@ from openbrowse.agent.activity import (
     try_claim_profile,
 )
 from openbrowse.agent.leak_repair import (
+    coerce_action_param_shapes,
     is_missing_action_error,
     mistyped_action_params,
     repair_anthropic_message,
@@ -760,6 +761,17 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             if start < 0:
                 raise
             obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            # @nonobvious(mirrors): the Anthropic client repairs argument shapes
+            # before validation; without the same pass here, one slightly
+            # mis-shaped argument hard-fails the reply, the correction reads as
+            # a rejection of the action itself, and the model durably concludes
+            # the tool does not exist.
+            param_kinds = getattr(self, "_action_param_kinds", None)
+            if isinstance(obj, dict) and param_kinds:
+                try:
+                    coerce_action_param_shapes(obj, param_kinds)
+                except Exception:
+                    logger.debug("action param coercion failed", exc_info=True)
             return output_format.model_validate(obj)
 
     @staticmethod
@@ -862,10 +874,11 @@ _MISSING_ACTION_FINAL = (
 def _mistyped_correction(detail: str) -> str:
     return (
         "Your reply was rejected because these action ARGUMENTS had the wrong "
-        f"type: {detail}. The action itself was present — resend the same reply "
-        "with each argument as its real JSON type: a list must be a JSON array "
-        "(not that array quoted as a string), an object a JSON object, a number "
-        "a bare number."
+        f"type: {detail}. The action itself exists and is valid — never conclude "
+        "from this message that a tool is unavailable, and do not drop the "
+        "action. Resend the same reply with each argument as its real JSON "
+        "type: a list must be a JSON array (not that array quoted as a "
+        "string), an object a JSON object, a number a bare number."
     )
 
 
@@ -968,9 +981,10 @@ async def _invoke_with_action_repair(
                     "{...params}}] — include it in your next reply."
                 ) from e
             logger.info(
-                "Retrying LLM call after %s (attempt %d)",
+                "Retrying LLM call after %s (attempt %d)%s",
                 "mis-typed action arguments" if detail else "missing/malformed action",
                 attempt + 1,
+                f": {detail}" if detail else "",
             )
             extra.append(UserMessage(content=correction))
 
