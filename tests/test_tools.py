@@ -3957,3 +3957,29 @@ def test_backfill_brain_fields_only_fires_on_a_silent_step() -> None:
     spoken = {"action": [], "next_goal": "already said something"}
     assert not backfill_brain_fields(_Response([_Block(spoken)]), "reasoning")
     assert "memory" not in spoken
+
+
+async def test_sandbox_crash_says_which_files_survived_where_the_model_can_read_it(
+    tmp_path,
+) -> None:
+    """Which files survived matters most when the script crashed, and `error` is the
+    one field that cannot carry it."""
+    result = await _run_sandbox(
+        tmp_path, "save_json({'a': 1}, 'kept.json')\nraise ValueError('boom')"
+    )
+    assert result.error
+    visible = _seen_by_model(result)
+    assert "kept.json" in visible
+
+
+def test_clip_marked_says_when_it_cut_something() -> None:
+    from openbrowse.agent.tools import _clip_marked
+
+    short = "fits fine"
+    assert _clip_marked(short) == short
+
+    long_value = "z" * 900
+    clipped = _clip_marked(long_value)
+    assert clipped.startswith("z" * 500)
+    assert "900 chars total" in clipped
+    assert "cut here" in clipped

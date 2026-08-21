@@ -50,6 +50,7 @@ _SANDBOX_STDOUT_PREVIEW_CHARS = 2500
 _CAPPED_READ_PREVIEW_CHARS = 8000
 _GUARD_MIN_CHARS = 500
 _RECALL_INLINE_CHARS = 8000
+_EXTRA_VALUE_CHARS = 500
 _UNREAD_LINKS_KEY = "_unread_links"
 _READ_DONE_KEY = "_read_pages_done"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
@@ -1848,10 +1849,15 @@ def register_code_tools(
                 "No files were saved by this script — call save_json(obj, 'name.json') "
                 "if a later action needs the data."
             )
-        if result.error:
-            result.error = f"{result.error}\n{note}"[:10000]
-        elif result.extracted_content is not None:
-            result.extracted_content = f"{result.extracted_content}\n{note}"
+        # Which files survived matters most when the script crashed, and `error` is
+        # the one field that cannot carry it — browser-use renders anything over 200
+        # chars as its first 100 plus last 100.
+        visible = model_visible_attrs(result)
+        if visible:
+            target = visible[-1]
+            setattr(result, target, f"{str(getattr(result, target) or '')}\n{note}")
+        else:
+            result.extracted_content = note
         return result
 
 
@@ -2735,6 +2741,17 @@ _GUARDED_DEDUP_ACTIONS = ("read_output", "search_output")
 _REPEAT_BREAK_AT = 2
 
 
+def _clip_marked(value: Any, limit: int = _EXTRA_VALUE_CHARS) -> str:
+    """Clip an overflow value the way ``elide_long_values`` does — saying so. A bare
+    slice into a stored row reads as the whole value, so nothing ever prompts the agent
+    to go back to pages.json for the rest.
+    """
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… <{len(text)} chars total, cut here>"
+
+
 def model_visible_attrs(result: ActionResult) -> tuple[str, ...]:
     """The ``ActionResult`` fields browser-use actually forwards to the model, in the
     order it renders them. Mirrors ``_update_agent_history_description``: a result's
@@ -3540,21 +3557,21 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
                 and _norm_evidence(seg).replace(" ", "") not in stored_blob
             ]
             if residue:
-                leftovers["source_row"] = " • ".join(residue)[:500]
+                leftovers["source_row"] = _clip_marked(" • ".join(residue))
         if leftovers:
             if extra_kind == "undeclared":
                 row[extra_field] = [
-                    {"key": k, "value": str(v)[:500]} for k, v in leftovers.items()
+                    {"key": k, "value": _clip_marked(v)} for k, v in leftovers.items()
                 ]
             elif extra_kind == "kv":
                 for key_name in ("key", "name"):
                     shaped = [
-                        {key_name: k, "value": str(v)[:500]} for k, v in leftovers.items()
+                        {key_name: k, "value": _clip_marked(v)} for k, v in leftovers.items()
                     ]
                     if _try_set(extra_field, shaped):
                         break
             else:
-                _try_set(extra_field, {k: str(v)[:500] for k, v in leftovers.items()})
+                _try_set(extra_field, {k: _clip_marked(v) for k, v in leftovers.items()})
     return row
 
 
