@@ -60,6 +60,45 @@ def test_restore_tolerates_a_missing_entry() -> None:
     assert "screenshot" not in _union_members(tools)
 
 
+def test_restore_reconverts_initial_actions_for_the_new_classes() -> None:
+    # The constructor parses initial_actions with the pre-rebuild classes; the
+    # live failure was those stale instances failing validation inside the new
+    # AgentOutput at run start. The restore must re-convert them.
+    from browser_use.agent.views import AgentOutput
+
+    tools = Tools()
+    saved = tools.registry.registry.actions.get("screenshot")
+    tools.exclude_action("screenshot")
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.tools = tools
+            self._setup_action_models()
+            self.initial_actions = self._convert_initial_actions(
+                [{"navigate": {"url": "http://127.0.0.1:8621/a.html", "new_tab": False}}]
+            )
+
+        def _setup_action_models(self) -> None:
+            self.ActionModel = tools.registry.create_action_model()
+            self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
+
+        def _convert_initial_actions(self, dicts: list) -> list:
+            return [self.ActionModel.model_validate(d) for d in dicts]
+
+    agent = _Agent()
+    _restore_screenshot_action(tools, saved, agent)
+    # The exact validation that exploded live: initial actions validated by the
+    # rebuilt AgentOutput before the first step runs.
+    out = agent.AgentOutput(
+        evaluation_previous_goal="Start",
+        memory="",
+        next_goal="Start",
+        action=agent.initial_actions,
+    )
+    assert out.action
+    assert "screenshot" in _union_members(tools)
+
+
 # ── correction selection ─────────────────────────────────────────────────────
 
 # Abridged from a real failed run: every variant flags the name as extra and

@@ -929,6 +929,14 @@ def _restore_screenshot_action(tools: Any, action_entry: Any, agent: Any) -> Non
     actions["screenshot"] = action_entry
     try:
         agent._setup_action_models()
+        # The constructor parsed initial_actions with the classes the rebuild
+        # just replaced; validating stale instances against the new AgentOutput
+        # fails every session at startup. Re-convert them the way upstream's own
+        # skill registration does after the same rebuild.
+        if getattr(agent, "initial_actions", None):
+            agent.initial_actions = agent._convert_initial_actions(
+                [a.model_dump(exclude_unset=True) for a in agent.initial_actions]
+            )
     except Exception:
         logger.warning(
             "action model rebuild after screenshot restore failed", exc_info=True
