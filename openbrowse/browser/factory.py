@@ -214,6 +214,10 @@ async def launch_chrome(slot: DisplaySlot) -> str:
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
         "--window-size=1920,1080",
+        # Without this, a renderer killed for malformed IPC dies silently; with
+        # it, the browser process logs "Terminating renderer for bad IPC
+        # message, reason N" naming the offending validator.
+        "--enable-logging=stderr",
     ]
     if settings.chrome_light_flags:
         # @nonobvious(deliberately-missing): no site-isolation collapse
@@ -228,12 +232,19 @@ async def launch_chrome(slot: DisplaySlot) -> str:
             "--disable-background-networking",
         ]
 
-    slot.chrome_proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={**os.environ, "DISPLAY": f":{slot.display_num}"},
-    )
+    # Append mode so a mid-analysis relaunch cannot erase an earlier crash
+    # record; the child owns its fd, so closing the parent handle is safe.
+    log_path = f"/tmp/bu-chrome-{slot.display_num}.log"
+    chrome_log = open(log_path, "ab")
+    try:
+        slot.chrome_proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=chrome_log,
+            stderr=chrome_log,
+            env={**os.environ, "DISPLAY": f":{slot.display_num}"},
+        )
+    finally:
+        chrome_log.close()
 
     await wait_for_cdp(slot.cdp_port)
 
