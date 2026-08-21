@@ -70,6 +70,7 @@ _EXTRA_VALUE_CHARS = 500
 _SANDBOX_ERROR_CHARS = 2000
 _UNREAD_LINKS_KEY = "_unread_links"
 _READ_PAGES_KEY = "_read_pages_all"
+_DRAFTS_KEY = "_read_pages_drafts"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -799,6 +800,7 @@ _RESERVED_CLIPBOARD_KEYS = frozenset(
         "_visited",
         "_unread_links",
         "_read_pages_all",
+        "_read_pages_drafts",
         "_read_items",
         "_read_failed",
         "_read_failed_frame",
@@ -1462,14 +1464,19 @@ def register_fetch_tool(tools: Tools) -> None:
                 )
             text = resp.text
             return await deliver(
+                # body first so an over-budget sample shows actual content rather than
+                # being consumed by response headers.
                 {
                     "status_code": resp.status_code,
-                    "headers": dict(resp.headers),
                     "body": text,
+                    "headers": dict(resp.headers),
                 },
                 note=f"Fetched {url} — HTTP {resp.status_code}, {len(text)} chars of body.",
                 file_system=file_system,
                 filename=_fs_name_from_url(url, resp.headers.get("content-type", ""), text),
+                # the file keeps the RAW body: its extension is derived from the body's
+                # own content type, so a .html or .json file must hold what it says.
+                file_content=text,
             )
         except httpx.HTTPError as e:
             return ActionResult(error=f"HTTP request failed: {e}")
@@ -1845,10 +1852,8 @@ def register_code_tools(
         # Which files survived matters most when the script crashed, and `error` is
         # the one field that cannot carry it — browser-use renders anything over 200
         # chars as its first 100 plus last 100.
-        visible = model_visible_attrs(result)
-        if visible:
-            target = visible[-1]
-            setattr(result, target, f"{str(getattr(result, target) or '')}\n{note}")
+        if model_visible_attrs(result):
+            amend_note(result, f" {note}")
         else:
             result.extracted_content = note
         return result
@@ -2217,7 +2222,12 @@ def register_tab_tools(
             if store is not None and store.item_model is not None:
                 drafts: list[dict[str, Any]] = []
                 thin_urls: list[str] = []
-                for p in all_pages:
+                # @nonobvious(forced-by): draft only THIS batch and carry the earlier
+                # rows forward. Re-drafting every page read so far would make a
+                # multi-batch crawl quadratic, and on a 400-page run that is thousands
+                # of redundant row builds on a Pi.
+                drafts.extend(clipboard.get(_DRAFTS_KEY) or [])
+                for p in pages:
                     if p.get("error"):
                         continue
                     if len((p.get("text") or "").strip()) < _MIN_PAGE_TEXT_CHARS:
@@ -2226,6 +2236,7 @@ def register_tab_tools(
                     row = _draft_row(store, p)
                     if row:
                         drafts.append(row)
+                clipboard[_DRAFTS_KEY] = drafts
                 if drafts:
                     try:
                         await file_system.write_file(
@@ -2333,14 +2344,34 @@ def register_tab_tools(
             # thinks it has read everything stops early, and one that thinks work
             # remains calls into an error. Say the count, say the exact next call, and
             # say plainly when there is nothing left.
-            queue_state = (
-                f" {len(remainder)} link(s) are still UNREAD and are queued: call "
-                "read_pages() again with NO arguments to read the next batch — it "
-                "resumes from the queue by itself, so do not re-pass URLs you have "
-                "already read."
-                if remainder
-                else " Nothing is queued — every saved link has now been read."
-            )
+            # @nonobvious(must-hold): what to say depends on WHICH call this was. An
+            # explicit-urls call is a side errand that never touches the queue, so its
+            # own leftovers are NOT queued and the real queue may still hold work.
+            # Describing either wrongly makes the agent stop early, or wait for a
+            # resume that never comes.
+            queued_now = list(clipboard.get(_UNREAD_LINKS_KEY) or [])
+            if caller_gave_urls:
+                queue_state = (
+                    f" {len(remainder)} of the URLs you passed were beyond the "
+                    f"{_READ_PAGES_MAX}-page cap and were NOT read — pass those "
+                    "remaining URLs explicitly in another call."
+                    if remainder
+                    else ""
+                ) + (
+                    f" Separately, {len(queued_now)} saved link(s) are still queued from "
+                    "the main crawl: call read_pages() with NO arguments to resume it."
+                    if queued_now
+                    else ""
+                )
+            elif remainder:
+                queue_state = (
+                    f" {len(remainder)} link(s) are still UNREAD and are queued: call "
+                    "read_pages() again with NO arguments to read the next batch — it "
+                    "resumes from the queue by itself, so do not re-pass URLs you have "
+                    "already read."
+                )
+            else:
+                queue_state = " Nothing is queued — every saved link has now been read."
             return await deliver(
                 status,
                 note=(
@@ -2646,6 +2677,10 @@ def register_tab_tools(
                         link["offhost"] = True
                         offhost_count += 1
 
+        # @nonobvious(must-hold): a new link set invalidates the old resume queue.
+        # Leaving a drained queue behind makes the next read_pages() take the
+        # "nothing left to read" branch and skip these links entirely.
+        clipboard.pop(_UNREAD_LINKS_KEY, None)
         clipboard["found_links"] = [link["href"] for link in links]
         clipboard["found_links_offhost"] = {
             link["href"] for link in links if link.get("offhost")
@@ -2767,6 +2802,7 @@ async def deliver(
     file_system: Any,
     filename: str,
     formatter: Any = None,
+    file_content: str | None = None,
 ) -> ActionResult:
     """The one way a tool hands data to the model.
 
@@ -2797,7 +2833,9 @@ async def deliver(
     saved: str | None = filename
     if file_system is not None and filename:
         try:
-            await file_system.write_file(filename, body)
+            await file_system.write_file(
+                filename, body if file_content is None else file_content
+            )
         except Exception:
             logger.warning("deliver: failed to save %s", filename, exc_info=True)
             saved = None
@@ -2834,6 +2872,26 @@ async def deliver(
         )
     text = json.dumps(envelope, indent=2, default=str)
     return ActionResult(extracted_content=text, long_term_memory=text)
+
+
+def amend_note(result: ActionResult, extra: str) -> None:
+    """Add a sentence to a delivered reply without breaking it.
+
+    Appending to the string would put text after the envelope's closing brace and stop
+    the reply parsing, which is the one property the envelope exists to give. So the
+    text goes into the ``note`` field instead. Results that are not envelopes (upstream
+    actions, plain notes) fall back to a plain append, which is correct for them.
+    """
+    for attr in model_visible_attrs(result) or ("long_term_memory",):
+        current = str(getattr(result, attr, "") or "")
+        try:
+            envelope = json.loads(current)
+            if not isinstance(envelope, dict) or "note" not in envelope:
+                raise ValueError("not an envelope")
+            envelope["note"] = f"{envelope['note']}{extra}"
+            setattr(result, attr, json.dumps(envelope, indent=2, default=str))
+        except Exception:
+            setattr(result, attr, current + extra)
 
 
 def model_visible_attrs(result: ActionResult) -> tuple[str, ...]:
@@ -2955,6 +3013,7 @@ def register_output_guard_overrides(tools: Tools) -> None:
         action_name: str,
         readout_name: str,
         cap: bool,
+        params_key: str = "",
     ) -> ActionResult:
         attrs = model_visible_attrs(result)
         # An action failing identically over and over is the commonest real loop, and
@@ -2962,7 +3021,8 @@ def register_output_guard_overrides(tools: Tools) -> None:
         # must be counted before that case is skipped, not after.
         repeats = _bump_streak(
             action_name,
-            "\n".join(str(getattr(result, a) or "") for a in attrs)
+            f"{params_key}\n"
+            + "\n".join(str(getattr(result, a) or "") for a in attrs)
             + str(getattr(result, "error", "") or ""),
         )
         if not attrs:
@@ -3027,8 +3087,7 @@ def register_output_guard_overrides(tools: Tools) -> None:
                 "anything different. Change the approach — different parameters, a "
                 "different tool, or record what you already have and move on."
             )
-            target = attrs[-1]
-            setattr(result, target, str(getattr(result, target) or "") + note)
+            amend_note(result, note)
         return result
 
     def _install(name: str, cap: bool) -> None:
@@ -3048,7 +3107,16 @@ def register_output_guard_overrides(tools: Tools) -> None:
         ) -> Any:
             result = await _original(params=params, **kwargs)
             if isinstance(result, ActionResult):
-                return await _guard(result, kwargs.get("file_system"), _name, _readout, _cap)
+                # @nonobvious(forced-by): two DIFFERENT scripts that both print nothing
+                # and save nothing render identically, so output alone would read as a
+                # loop. The call's own arguments are what distinguish them.
+                try:
+                    params_key = guard_key(repr(params))
+                except Exception:
+                    params_key = ""
+                return await _guard(
+                    result, kwargs.get("file_system"), _name, _readout, _cap, params_key
+                )
             return result
 
         entry.function = wrapped
@@ -3152,7 +3220,9 @@ def _attrs_from_selector(selector: str) -> list[str]:
     return names
 
 
-async def _run_upstream_query(browser_session: Any, js: str) -> dict[str, Any] | None:
+async def _run_upstream_query(
+    browser_session: Any, builder: Any, **kwargs: Any
+) -> dict[str, Any] | None:
     """Run one of browser-use's own query scripts ourselves and return its raw result.
 
     ``find_elements`` and ``search_page`` render their findings to a string and hand
@@ -3161,10 +3231,13 @@ async def _run_upstream_query(browser_session: Any, js: str) -> dict[str, Any] |
     Returns None when the query cannot be run, which tells the caller to fall back to
     the upstream action rather than fail the step.
     """
-    if browser_session is None or _build_find_elements_js is None:
+    # @nonobvious(must-hold): the JS is built HERE, not passed in. Built at the call
+    # site it would be evaluated as an argument, so a missing upstream symbol would
+    # raise before this guard could fall back — the guard would be dead code.
+    if browser_session is None or builder is None:
         return None
     try:
-        data = await _eval_js(browser_session, js)
+        data = await _eval_js(browser_session, builder(**kwargs))
     except Exception:
         logger.warning("upstream query failed; falling back to the built-in", exc_info=True)
         return None
@@ -3193,24 +3266,30 @@ def register_find_elements_flow(tools: Tools) -> None:
         session = kwargs.get("browser_session")
         data = await _run_upstream_query(
             session,
-            _build_find_elements_js(
-                selector=selector,
-                attributes=attributes or None,
-                max_results=int(getattr(params, "max_results", 50) or 50),
-                include_text=bool(getattr(params, "include_text", True)),
-            ),
+            _build_find_elements_js,
+            selector=selector,
+            attributes=attributes or None,
+            max_results=int(getattr(params, "max_results", 50) or 50),
+            include_text=bool(getattr(params, "include_text", True)),
         )
         if data is None:
             return await original(params=params, **kwargs)
         if isinstance(data, dict) and data.get("error"):
             return ActionResult(error=f"find_elements: {data['error']}")
         total = int(data.get("total", 0) or 0)
+        rows = data.get("elements", []) or []
         return await deliver(
-            data.get("elements", []),
+            rows,
             note=(
                 f"find_elements matched {total} element(s) for {selector!r}"
                 + (f", reporting {', '.join(attributes)}" if attributes else "")
                 + ("." if total else " — nothing on the page matches that selector.")
+                + (
+                    f" Only {len(rows)} of them are here — raise max_results to see the "
+                    "rest, or narrow the selector."
+                    if total > len(rows)
+                    else ""
+                )
             ),
             file_system=kwargs.get("file_system"),
             filename="found_elements.json",
@@ -3242,14 +3321,13 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
         pattern = str(getattr(params, "pattern", "") or "")
         data = await _run_upstream_query(
             kwargs.get("browser_session"),
-            _build_search_page_js(
-                pattern=pattern,
-                regex=bool(getattr(params, "regex", False)),
-                case_sensitive=bool(getattr(params, "case_sensitive", False)),
-                context_chars=int(getattr(params, "context_chars", 150) or 150),
-                css_scope=getattr(params, "css_scope", None),
-                max_results=int(getattr(params, "max_results", 50) or 50),
-            ),
+            _build_search_page_js,
+            pattern=pattern,
+            regex=bool(getattr(params, "regex", False)),
+            case_sensitive=bool(getattr(params, "case_sensitive", False)),
+            context_chars=int(getattr(params, "context_chars", 150) or 150),
+            css_scope=getattr(params, "css_scope", None),
+            max_results=int(getattr(params, "max_results", 50) or 50),
         )
         if data is None:
             result = await original(params=params, **kwargs)
@@ -3257,11 +3335,18 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
             result = ActionResult(error=f"search_page: {data['error']}")
         else:
             total = int(data.get("total", 0) or 0)
+            rows = data.get("matches", []) or []
             result = await deliver(
-                data.get("matches", []),
+                rows,
                 note=(
                     f"search_page found {total} match(es) for {pattern!r} on the page "
                     "currently on screen."
+                    + (
+                        f" Only {len(rows)} of them are here — raise max_results to see "
+                        "the rest."
+                        if total > len(rows)
+                        else ""
+                    )
                 ),
                 file_system=kwargs.get("file_system"),
                 filename="page_matches.json",
@@ -3284,12 +3369,8 @@ def register_search_page_flow(tools: Tools, clipboard: dict[str, Any]) -> None:
                 "either. To check every read page in one step, search "
                 "pages.json with run_code_file."
             )
-        visible = model_visible_attrs(result) if isinstance(result, ActionResult) else ()
-        if notes and visible:
-            target = visible[-1]
-            setattr(
-                result, target, str(getattr(result, target) or "") + " NOTE: " + " ".join(notes)
-            )
+        if notes and isinstance(result, ActionResult):
+            amend_note(result, " NOTE: " + " ".join(notes))
         return result
 
     entry.function = wrapped

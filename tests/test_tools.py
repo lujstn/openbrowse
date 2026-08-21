@@ -4307,3 +4307,189 @@ async def test_a_blank_narrative_reply_is_retried_then_accepted() -> None:
     result = await _invoke_with_action_repair(always_blank, [], object())
     assert calls["n"] == 3, "two corrective retries, then accept rather than kill the run"
     assert result is not None
+
+
+# --- regressions from the high-effort review of the delivery contract -------
+
+
+async def test_appended_notes_keep_the_reply_parseable() -> None:
+    """Appending after the envelope's closing brace would stop the reply parsing,
+    which is the one property the envelope exists to provide."""
+    import json as _json
+
+    from openbrowse.agent.tools import amend_note, deliver
+
+    result = await deliver(
+        [{"a": 1}], note="found one.", file_system=_FakeFileSystem(), filename="a.json"
+    )
+    amend_note(result, " STOP REPEATING THIS: same result twice.")
+
+    envelope = _json.loads(_seen_by_model(result))
+    assert "STOP REPEATING" in envelope["note"]
+    assert envelope["data"] == [{"a": 1}]
+
+
+def test_amend_note_falls_back_for_non_envelope_results() -> None:
+    from openbrowse.agent.tools import amend_note
+
+    plain = ActionResult(extracted_content="just a note")
+    amend_note(plain, " and more.")
+    assert plain.extracted_content == "just a note and more."
+
+
+async def test_upstream_query_falls_back_when_the_builder_is_missing() -> None:
+    """The guard was dead code: building the JS at the call site raised before the
+    None check could fall back."""
+    from openbrowse.agent.tools import _run_upstream_query
+
+    assert await _run_upstream_query(object(), None, selector="a") is None
+    assert await _run_upstream_query(None, lambda **kw: "js") is None
+
+
+async def test_side_errand_does_not_claim_the_queue_is_empty(monkeypatch) -> None:
+    """An explicit-urls call never touches the queue, so saying 'nothing is queued'
+    would stop the crawl with links still pending."""
+    _tools, entry, clipboard, _calls, urls = _queue_fixture(monkeypatch)
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert clipboard["_unread_links"] == urls[3:]
+
+    errand = await entry.function(
+        browser_session=object(),
+        file_system=_FakeFileSystem(),
+        urls=["https://other.com/z"],
+    )
+    note = _delivered(errand)["note"]
+    assert "Nothing is queued" not in note
+    assert "still queued" in note
+
+
+async def test_explicit_call_does_not_promise_a_resume_it_cannot_do(monkeypatch) -> None:
+    _tools, entry, _clip, _calls, _urls = _queue_fixture(monkeypatch, count=5, cap=3)
+
+    over = await entry.function(
+        browser_session=object(),
+        file_system=_FakeFileSystem(),
+        urls=[f"https://given.com/{i}" for i in range(5)],
+    )
+    note = _delivered(over)["note"]
+    assert "pass those remaining URLs explicitly" in note
+    assert "resumes from the queue by itself" not in note
+
+
+async def test_a_new_find_links_clears_the_old_resume_queue(monkeypatch) -> None:
+    """A drained queue from page 1 made read_pages() skip page 2's links entirely."""
+    import openbrowse.agent.tools as tools_mod
+
+    _tools, entry, clipboard, calls, urls = _queue_fixture(monkeypatch)
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert clipboard["_unread_links"] == []
+
+    # page 2: a fresh find_links replaces the link set
+    clipboard.pop(tools_mod._UNREAD_LINKS_KEY, None)
+    clipboard["found_links"] = ["https://x.com/new-1", "https://x.com/new-2"]
+
+    await entry.function(browser_session=object(), file_system=_FakeFileSystem())
+    assert calls[-1] == ["https://x.com/new-1", "https://x.com/new-2"]
+
+
+async def test_repeat_breaker_does_not_fire_on_two_different_scripts() -> None:
+    """Two different scripts that both print nothing render identically; only the
+    call's own arguments tell them apart."""
+    from types import SimpleNamespace
+
+    from openbrowse.agent.tools import register_output_guard_overrides
+
+    async def silent(params=None, **kwargs):
+        return ActionResult(extracted_content="(no output)\nNo files were saved.")
+
+    from openbrowse.agent.tools import register_code_tools
+
+    tools = Tools()
+    register_code_tools(tools)
+    entry = tools.registry.registry.actions["run_code_file"]
+    entry.function = silent
+    register_output_guard_overrides(tools)
+
+    first = _seen_by_model(await entry.function(params=SimpleNamespace(name="one.py")))
+    second = _seen_by_model(await entry.function(params=SimpleNamespace(name="two.py")))
+    assert "STOP REPEATING" not in first
+    assert "STOP REPEATING" not in second, "different scripts are not a loop"
+
+    third = _seen_by_model(await entry.function(params=SimpleNamespace(name="two.py")))
+    assert "STOP REPEATING" in third, "the same script twice still is"
+
+
+async def test_http_fetch_file_holds_the_raw_body_its_name_promises() -> None:
+    """The file's extension comes from the body's content type, so it must hold the
+    body — a script doing read_json(...)['results'] got the envelope instead."""
+    from openbrowse.agent.tools import deliver
+
+    fs = _FakeFileSystem()
+    raw = '{"results": [1, 2, 3]}'
+    await deliver(
+        {"status_code": 200, "body": raw, "headers": {}},
+        note="fetched.",
+        file_system=fs,
+        filename="fetch_api_example_com.json",
+        file_content=raw,
+    )
+    import json as _json
+
+    assert _json.loads(fs.files["fetch_api_example_com.json"])["results"] == [1, 2, 3]
+
+
+async def test_a_large_fetch_sample_shows_body_not_headers() -> None:
+    from openbrowse.agent.tools import deliver
+
+    body = "CONTENT-" * 2000
+    envelope = _delivered(
+        await deliver(
+            {"status_code": 200, "body": body, "headers": {"x-" + "k" * 80: "v" * 80}},
+            note="fetched.",
+            file_system=_FakeFileSystem(),
+            filename="page.html",
+            file_content=body,
+        )
+    )
+    assert envelope["truncated"] is True
+    assert "CONTENT-" in envelope["sample"], "the sample must show actual body"
+
+
+async def test_narrative_retries_do_not_consume_the_action_repair_budget() -> None:
+    """A prose-less reply must not cost a later mis-typed action its last chance —
+    that path abandons the step outright."""
+    from types import SimpleNamespace
+
+    from openbrowse.agent.runner import _invoke_with_action_repair
+
+    blank = SimpleNamespace(
+        completion=SimpleNamespace(
+            evaluation_previous_goal="", memory="", next_goal="",
+            what_i_see="", plan_to_goal="", next_move="",
+        )
+    )
+    good = SimpleNamespace(
+        completion=SimpleNamespace(
+            evaluation_previous_goal="", memory="", next_goal="carry on",
+            what_i_see="", plan_to_goal="", next_move="",
+        )
+    )
+    seq = [blank, blank, "boom", "boom", good]
+    calls = {"n": 0}
+
+    async def flaky(msgs):
+        item = seq[calls["n"]]
+        calls["n"] += 1
+        if item == "boom":
+            raise ValueError(
+                "1 validation error for AgentOutput\naction.0.read_pages.urls: "
+                "Input should be a valid list"
+            )
+        return item
+
+    result = await _invoke_with_action_repair(flaky, [], object())
+    assert result is good, "two blank replies must leave the repair budget intact"
+    assert calls["n"] == 5

@@ -861,6 +861,8 @@ _NARRATIVE_FIELDS = (
     "next_move",
 )
 
+_MAX_NARRATIVE_RETRIES = 2
+
 _BLANK_NARRATIVE_CORRECTION = (
     "Your reply left every narrative field empty. Those fields are how you tell your "
     "next step what you just did and why — a step that fills none of them arrives in "
@@ -894,16 +896,30 @@ async def _invoke_with_action_repair(
     """
     extra: list[Any] = []
     last_detail = ""
-    for attempt in range(3):
+    attempt = -1
+    narrative_retries = 0
+    # @nonobvious(must-hold): the narrative retry has its own budget. Sharing the
+    # action-repair attempts would mean one prose-less reply costs a later mis-typed
+    # action its last chance, and that path abandons the step outright.
+    while attempt < 2:
+        attempt += 1
         try:
             result = await invoke(list(messages) + extra)
-            if attempt == 2 or not _has_no_narrative(getattr(result, "completion", None)):
+            if narrative_retries >= _MAX_NARRATIVE_RETRIES or not _has_no_narrative(
+                getattr(result, "completion", None)
+            ):
                 return result
             # The schema requires these fields but is satisfied by empty strings, and a
             # step that says nothing lands in history as its action's result alone. Ask
-            # again rather than accept it; accept on the last attempt regardless,
-            # because a model that will not write prose should not kill a working run.
-            logger.info("Retrying LLM call after a reply with no narrative (attempt %d)", attempt + 1)
+            # again rather than accept it; accept once the budget is spent, because a
+            # model that will not write prose should not kill an otherwise working run.
+            narrative_retries += 1
+            attempt -= 1
+            logger.info(
+                "Retrying LLM call after a reply with no narrative (%d/%d)",
+                narrative_retries,
+                _MAX_NARRATIVE_RETRIES,
+            )
             extra.append(UserMessage(content=_BLANK_NARRATIVE_CORRECTION))
             continue
         except Exception as e:
