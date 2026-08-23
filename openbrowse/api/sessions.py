@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from openbrowse.agent import live
+from openbrowse.api.errors import error_responses
 from openbrowse.agent.pool import pool
 from openbrowse.agent.runner import _resolve_model, effort_when_unset, validate_effort
 from openbrowse.auth import require_api_key
@@ -256,7 +257,12 @@ def _restart_fields(
     return changed
 
 
-@router.post("", response_model=SessionResponse)
+@router.post(
+    "",
+    response_model=SessionResponse,
+    responses=error_responses(401, 404, 422, 429),
+    operation_id="createSession",
+)
 async def create_session(
     body: RunTaskRequest | None = None,
     _: str = Depends(require_api_key),
@@ -369,7 +375,12 @@ async def create_session(
     return _to_session_response(session)
 
 
-@router.get("", response_model=SessionListResponse)
+@router.get(
+    "",
+    response_model=SessionListResponse,
+    responses=error_responses(401, 422, 429),
+    operation_id="listSessions",
+)
 async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -385,7 +396,12 @@ async def list_sessions(
     )
 
 
-@router.get("/{session_id}", response_model=SessionResponse)
+@router.get(
+    "/{session_id}",
+    response_model=SessionResponse,
+    responses=error_responses(401, 404, 429),
+    operation_id="getSession",
+)
 async def get_session(session_id: str, _: str = Depends(require_api_key)):
     """Fetch one session by id, with its status, step count, live view URL and structured output as they stand right now."""
     session = await crud.get_session(session_id)
@@ -394,7 +410,12 @@ async def get_session(session_id: str, _: str = Depends(require_api_key)):
     return _to_session_response(session)
 
 
-@router.post("/{session_id}/stop", response_model=SessionResponse)
+@router.post(
+    "/{session_id}/stop",
+    response_model=SessionResponse,
+    responses=error_responses(401, 404, 429),
+    operation_id="stopSession",
+)
 async def stop_session(
     session_id: str,
     body: StopSessionRequest | None = None,
@@ -418,7 +439,12 @@ async def stop_session(
     return _to_session_response(await crud.get_session(session_id))
 
 
-@router.delete("/{session_id}", status_code=204)
+@router.delete(
+    "/{session_id}",
+    status_code=204,
+    responses=error_responses(401, 404, 429),
+    operation_id="deleteSession",
+)
 async def delete_session(session_id: str, _: str = Depends(require_api_key)):
     """Cancel the session if it is still running, then delete it and everything stored against it."""
     session = await crud.get_session(session_id)
@@ -428,7 +454,12 @@ async def delete_session(session_id: str, _: str = Depends(require_api_key)):
     await crud.delete_session(session_id)
 
 
-@router.get("/{session_id}/messages", response_model=MessageListResponse)
+@router.get(
+    "/{session_id}/messages",
+    response_model=MessageListResponse,
+    responses=error_responses(401, 404, 422, 429),
+    operation_id="listSessionMessages",
+)
 async def list_messages(
     session_id: str,
     after: str | None = Query(None),

@@ -26,13 +26,16 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.utils import is_body_allowed_for_status_code
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openbrowse import __version__, prefetch, system_metrics, updates
 from openbrowse.auth import require_api_key
 from openbrowse.agent.pool import pool
 from openbrowse.api.profiles import router as profiles_router
+from openbrowse.api.errors import error_envelope
 from openbrowse.api.sessions import router as sessions_router
 from openbrowse.browser.factory import display_manager
 from openbrowse.config import settings
@@ -116,9 +119,34 @@ def _jsonable_finite(value: Any) -> Any:
 # the JSON response encoder refuses to serialise, turning a clean 422 into a 500.
 @app.exception_handler(RequestValidationError)
 async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    detail = _jsonable_finite(jsonable_encoder(exc.errors()))
+    if request.url.path.startswith("/v3"):
+        return JSONResponse(
+            status_code=422,
+            content=error_envelope(
+                422, detail, code="REQUEST_VALIDATION_FAILED"
+            ).model_dump(mode="json"),
+        )
     return JSONResponse(
         status_code=422,
-        content={"detail": _jsonable_finite(jsonable_encoder(exc.errors()))},
+        content={"detail": detail},
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error_handler(request: Request, exc: StarletteHTTPException):
+    if not is_body_allowed_for_status_code(exc.status_code):
+        return Response(status_code=exc.status_code, headers=exc.headers)
+    if not request.url.path.startswith("/v3"):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_envelope(exc.status_code, exc.detail).model_dump(mode="json"),
+        headers=exc.headers,
     )
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from openbrowse.auth import require_api_key
+from openbrowse.api.errors import error_responses
 from openbrowse.db import crud
 from openbrowse.profiles import storage
 from openbrowse.profiles.importer import ProfileImportError, import_profile
@@ -69,7 +70,13 @@ def _to_view(row: dict[str, Any]) -> ProfileView:
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 
-@router.post("", response_model=ProfileView, status_code=201)
+@router.post(
+    "",
+    response_model=ProfileView,
+    status_code=201,
+    responses=error_responses(401, 422, 429),
+    operation_id="createProfile",
+)
 async def create_profile(
     body: ProfileCreateRequest | None = None,
     _: str = Depends(require_api_key),
@@ -81,7 +88,12 @@ async def create_profile(
     return _to_view(profile)
 
 
-@router.get("", response_model=ProfileListResponse)
+@router.get(
+    "",
+    response_model=ProfileListResponse,
+    responses=error_responses(401, 422, 429),
+    operation_id="listProfiles",
+)
 async def list_profiles(
     page: int = 1,
     page_size: int = 20,
@@ -98,7 +110,12 @@ async def list_profiles(
     )
 
 
-@router.get("/{profile_id}", response_model=ProfileView)
+@router.get(
+    "/{profile_id}",
+    response_model=ProfileView,
+    responses=error_responses(401, 404, 429),
+    operation_id="getProfile",
+)
 async def get_profile(profile_id: str, _: str = Depends(require_api_key)):
     """Fetch a single profile by id. Returns 404 if no profile has that id."""
     profile = await crud.get_profile(profile_id)
@@ -107,8 +124,18 @@ async def get_profile(profile_id: str, _: str = Depends(require_api_key)):
     return _to_view(profile)
 
 
-@router.patch("/{profile_id}", response_model=ProfileView)
-@router.put("/{profile_id}", response_model=ProfileView)
+@router.patch(
+    "/{profile_id}",
+    response_model=ProfileView,
+    responses=error_responses(401, 404, 422, 429),
+    operation_id="patchProfile",
+)
+@router.put(
+    "/{profile_id}",
+    response_model=ProfileView,
+    responses=error_responses(401, 404, 422, 429),
+    operation_id="updateProfile",
+)
 async def update_profile(
     profile_id: str,
     body: ProfileUpdateRequest,
@@ -127,7 +154,12 @@ async def update_profile(
     return _to_view(updated)
 
 
-@router.delete("/{profile_id}", status_code=204)
+@router.delete(
+    "/{profile_id}",
+    status_code=204,
+    responses=error_responses(401, 404, 429),
+    operation_id="deleteProfile",
+)
 async def delete_profile(profile_id: str, _: str = Depends(require_api_key)):
     """Delete a profile and the browser state stored against it. The cookies and per-origin storage go with it."""
     existing = await crud.get_profile(profile_id)
@@ -137,7 +169,12 @@ async def delete_profile(profile_id: str, _: str = Depends(require_api_key)):
     await crud.delete_profile(profile_id)
 
 
-@router.put("/{profile_id}/storage-state", response_model=ProfileView)
+@router.put(
+    "/{profile_id}/storage-state",
+    response_model=ProfileView,
+    responses=error_responses(400, 401, 422, 429),
+    operation_id="putProfileStorageState",
+)
 async def put_storage_state(
     profile_id: str,
     body: StorageStateBody,
