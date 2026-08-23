@@ -4,13 +4,15 @@ from dataclasses import replace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
 
 from openbrowse import auth_throttle
-from openbrowse.api.errors import error_envelope
+from openbrowse.api.errors import ErrorEnvelope, error_envelope, error_responses
 from openbrowse.auth_throttle import FREE_ATTEMPTS
 from openbrowse.config import settings
 from openbrowse.db.models import init_db
-from openbrowse.main import app
+from openbrowse.main import _http_error_handler, app
 
 
 @pytest.fixture(autouse=True)
@@ -64,8 +66,12 @@ def _assert_envelope(response, code: str, detail):
         (404, "Profile not found", "PROFILE_NOT_FOUND"),
         (404, "Not Found", "ENDPOINT_NOT_FOUND"),
         (422, "Session is stopped, not idle", "SESSION_NOT_IDLE"),
+        (422, "Session is paused, not idle", "SESSION_NOT_IDLE"),
         (422, "Task is required when targeting an existing session", "TASK_REQUIRED"),
         (422, "Unsupported reasoning effort", "INVALID_REASONING_EFFORT"),
+        (422, "Session is corrupted", "INVALID_REASONING_EFFORT"),
+        (401, "Not authenticated", "UNEXPECTED_ERROR"),
+        (409, "Conflicting request", "UNEXPECTED_ERROR"),
     ],
 )
 def test_v3_error_codes_are_stable(status_code, detail, code):
@@ -142,3 +148,36 @@ def test_v3_openapi_errors_and_operation_ids_are_documented():
     assert create_session["operationId"] == "createSession"
     assert rate_limited["headers"]["Retry-After"]["schema"]["type"] == "integer"
     assert schema["components"]["schemas"]["ErrorEnvelope"]
+
+
+@pytest.mark.parametrize("detail", ["Session is corrupted", "Session is running"])
+def test_session_idle_match_requires_the_not_idle_suffix(detail):
+    envelope = error_envelope(422, detail)
+
+    assert envelope.code == "INVALID_REASONING_EFFORT"
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 409, 500, 503])
+def test_unmapped_status_never_raises(status_code):
+    envelope = error_envelope(status_code, "an unanticipated detail")
+
+    assert envelope.code == "UNEXPECTED_ERROR"
+    assert envelope.resolution
+
+
+def test_error_responses_tolerates_undocumented_status():
+    responses = error_responses(405, 401)
+
+    assert responses[405]["model"] is ErrorEnvelope
+    assert responses[401]["description"] == "Authentication failed."
+
+
+@pytest.mark.parametrize("status_code", [204, 304])
+async def test_no_body_status_yields_empty_response(status_code):
+    scope = {"type": "http", "method": "GET", "path": "/v3/x", "headers": []}
+    response = await _http_error_handler(
+        Request(scope), StarletteHTTPException(status_code=status_code)
+    )
+
+    assert response.status_code == status_code
+    assert response.body == b""

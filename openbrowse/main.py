@@ -26,8 +26,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.utils import is_body_allowed_for_status_code
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openbrowse import __version__, prefetch, system_metrics, updates
@@ -134,6 +135,8 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
 
 @app.exception_handler(StarletteHTTPException)
 async def _http_error_handler(request: Request, exc: StarletteHTTPException):
+    if not is_body_allowed_for_status_code(exc.status_code):
+        return Response(status_code=exc.status_code, headers=exc.headers)
     if not request.url.path.startswith("/v3"):
         return JSONResponse(
             status_code=exc.status_code,
