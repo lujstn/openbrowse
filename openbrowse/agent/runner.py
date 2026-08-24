@@ -62,6 +62,7 @@ from openbrowse.agent.tools import (
     register_search_page_flow,
     register_tab_tools,
     register_upload_path_resolution,
+    strip_judge_preamble,
 )
 from openbrowse.browser.factory import display_manager, launch_chrome, stop_chrome
 from openbrowse.config import settings
@@ -2155,7 +2156,7 @@ async def _finalise_task(
         raw_success=raw_success,
         schema_valid=schema_valid,
         stopped=bool(getattr(getattr(agent, "state", None), "stopped", False)),
-        done_text=done_output,
+        done_text=strip_judge_preamble(done_output),
         recovered_errors=recovered_errors,
     )
     # @nonobvious(means): the answer rides along on the completion row (the

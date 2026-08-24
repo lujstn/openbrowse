@@ -491,6 +491,26 @@ _FRAME_MATCH_GRACE_S = 6.0
 _PANEL_EVIDENCE_EXTRA_S = 8.0
 _MIN_PAGE_TEXT_CHARS = 200
 _JUDGE_ANSWER_CAP = 8000
+_JUDGE_PREAMBLE_START = "FINAL STRUCTURED OUTPUT ("
+_JUDGE_REVIEW_NOTE = "\n\nREVIEW NOTE: "
+
+
+def strip_judge_preamble(text: str) -> str:
+    """An agent's own done text, without the structured-output block prepended for
+    the reviewer.
+
+    That block is addressed to the judge, not to a person, so anything reporting
+    why a run ended has to read past it — otherwise every agent-reported failure
+    is headlined "FINAL STRUCTURED OUTPUT (Coverage — …" and the reason the agent
+    actually gave is never seen.
+    """
+    if not text or not text.startswith(_JUDGE_PREAMBLE_START):
+        return text
+    note = text.find(_JUDGE_REVIEW_NOTE)
+    if note == -1:
+        return text
+    end = text.find("\n\n", note + len(_JUDGE_REVIEW_NOTE))
+    return text[end + 2 :] if end != -1 else text
 _JSONLD_GRACE_S = 3.0
 
 
