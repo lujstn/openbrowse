@@ -34,6 +34,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from openbrowse import __version__, prefetch, system_metrics, updates
 from openbrowse.auth import require_api_key
 from openbrowse.agent.pool import pool
+from openbrowse.agent.runner import clear_session_states
 from openbrowse.api.profiles import router as profiles_router
 from openbrowse.api.errors import error_envelope
 from openbrowse.api.sessions import router as sessions_router
@@ -69,6 +70,8 @@ async def _stale_session_sweeper() -> None:
 async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     await init_db()
+
+    clear_session_states()
 
     interrupted = await crud.reconcile_interrupted_sessions()
     if interrupted:

@@ -9,6 +9,7 @@ import re
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError, RateLimitError
@@ -29,11 +30,11 @@ from openbrowse import system_metrics
 from openbrowse.agent.code_stream import CodeStreamObserver
 from openbrowse.agent.activity import (
     clear_activity,
-    release_profile,
+    leave_profile,
     session_ended,
     session_started,
     set_activity,
-    try_claim_profile,
+    join_profile,
 )
 from openbrowse.agent.leak_repair import (
     coerce_action_param_shapes,
@@ -65,6 +66,7 @@ from openbrowse.agent.tools import (
 from openbrowse.browser.factory import display_manager, launch_chrome, stop_chrome
 from openbrowse.config import settings
 from openbrowse.db import crud
+from openbrowse.profiles import merge
 
 logger = logging.getLogger(__name__)
 
@@ -1466,6 +1468,65 @@ def _storage_lock(path: str) -> asyncio.Lock:
     return lock
 
 
+def _session_state_path(session_id: str) -> Path:
+    """Where a session's private copy of its profile's storage state lives."""
+    return settings.data_dir / "session-state" / f"{session_id}.json"
+
+
+def clear_session_states() -> None:
+    """Drop working copies orphaned by a crash or a restart, so they cannot be
+    merged into a profile long after the run that made them.
+    """
+    directory = settings.data_dir / "session-state"
+    if not directory.is_dir():
+        return
+    for stale in directory.glob("*.json"):
+        try:
+            stale.unlink()
+        except OSError:
+            logger.debug("Could not remove stale storage copy %s", stale, exc_info=True)
+
+
+async def _open_session_state(
+    session_id: str, profile_state_file: Path
+) -> tuple[Path, dict[str, Any] | None]:
+    """Take a session's private copy of a profile's storage state.
+
+    Returns the copy's path and the baseline it was taken from — the same
+    baseline the merge later diffs against, so a key this session never touches
+    is left at whatever the profile holds when the session ends rather than
+    being rolled back to what it held when the session began.
+    """
+    async with _storage_lock(str(profile_state_file)):
+        baseline = merge.read_state(profile_state_file)
+    working_copy = _session_state_path(session_id)
+    merge.write_state(working_copy, baseline or {"cookies": [], "origins": []})
+    return working_copy, baseline
+
+
+async def _merge_state_into_profile(
+    profile_state_file: Path,
+    working_copy: Path,
+    baseline: dict[str, Any] | None,
+) -> None:
+    """Fold a finished session's storage state back into the profile it shares.
+
+    Read-merge-write happens under the profile's lock, so a session finishing
+    between another's read and write cannot have its cookies dropped.
+    """
+    async with _storage_lock(str(profile_state_file)):
+        ours = merge.read_state(working_copy)
+        if ours is not None:
+            theirs = merge.read_state(profile_state_file)
+            merge.write_state(
+                profile_state_file, merge.merge_storage_states(baseline, ours, theirs)
+            )
+    try:
+        working_copy.unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Could not remove working storage copy %s", working_copy, exc_info=True)
+
+
 def _strip_json_fence(text: str) -> str:
     t = (text or "").strip()
     if t.startswith("```"):
@@ -2222,37 +2283,51 @@ async def run_agent_session(session_id: str) -> None:
 
     # Load profile storage state path
     storage_state_path: str | None = None
-    claimed_profile_id: str | None = None
+    profile_state_file: Path | None = None
+    baseline_state: dict[str, Any] | None = None
+    joined_profile_id: str | None = None
     profile = None
     if session.get("profile_id"):
         profile = await crud.get_profile(session["profile_id"])
         if profile and profile.get("storage_state_path"):
             state_file = settings.data_dir / profile["storage_state_path"]
             if state_file.exists():
-                storage_state_path = str(state_file)
+                profile_state_file = state_file
+                # @nonobvious(forced-by): the browser writes its whole jar back over
+                # whatever path it was handed, so two sessions pointed at the profile
+                # itself would each flatten it with a jar that predates the other's
+                # logins. Each gets a private copy and merges it back on the way out.
+                working_copy, baseline_state = await _open_session_state(
+                    session_id, state_file
+                )
+                storage_state_path = str(working_copy)
             await crud.update_profile(
                 profile["id"],
                 last_used_at=datetime.now(timezone.utc).isoformat(),
             )
 
     if profile:
-        holder = try_claim_profile(profile["id"], session_id)
-        if holder is not None:
-            if north_star_task is not None and not north_star_task.done():
-                north_star_task.cancel()
-            await crud.update_session(session_id, status="error")
+        sharing_with = join_profile(profile["id"], session_id)
+        joined_profile_id = profile["id"]
+        if sharing_with:
+            shared = ", ".join(sharing_with)
+            logger.info(
+                "Session %s shares profile %s with %s", session_id, profile["id"], shared
+            )
             await crud.create_message(
                 session_id=session_id,
                 role="ai",
-                msg_type="browser_action_error",
+                msg_type="event",
+                data=json.dumps({"category": "system", "action": "sharedProfile"}),
                 summary=(
-                    f"Profile is in use by running session {holder} — two "
-                    "concurrent sessions on one profile would overwrite each "
-                    "other's cookies. Retry when that session finishes."
+                    "This profile is also open in "
+                    + ("session " if len(sharing_with) == 1 else "sessions ")
+                    + shared
+                    + ". Both browsers start from the same cookies, and each merges "
+                    "its own changes back when it finishes."
                 ),
+                count_step=False,
             )
-            return
-        claimed_profile_id = profile["id"]
 
     session_started(session_id)
     slot = None
@@ -2879,8 +2954,6 @@ async def run_agent_session(session_id: str) -> None:
         )
     finally:
         session_ended(session_id)
-        if claimed_profile_id:
-            release_profile(claimed_profile_id, session_id)
         clear_activity(session_id)
         live.unregister(entry)
         if north_star_task is not None and not north_star_task.done():
@@ -2888,17 +2961,30 @@ async def run_agent_session(session_id: str) -> None:
         if browser_session:
             # @nonobvious(forced-by): stop() saves full storage state while CDP
             # is live; export_storage_state here would wipe imported
-            # localStorage. Shielded + locked against shutdown-cancel truncation.
+            # localStorage. Shielded against shutdown-cancel truncation.
             try:
-                if storage_state_path:
-                    async with _storage_lock(storage_state_path):
-                        await asyncio.shield(browser_session.stop())
-                else:
-                    await asyncio.shield(browser_session.stop())
+                await asyncio.shield(browser_session.stop())
             except Exception:
                 logger.warning(
                     "Failed to stop browser session %s", session_id, exc_info=True
                 )
+        if profile_state_file is not None and storage_state_path:
+            try:
+                await asyncio.shield(
+                    _merge_state_into_profile(
+                        profile_state_file, Path(storage_state_path), baseline_state
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to merge session %s storage state back into profile",
+                    session_id,
+                    exc_info=True,
+                )
+        # @nonobvious(must-hold): released only once the merge has landed, so a
+        # session still counts as using the profile until its cookies are in it.
+        if joined_profile_id:
+            leave_profile(joined_profile_id, session_id)
         if slot:
             await stop_chrome(slot)
             await display_manager.release(slot.display_num)

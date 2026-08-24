@@ -3,9 +3,9 @@
 Holds what a running session is doing *right now* (waiting for the model, acting,
 preparing the next step) plus when that phase started, so the dashboard can show a
 live indicator with a count-up timer. Also the run-lifecycle registry: which
-sessions are currently running and which profile each has claimed, letting tools
-scale contention pacing to real concurrency and letting the runner refuse two
-live sessions on one profile. In-memory only; never persisted.
+sessions are currently running and which profile each is using, letting tools
+scale contention pacing to real concurrency and letting a session tell whether it
+shares its profile with another. In-memory only; never persisted.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def clear_activity(session_id: str) -> None:
 
 _running_sessions: set[str] = set()
 
-_claimed_profiles: dict[str, str] = {}
+_profile_sessions: dict[str, set[str]] = {}
 
 
 def session_started(session_id: str) -> None:
@@ -79,18 +79,25 @@ def active_session_count() -> int:
     return len(_running_sessions)
 
 
-def try_claim_profile(profile_id: str, session_id: str) -> str | None:
-    """Claim a profile for a session. Returns None on success, or the id of the
-    session already holding it. Check-and-set with no await between, so a single
-    event loop cannot interleave two claims.
+def join_profile(profile_id: str, session_id: str) -> list[str]:
+    """Record that a session is using a profile, and report which other sessions
+    already are. Sharing is allowed: each session runs against its own copy of the
+    profile's storage state and merges that copy back when its browser closes.
     """
-    holder = _claimed_profiles.get(profile_id)
-    if holder is not None and holder != session_id:
-        return holder
-    _claimed_profiles[profile_id] = session_id
-    return None
+    holders = _profile_sessions.setdefault(profile_id, set())
+    others = sorted(holders - {session_id})
+    holders.add(session_id)
+    return others
 
 
-def release_profile(profile_id: str, session_id: str) -> None:
-    if _claimed_profiles.get(profile_id) == session_id:
-        _claimed_profiles.pop(profile_id, None)
+def leave_profile(profile_id: str, session_id: str) -> None:
+    holders = _profile_sessions.get(profile_id)
+    if holders is None:
+        return
+    holders.discard(session_id)
+    if not holders:
+        _profile_sessions.pop(profile_id, None)
+
+
+def profile_sessions(profile_id: str) -> list[str]:
+    return sorted(_profile_sessions.get(profile_id) or ())
