@@ -1493,17 +1493,19 @@ def test_budget_salvage_keeps_a_complete_store_as_a_success():
     from openbrowse.agent.runner import _budget_salvage
 
     store, model = _salvage_parts(complete=True)
-    output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
+    output, is_successful = _budget_salvage(_agent_with_result(None), store, model)
 
     assert is_successful is True
     assert json.loads(output)["items"][0]["title"] == "Engineer"
 
 
-def test_budget_salvage_keeps_an_incomplete_store_but_calls_it_a_failure():
+def test_budget_salvage_keeps_a_store_missing_a_required_field_but_calls_it_a_failure():
+    """A missing required field is not the requested shape, so nothing was
+    delivered — the partial answer is still kept for the caller to look at."""
     from openbrowse.agent.runner import _budget_salvage
 
     store, model = _salvage_parts(complete=False)
-    output, is_successful = _budget_salvage(_agent_with_result(None), store, {}, model)
+    output, is_successful = _budget_salvage(_agent_with_result(None), store, model)
 
     assert is_successful is False
     assert json.loads(output)["items"][0]["url"] == "https://example.com/1"
@@ -1518,10 +1520,10 @@ def test_budget_salvage_falls_back_to_result_json_when_the_store_is_empty():
     empty = OutputStore(model)
     text = json.dumps({"items": [], "indexPageUrl": "https://example.com/jobs"})
 
-    output, is_successful = _budget_salvage(_agent_with_result(text), empty, {}, model)
+    output, is_successful = _budget_salvage(_agent_with_result(text), empty, model)
 
     assert output == text
-    assert is_successful is False
+    assert is_successful is True
 
 
 def test_budget_salvage_reports_nothing_when_there_is_nothing_to_keep():
@@ -1532,14 +1534,15 @@ def test_budget_salvage_reports_nothing_when_there_is_nothing_to_keep():
     model = json_schema_to_pydantic(_SALVAGE_SCHEMA, "TaskOutput")
     empty = OutputStore(model)
 
-    assert _budget_salvage(_agent_with_result(None), empty, {}, model) == ("", False)
+    assert _budget_salvage(_agent_with_result(None), empty, model) == ("", False)
 
 
 def test_budget_salvage_never_claims_success_without_a_schema():
-    """No schema means no completeness gate, so nothing can vouch for the answer."""
+    """With no schema there is no contract to have delivered, so a run cut short
+    by its cap cannot claim it met one."""
     from openbrowse.agent.runner import _budget_salvage
 
-    output, is_successful = _budget_salvage(_agent_with_result("some prose"), None, {}, None)
+    output, is_successful = _budget_salvage(_agent_with_result("some prose"), None, None)
 
     assert output == "some prose"
     assert is_successful is False

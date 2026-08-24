@@ -1,4 +1,4 @@
-"""The headline a finished run gets — the agent's reason, not the reviewer's preamble."""
+"""What a finished run reports: whether the contracted result came back, and what the agent said about it."""
 
 from openbrowse.agent.runner import _completion_summary
 from openbrowse.agent.tools import strip_judge_preamble
@@ -70,3 +70,82 @@ def test_success_and_other_endings_are_unchanged():
         done_text=_PREAMBLE,
         recovered_errors=0,
     ) == "Task finished but the result did not match the requested schema"
+
+
+def test_a_delivered_result_succeeds_even_when_the_agent_disowns_it():
+    """A paywalled page still returns the requested schema, so the run delivered;
+    whether nulls make the answer useful is the caller's call, not ours."""
+    summary = _completion_summary(
+        is_successful=True,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text=strip_judge_preamble(_PREAMBLE + _REASON),
+        recovered_errors=0,
+    )
+    assert summary.startswith("Task completed successfully")
+    assert "The agent noted: The article body is behind" in summary
+    assert "failed" not in summary
+
+
+def test_a_clean_success_says_nothing_extra():
+    assert (
+        _completion_summary(
+            is_successful=True,
+            is_done=True,
+            raw_success=True,
+            schema_valid=True,
+            stopped=False,
+            done_text="All records captured.",
+            recovered_errors=0,
+        )
+        == "Task completed successfully"
+    )
+
+
+def test_the_agents_note_rides_alongside_a_recovered_error_count():
+    summary = _completion_summary(
+        is_successful=True,
+        is_done=True,
+        raw_success=False,
+        schema_valid=True,
+        stopped=False,
+        done_text=_REASON,
+        recovered_errors=2,
+    )
+    assert summary.startswith("Task completed successfully (recovered from 2 transient errors)")
+    assert "The agent noted:" in summary
+
+
+def test_a_missing_shape_is_still_a_failure():
+    assert _completion_summary(
+        is_successful=False,
+        is_done=True,
+        raw_success=True,
+        schema_valid=False,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    ) == "Task finished but the result did not match the requested schema"
+
+
+def test_a_stop_and_a_step_exhaustion_stay_failures():
+    assert _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=True,
+        schema_valid=True,
+        stopped=True,
+        done_text="",
+        recovered_errors=0,
+    ) == "Task failed: stopped before the goal was reached"
+    assert _completion_summary(
+        is_successful=False,
+        is_done=False,
+        raw_success=True,
+        schema_valid=True,
+        stopped=False,
+        done_text="",
+        recovered_errors=0,
+    ) == "Task failed: ran out of steps before the goal was reached"

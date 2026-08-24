@@ -81,7 +81,20 @@ class SessionResponse(BaseModel):
     outputSchema: dict[str, Any] | None = None
     stepCount: int = 0
     lastStepSummary: str | None = None
-    isTaskSuccessful: bool | None = None
+    isTaskSuccessful: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the run delivered the result that was asked for: it reached "
+            "the end and, when an output schema was given, returned a value "
+            "matching it. It is not a judgement of the content. A page behind a "
+            "paywall, a field the site does not publish and an agent that doubts "
+            "its own work all still count as delivered, with null or partial "
+            "values in the output saying what could not be obtained; deciding "
+            "whether that is good enough is the caller's. False means nothing was "
+            "delivered: the run stopped early, ran out of steps, or returned a "
+            "value that did not match the schema."
+        ),
+    )
     liveUrl: str | None = None
     recordingUrls: list[str] = []
     profileId: str | None = None

@@ -50,7 +50,6 @@ from openbrowse.agent.tools import (
     note_read_action,
     TabManager,
     _eval_js,
-    _gate_empty_fields,
     action_param_kinds,
     register_clipboard_tools,
     register_code_tools,
@@ -1693,14 +1692,13 @@ def _gated_done_output(history: Any) -> str:
 def _budget_salvage(
     agent: Any,
     store: OutputStore | None,
-    clipboard: dict[str, Any],
     output_model: type | None,
 ) -> tuple[str, bool]:
-    """Output and success verdict for a run cut short by its cost cap.
+    """Output and delivery verdict for a run cut short by its cost cap.
 
     A cap fires between steps, so the agent never reaches done, but the store may
-    already hold a complete answer; the same gate the normal finish trusts decides
-    whether it does.
+    already hold the requested shape; if it validates, the caller got what it
+    asked for and the run counts as delivered.
     """
     # @nonobvious(must-hold): nothing here may call the LLM. The budget that
     # ended the run is the budget schema coercion would spend, so output that
@@ -1722,7 +1720,8 @@ def _budget_salvage(
         return output, False
     if not _validate_only(output, output_model):
         return output, False
-    return output, not _gate_empty_fields(store, clipboard)
+    # Cut short, but the requested shape came back, so the caller was served.
+    return output, True
 
 
 def _completion_summary(
@@ -1735,14 +1734,23 @@ def _completion_summary(
     done_text: str,
     recovered_errors: int,
 ) -> str:
-    """One honest sentence for the ending, distinguishing an agent-reported
-    failure from a user stop and from running out of steps — the three were
-    previously collapsed into a single "Task finished with errors"."""
+    """One honest sentence for the ending.
+
+    A run that delivered the requested result reads as a success even when the
+    agent doubted it, with the doubt reported alongside; the failures left are
+    the ones where nothing was delivered: the wrong shape, a user stop, or
+    running out of steps.
+    """
     if is_successful:
         summary = "Task completed successfully"
         if recovered_errors:
             plural = "s" if recovered_errors != 1 else ""
             summary += f" (recovered from {recovered_errors} transient error{plural})"
+        # @nonobvious(must-hold): the agent's own misgiving is reported, never
+        # promoted to a verdict. The requested result was delivered, so the run
+        # succeeded; what the agent thought of it is information for the caller.
+        if not raw_success and done_text:
+            summary += f". The agent noted: {_friendly_error(done_text)}"
         return summary
     if is_done and raw_success and not schema_valid:
         return "Task finished but the result did not match the requested schema"
@@ -2075,26 +2083,27 @@ async def _finalise_task(
 
     recovered_errors = sum(1 for e in history.errors()[steps_before:] if e)
     raw_success = history.is_successful() is not False
-    is_successful = history.is_done() and raw_success and schema_valid
-    # @nonobvious(means): a run that died before done but left a complete,
-    # valid store has delivered the answer; the gate check is the arbiter.
+    # @nonobvious(means): success says the run delivered the result its caller
+    # asked for, never that the result is any good. A page that turns out to be
+    # paywalled, a field the site does not publish and an agent that doubts its
+    # own work all still return the requested schema, and whether that answer is
+    # useful is the caller's call to make, not this platform's. Only a run that
+    # never reached the end, or reached it without the requested shape, has
+    # failed to deliver.
+    is_successful = history.is_done() and schema_valid
     if not is_successful and not history.is_done() and from_store and schema_valid:
-        try:
-            if store is not None and not _gate_empty_fields(store, clipboard):
-                is_successful = True
-                await crud.create_message(
-                    session_id=session_id,
-                    role="ai",
-                    msg_type="event",
-                    summary=(
-                        "Run ended without done, but the output store is "
-                        "complete and schema-valid — recorded as success"
-                    ),
-                    data=json.dumps({"category": "judge", "action": "storeComplete"}),
-                    count_step=False,
-                )
-        except Exception:
-            logger.debug("store-complete success check failed", exc_info=True)
+        is_successful = True
+        await crud.create_message(
+            session_id=session_id,
+            role="ai",
+            msg_type="event",
+            summary=(
+                "Run ended without done, but the output store holds a "
+                "schema-valid result, so the run delivered"
+            ),
+            data=json.dumps({"category": "judge", "action": "storeComplete"}),
+            count_step=False,
+        )
 
     usage_history = agent.token_cost_service.usage_history
     llm_cost = carried["llm"] + cost.history_cost(usage_history)
@@ -2913,7 +2922,7 @@ async def run_agent_session(session_id: str) -> None:
         raise
     except BudgetExceededError as e:
         logger.info("Session %s stopped: %s", session_id, e)
-        output, is_successful = _budget_salvage(agent, store, clipboard, output_model)
+        output, is_successful = _budget_salvage(agent, store, output_model)
         items = store.item_count() if store is not None else 0
         if is_successful:
             kept = "The output store was complete and valid, so it stands as the answer."
