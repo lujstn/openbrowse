@@ -58,8 +58,8 @@ _PRICING: dict[str, ModelPricing] = {
     "claude-sonnet-5": ModelPricing(_p(2, 0.2, 2.5, 4, 10)),
     "claude-sonnet-4-6": ModelPricing(_p(3, 0.3, 3.75, 6, 15)),
     "gpt-5.6-sol": ModelPricing(
-        standard=_p(5, 0.5, 6.25, 0, 30),
-        long=_p(10, 1.0, 12.5, 0, 45),
+        standard=_p(4, 0.4, 5.0, 0, 20),
+        long=_p(8, 0.8, 10.0, 0, 30),
         long_threshold=_OPENAI_LONG_THRESHOLD,
     ),
     "gpt-5.6-terra": ModelPricing(

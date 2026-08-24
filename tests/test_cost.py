@@ -77,15 +77,15 @@ def test_openai_cache_write_priced():
         completion_tokens=100,
     )
     c = cost.usage_cost("gpt-5.6-sol", u)
-    expected = (500 * 5 + 200 * 0.5 + 300 * 6.25 + 100 * 30) / 1_000_000
+    expected = (500 * 4 + 200 * 0.4 + 300 * 5.0 + 100 * 20) / 1_000_000
     assert round(c, 10) == round(expected, 10)
 
 
 def test_openai_long_context_tier():
     short = cost.usage_cost("gpt-5.6-sol", _usage(prompt_tokens=100_000, completion_tokens=0))
     long = cost.usage_cost("gpt-5.6-sol", _usage(prompt_tokens=300_000, completion_tokens=0))
-    assert round(short, 9) == round(100_000 * 5 / 1_000_000, 9)
-    assert round(long, 9) == round(300_000 * 10 / 1_000_000, 9)
+    assert round(short, 9) == round(100_000 * 4 / 1_000_000, 9)
+    assert round(long, 9) == round(300_000 * 8 / 1_000_000, 9)
 
 
 def test_sonnet_5_introductory_pricing():
