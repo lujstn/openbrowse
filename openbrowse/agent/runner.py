@@ -47,6 +47,7 @@ from openbrowse.agent.schema import json_schema_to_pydantic, schema_directives
 from openbrowse.agent.textguard import guard_key
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
+    note_page,
     note_read_action,
     TabManager,
     _eval_js,
@@ -2738,9 +2739,15 @@ async def run_agent_session(session_id: str) -> None:
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
+                try:
+                    note_page(clipboard, getattr(getattr(step, "state", None), "url", None))
+                except Exception:
+                    logger.debug("page-change note failed", exc_info=True)
                 for act in step.model_output.action:
                     try:
-                        note_read_action(clipboard, _primary_action_name([act]))
+                        dumped = act.model_dump(exclude_none=True)
+                        name = next(iter(dumped), None)
+                        note_read_action(clipboard, name, dumped.get(name))
                     except Exception:
                         logger.debug("read-action count failed", exc_info=True)
             all_action_names, executed_actions, executed_args, error_action = (

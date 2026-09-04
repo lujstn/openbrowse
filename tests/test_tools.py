@@ -4638,7 +4638,7 @@ async def test_mark_absent_is_refused_until_the_agent_looks_again() -> None:
 
     refused = await absent.function(field="description", reason="not published anywhere")
     assert refused.error
-    assert "have not read anything since" in refused.error
+    assert "have not read this page" in refused.error
     assert "description" not in store.absent_fields
 
     # the agent does something about it
@@ -4802,3 +4802,71 @@ async def test_completeness_gate_still_chases_it_on_the_other_branch() -> None:
     first = await entry.function(params=params, file_system=_FakeFileSystem())
     assert first.is_done is False
     assert any("reason" in e for e in bounces[0])
+
+
+def test_reading_your_own_answer_does_not_earn_an_absence_claim() -> None:
+    """Observed: an agent bounced for a field it had never looked for satisfied the
+    guard by opening output.json, which says nothing about what the page publishes."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_read_action(clip, "read_file", {"file_name": "output.json"})
+    note_read_action(clip, "read_output", {})
+    note_read_action(clip, "search_output", {"query": "x"})
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    note_read_action(clip, "read_file", {"file_name": "output.json"})
+    assert _absent_needs_a_look(clip) is not None
+
+    note_read_action(clip, "read_file", {"file_name": "pages.json"})
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_a_read_of_the_current_page_earns_the_claim_even_before_the_bounce() -> None:
+    """The measured waste: the agent searched the page one step before the gate
+    asked, and was made to search it again to say the same thing."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_page,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "search_page", {"query": "employees"})
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_arriving_somewhere_new_and_claiming_absence_is_still_refused() -> None:
+    """The case the guard exists for, which must keep failing."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_page,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "search_page", {"query": "employees"})
+    note_page(clip, "https://www.arize.com/about")
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    assert _absent_needs_a_look(clip) is not None
+
+    note_read_action(clip, "extract", {"query": "headcount"})
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_note_page_ignores_a_repeat_of_the_same_url() -> None:
+    from openbrowse.agent.tools import _PAGE_READS_KEY, note_page, note_read_action
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "scroll", {})
+    note_page(clip, "https://www.arize.com")
+    assert clip[_PAGE_READS_KEY] == 0
