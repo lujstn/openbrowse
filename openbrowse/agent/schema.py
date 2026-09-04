@@ -22,6 +22,7 @@ than crash.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field as dataclass_field
 from typing import Annotated, Any, Literal, Optional
 from urllib.parse import urlparse
 from uuid import UUID
@@ -274,3 +275,122 @@ def json_schema_to_pydantic(
         raise SchemaConversionError("Schema must be a dict")
     defs = schema.get("$defs") or schema.get("definitions") or {}
     return _Converter(defs).build(schema, model_name)
+
+
+@dataclass(frozen=True)
+class ConditionalRequirement:
+    """One branch of a schema ``if``, reduced to what the completeness gate needs.
+
+    ``when`` is the property/const pairs the ``if`` tests. ``negate`` marks the
+    ``else`` branch, which shares the same condition and applies when it does not
+    hold.
+    """
+
+    when: tuple[tuple[str, Any], ...]
+    required: frozenset[str] = frozenset()
+    not_required: frozenset[str] = frozenset()
+    negate: bool = False
+
+    def matches(self, data: dict[str, Any]) -> bool:
+        held = all(data.get(name) == value for name, value in self.when)
+        return not held if self.negate else held
+
+
+@dataclass(frozen=True)
+class SchemaDirectives:
+    """Schema keywords that describe a run rather than a shape.
+
+    ``json_schema_to_pydantic`` builds the shape; these two 2020-12 keywords say
+    what the caller already knows and which fields only apply on one branch, so
+    they are read separately and handed to the output store.
+    """
+
+    defaults: dict[str, Any] = dataclass_field(default_factory=dict)
+    conditionals: tuple[ConditionalRequirement, ...] = ()
+
+    def excused_fields(self, data: dict[str, Any]) -> frozenset[str]:
+        """Fields not worth chasing given the answer so far.
+
+        A field is excused when a matching branch excuses it and no matching
+        branch demands it: a schema that both requires and excuses the same field
+        is contradictory, and the safe reading of a contradiction is to keep
+        asking.
+        """
+        excused: set[str] = set()
+        demanded: set[str] = set()
+        for rule in self.conditionals:
+            if rule.matches(data):
+                excused |= rule.not_required
+                demanded |= rule.required
+        return frozenset(excused - demanded)
+
+
+def _const_conditions(node: Any) -> tuple[tuple[str, Any], ...] | None:
+    """The property/const pairs an ``if`` tests, or None if it tests anything else.
+
+    Only ``{"properties": {"field": {"const": value}}}`` is understood. A richer
+    condition returns None so the caller drops the whole rule rather than
+    half-applying it.
+    """
+    if not isinstance(node, dict):
+        return None
+    properties = node.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return None
+    conditions: list[tuple[str, Any]] = []
+    for name, sub in properties.items():
+        if not isinstance(sub, dict) or "const" not in sub:
+            return None
+        conditions.append((name, sub["const"]))
+    return tuple(conditions)
+
+
+def _required_names(node: Any) -> frozenset[str]:
+    if not isinstance(node, dict):
+        return frozenset()
+    names = node.get("required")
+    if not isinstance(names, list):
+        return frozenset()
+    return frozenset(n for n in names if isinstance(n, str))
+
+
+def _branch_rule(
+    node: Any, conditions: tuple[tuple[str, Any], ...], *, negate: bool
+) -> ConditionalRequirement:
+    return ConditionalRequirement(
+        when=conditions,
+        required=_required_names(node),
+        not_required=_required_names(node.get("not") if isinstance(node, dict) else None),
+        negate=negate,
+    )
+
+
+def schema_directives(schema: Any) -> SchemaDirectives:
+    """Read the run-shaped keywords out of an ``outputSchema``.
+
+    ``default`` on a top-level property is a value the caller already holds, and a
+    top-level ``if``/``then``/``else`` says a field is only required on one branch.
+    Both are standard JSON Schema 2020-12 that the model builder ignores, and both
+    are ignored by hosted Browser Use too, so a schema carrying them runs on either.
+
+    Never raises: anything richer than the narrow forms understood here is skipped,
+    leaving the caller with today's behaviour.
+    """
+    if not isinstance(schema, dict):
+        return SchemaDirectives()
+
+    defaults: dict[str, Any] = {}
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for name, prop in properties.items():
+            if isinstance(prop, dict) and "default" in prop:
+                defaults[name] = prop["default"]
+
+    conditionals: tuple[ConditionalRequirement, ...] = ()
+    conditions = _const_conditions(schema.get("if"))
+    if conditions:
+        conditionals = (
+            _branch_rule(schema.get("then"), conditions, negate=False),
+            _branch_rule(schema.get("else"), conditions, negate=True),
+        )
+    return SchemaDirectives(defaults=defaults, conditionals=conditionals)

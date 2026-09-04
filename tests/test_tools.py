@@ -4735,3 +4735,70 @@ async def test_find_links_bare_call_collects_all_links(monkeypatch) -> None:
         "https://x.com/detail/2.html",
         "https://x.com/about.html",
     }
+
+
+_GATE_CONDITIONAL_SCHEMA = {
+    "type": "object",
+    "required": ["found"],
+    "properties": {
+        "found": {"type": "boolean"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    },
+    "if": {"properties": {"found": {"const": False}}},
+    "then": {"required": ["reason"]},
+    "else": {"not": {"required": ["reason"]}},
+}
+
+
+def _gate_conditional_store():
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic, schema_directives
+
+    return OutputStore(
+        json_schema_to_pydantic(_GATE_CONDITIONAL_SCHEMA, "GateCond"),
+        schema_directives(_GATE_CONDITIONAL_SCHEMA),
+    )
+
+
+async def test_completeness_gate_does_not_chase_an_excused_field() -> None:
+    """`reason` is null by design whenever `found` is true. Bouncing for it cost
+    four steps: bounce, refused mark_absent, a read to earn it, then done again."""
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _gate_conditional_store()
+    store.set_field("found", True)
+    store.set_field("title", "Arize")
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(empties: list[str]) -> None:
+        bounces.append(empties)
+
+    register_completeness_gate(tools, store, on_incomplete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is True
+    assert bounces == []
+
+
+async def test_completeness_gate_still_chases_it_on_the_other_branch() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _gate_conditional_store()
+    store.set_field("found", False)
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(empties: list[str]) -> None:
+        bounces.append(empties)
+
+    register_completeness_gate(tools, store, on_incomplete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is False
+    assert any("reason" in e for e in bounces[0])

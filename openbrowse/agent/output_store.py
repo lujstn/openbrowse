@@ -18,6 +18,8 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from openbrowse.agent.schema import SchemaDirectives
+
 
 def _peel_optional(annotation: Any) -> Any:
     """Strip an ``Optional``/``Union[..., None]`` wrapper to its single real type."""
@@ -177,8 +179,13 @@ def elide_long_values(
 class OutputStore:
     """Holds the answer the agent is building, validated against the output schema."""
 
-    def __init__(self, output_model: type[BaseModel]) -> None:
+    def __init__(
+        self,
+        output_model: type[BaseModel],
+        directives: SchemaDirectives | None = None,
+    ) -> None:
         self._model = output_model
+        self._directives = directives or SchemaDirectives()
         self._array_field: str | None = None
         self._item_model: type[BaseModel] | None = None
         self._scalar_item: Any | None = None
@@ -297,25 +304,9 @@ class OutputStore:
         if not self._array_field:
             return False, "This output has no list to add items to; use set_field."
         if self._item_model is None and self._scalar_item is not None:
-            # The list holds plain values (e.g. an array of strings). A model
-            # given no object schema tends to invent a wrapper key; unwrap a
-            # single-key object rather than bounce the value it clearly meant.
-            value = item
-            if isinstance(item, dict):
-                if len(item) != 1:
-                    return False, (
-                        f"'{self._array_field}' holds plain values, not objects — "
-                        "pass one value per add_item."
-                    )
-                value = next(iter(item.values()))
-            coerced = _coerce_scalar(value, self._scalar_item)
-            expected = _peel_optional(self._scalar_item)
-            if isinstance(expected, type) and not isinstance(coerced, expected):
-                return False, (
-                    f"'{self._array_field}' items must be "
-                    f"{getattr(expected, '__name__', expected)}, got "
-                    f"{type(coerced).__name__}."
-                )
+            coerced, err = self._scalar_replacement(item)
+            if err:
+                return False, err
             arr = self._data[self._array_field]
             arr.append(coerced)
             return True, (
@@ -365,6 +356,16 @@ class OutputStore:
         if not 0 <= index < len(arr):
             upper = len(arr) - 1 if arr else 0
             return False, f"No item at index {index}. Valid range: 0..{upper}."
+        if self._item_model is None and self._scalar_item is not None:
+            # @nonobvious(must-hold): a plain-value list has no fields to merge into,
+            # so without this branch the merge below stores the raw dict and reports
+            # success, leaving a list[str] holding objects that fail the final
+            # schema check and sink an otherwise complete run.
+            value, err = self._scalar_replacement(fields)
+            if err:
+                return False, err
+            arr[index] = value
+            return True, f"Updated item #{index}."
         if not isinstance(fields, dict):
             return False, "update_item expects an object of field/value pairs to merge."
         base = arr[index] if isinstance(arr[index], dict) else {}
@@ -487,13 +488,23 @@ class OutputStore:
         arr = self._data.get(self._array_field)
         return len(arr) if isinstance(arr, list) else 0
 
+    def excused_fields(self) -> frozenset[str]:
+        """Fields the schema's own ``if``/``then``/``else`` excuses right now.
+
+        Evaluated against live data, so a field stops being excused the moment the
+        answer moves to the branch that needs it.
+        """
+        return self._directives.excused_fields(self._data)
+
     def empty_fields(self) -> list[str]:
         """Schema fields still empty but plausibly fillable, for the completeness gate.
-        Fields marked absent via ``mark_absent`` are settled and never listed.
+        Fields marked absent via ``mark_absent``, or excused by the schema's own
+        conditional, are settled and never listed.
         """
         out: list[str] = []
+        excused = self.excused_fields()
         for name, value in self._data.items():
-            if name == self._array_field or name in self._absent:
+            if name == self._array_field or name in self._absent or name in excused:
                 continue
             if _is_empty_value(value):
                 out.append(f"{name} (not set)")
@@ -524,11 +535,13 @@ class OutputStore:
         needs a full read_output dump.
         """
         parts: list[str] = []
+        excused = self.excused_fields()
         top_unset = [
             name
             for name, value in self._data.items()
             if name != self._array_field
             and name not in self._absent
+            and name not in excused
             and _is_empty_value(value)
         ]
         if self._array_field:
@@ -561,6 +574,8 @@ class OutputStore:
                     parts.append("empty on all: " + ", ".join(empty))
         if self._absent:
             parts.append("marked absent: " + ", ".join(sorted(self._absent)))
+        if excused:
+            parts.append("not applicable: " + ", ".join(sorted(excused)))
         if top_unset:
             parts.append("top-level not set: " + ", ".join(top_unset))
         return "Coverage — " + "; ".join(parts) + "."
@@ -638,6 +653,58 @@ class OutputStore:
             "must be observed on a page, never inferred or defaulted — leave the "
             "field null when the page does not state it."
         )
+
+    def _scalar_replacement(self, item: Any) -> tuple[Any, str | None]:
+        """One validated element for a list of plain values.
+
+        A model given no object schema tends to invent a wrapper key, so a
+        single-key object is unwrapped rather than bounced; anything wider is
+        refused, because guessing which key was meant is how a list of strings
+        ends up holding objects.
+        """
+        value = item
+        if isinstance(item, dict):
+            if len(item) != 1:
+                return None, (
+                    f"'{self._array_field}' holds plain values, not objects — "
+                    "pass one value per item."
+                )
+            value = next(iter(item.values()))
+        coerced = _coerce_scalar(value, self._scalar_item)
+        expected = _peel_optional(self._scalar_item)
+        if isinstance(expected, type) and not isinstance(coerced, expected):
+            return None, (
+                f"'{self._array_field}' items must be "
+                f"{getattr(expected, '__name__', expected)}, got "
+                f"{type(coerced).__name__}."
+            )
+        return coerced, None
+
+    def seed(self, values: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Pre-fill fields the caller already knows, before the agent runs.
+
+        Every value goes through the same validated writer an agent write uses, so
+        a seed cannot put the store into a state the agent could not have reached.
+        A seeded field holds a value, so the completeness gate already treats it as
+        filled with no special case. Returns the names applied and the names
+        skipped; never raises, because a bad seed must not cost the caller a run.
+        """
+        applied: list[str] = []
+        skipped: list[str] = []
+        for name, value in (values or {}).items():
+            if name not in self._model.model_fields or _is_empty_value(value):
+                continue
+            try:
+                if name == self._array_field:
+                    ok = isinstance(value, list) and all(
+                        self.add_item(entry)[0] for entry in value
+                    )
+                else:
+                    ok, _ = self.set_field(name, value)
+            except Exception:
+                ok = False
+            (applied if ok else skipped).append(name)
+        return applied, skipped
 
     def _validate_item(
         self, item: dict, check_keys: set[str] | None = None

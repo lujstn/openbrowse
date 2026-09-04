@@ -989,7 +989,13 @@ def _review_history(done: bool, verdict, reason: str = "needs work", steps: int 
 
 class _ReviewStore:
     def __init__(self) -> None:
+        from openbrowse.agent.schema import json_schema_to_pydantic
+
         self.value = "v1"
+        self.output_model = json_schema_to_pydantic(
+            {"type": "object", "properties": {"title": {"type": "string"}}}, "Review"
+        )
+        self.item_model = None
 
     def read_output(self) -> str:
         return self.value
@@ -1026,9 +1032,44 @@ async def test_run_with_review_loops_until_reviewer_passes(monkeypatch) -> None:
     assert events == ["fix the empty fields"]
 
 
-async def test_run_with_review_forces_changes_after_two_justifications(
+async def test_run_with_review_stops_once_the_output_stops_changing(
     monkeypatch,
 ) -> None:
+    """An agent told twice that changed nothing is not going to change anything;
+    each further round costs a continuation turn and a judge call for nothing."""
+    import types as _t
+
+    from openbrowse.agent import runner as runner_mod
+
+    events: list[str] = []
+
+    async def fake_create_message(**kwargs):
+        events.append(kwargs.get("summary") or "")
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+
+    histories = [
+        _review_history(True, False, "round 1", steps=1),
+        _review_history(True, False, "round 2", steps=2),
+        _review_history(True, False, "round 3", steps=3),
+        _review_history(True, False, "round 4", steps=4),
+    ]
+    tasks: list[str] = []
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
+    store = _ReviewStore()
+
+    async def run_agent():
+        return histories.pop(0)
+
+    await runner_mod._run_with_review(agent, store, "sid", run_agent)
+    assert len(tasks) == runner_mod._MAX_REVIEW_JUSTIFICATIONS
+    assert "you may reply via done" in tasks[0]
+    assert "your replies are used up" in tasks[1]
+    assert any("left the output unchanged again" in e for e in events)
+    assert histories, "the loop should not have spent every canned round"
+
+
+async def test_run_with_review_keeps_going_while_the_output_moves(monkeypatch) -> None:
     import types as _t
 
     from openbrowse.agent import runner as runner_mod
@@ -1049,13 +1090,52 @@ async def test_run_with_review_forces_changes_after_two_justifications(
     store = _ReviewStore()
 
     async def run_agent():
+        store.value += "!"
         return histories.pop(0)
 
     await runner_mod._run_with_review(agent, store, "sid", run_agent)
     assert len(tasks) == runner_mod._MAX_REVIEW_ROUNDS
-    assert "you may reply via done" in tasks[0]
-    assert "you may reply via done" in tasks[1]
-    assert "your replies are used up" in tasks[2]
+
+
+async def test_run_with_review_stops_when_the_demand_names_no_schema_field(
+    monkeypatch,
+) -> None:
+    """The finsmes failure: the judge demanded an `extra` array the schema has no
+    field for, and three rounds plus a Sonnet escalation were spent on it."""
+    import types as _t
+
+    from openbrowse.agent import runner as runner_mod
+
+    events: list[str] = []
+
+    async def fake_create_message(**kwargs):
+        events.append(kwargs.get("summary") or "")
+
+    monkeypatch.setattr(runner_mod.crud, "create_message", fake_create_message)
+
+    histories = [
+        _review_history(True, False, "The output omitted the required `extra` array"),
+        _review_history(True, True, steps=2),
+    ]
+    tasks: list[str] = []
+    agent = _t.SimpleNamespace(add_new_task=lambda msg: tasks.append(msg))
+    store = _ReviewStore()
+
+    async def run_agent():
+        return histories.pop(0)
+
+    await runner_mod._run_with_review(agent, store, "sid", run_agent)
+    assert tasks == []
+    assert any("no field for" in e for e in events)
+
+
+async def test_unsatisfiable_demand_ignores_unquoted_prose() -> None:
+    from openbrowse.agent import runner as runner_mod
+
+    store = _ReviewStore()
+    assert runner_mod._unsatisfiable_demand("the extra detail is missing", store) is None
+    assert runner_mod._unsatisfiable_demand("`title` is wrong", store) is None
+    assert runner_mod._unsatisfiable_demand("needs an `extra` array", store) == "extra"
 
 
 async def test_run_with_review_skips_failed_or_passing_runs(monkeypatch) -> None:
@@ -1912,3 +1992,13 @@ def test_recommended_efforts_match_the_readme_that_claims_to_define_them():
     assert published == _RECOMMENDED_EFFORT, (
         f"README publishes {published}, code applies {_RECOMMENDED_EFFORT}"
     )
+
+
+def test_begin_extension_names_the_url_instead_of_recalling_it() -> None:
+    from openbrowse.agent import runner as runner_mod
+
+    named = runner_mod._begin_extension("https://www.arize.com")
+    assert "https://www.arize.com" in named
+    assert "recall" not in named
+    assert runner_mod._begin_extension(None) == runner_mod._BEGIN_EXTENSION
+    assert runner_mod._begin_extension("") == runner_mod._BEGIN_EXTENSION
