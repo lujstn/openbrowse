@@ -76,6 +76,8 @@ _DRAFTS_KEY = "_read_pages_drafts"
 _REFUSED_KEY = "_refused_items"
 _READS_KEY = "_reads_done"
 _GATE_READS_KEY = "_gate_bounce_reads"
+_PAGE_READS_KEY = "_reads_at_page_load"
+_PAGE_URL_KEY = "_reads_page_url"
 _FS_EXTENSIONS = {"md", "txt", "json", "jsonl", "csv", "pdf", "docx", "html", "xml"}
 
 
@@ -4593,17 +4595,57 @@ _LOOKING_ACTIONS = (
 )
 
 
-def note_read_action(clipboard: dict[str, Any] | None, action_name: str | None) -> None:
+def _reads_own_answer(action_name: str, params: Any) -> bool:
+    """Whether this action looks at the agent's own output rather than the source.
+
+    @nonobvious(must-hold): reading the store back says nothing about what a page
+    publishes, so it must not earn an absence claim. Without this an agent that has
+    never touched the page settles the gate by opening output.json, which is the
+    one thing the absence guard exists to prevent.
+    """
+    if "output" in action_name.lower():
+        return True
+    if not isinstance(params, dict):
+        return False
+    target = " ".join(
+        str(params.get(k) or "") for k in ("file_name", "filename", "path", "file")
+    )
+    return "output.json" in target.lower()
+
+
+def note_read_action(
+    clipboard: dict[str, Any] | None,
+    action_name: str | None,
+    params: Any = None,
+) -> None:
     """Count the actions that amount to looking at the source.
 
-    The completeness gate needs to know whether the agent has looked since it was
-    asked, because otherwise mark_absent is a one-call escape from the gate entirely.
+    The completeness gate needs to know whether the agent has looked, because
+    otherwise mark_absent is a one-call escape from the gate entirely.
     """
     if clipboard is None or not action_name:
         return
     lowered = action_name.lower()
+    if _reads_own_answer(lowered, params):
+        return
     if any(k in lowered for k in _LOOKING_ACTIONS):
         clipboard[_READS_KEY] = int(clipboard.get(_READS_KEY) or 0) + 1
+
+
+def note_page(clipboard: dict[str, Any] | None, url: str | None) -> None:
+    """Record where the read count stood when this page came up.
+
+    @nonobvious(means): lets the absence guard ask "have you read the page in front
+    of you", which is the question it actually cares about, rather than "have you
+    read something since I asked", which punishes an agent for having looked one
+    step early.
+    """
+    if clipboard is None or not url:
+        return
+    if clipboard.get(_PAGE_URL_KEY) == url:
+        return
+    clipboard[_PAGE_URL_KEY] = url
+    clipboard[_PAGE_READS_KEY] = int(clipboard.get(_READS_KEY) or 0)
 
 
 def _absent_needs_a_look(clipboard: dict[str, Any] | None) -> str | None:
@@ -4619,13 +4661,22 @@ def _absent_needs_a_look(clipboard: dict[str, Any] | None) -> str | None:
     since = clipboard.get(_GATE_READS_KEY)
     if since is None:
         return None
-    if int(clipboard.get(_READS_KEY) or 0) > int(since):
+    reads = int(clipboard.get(_READS_KEY) or 0)
+    if reads > int(since):
+        return None
+    # @nonobvious(must-hold): a read taken before the bounce is still a read of the
+    # page being claimed about, and an agent that looked one step early must not be
+    # made to look again to earn the same answer. What still fails is the case this
+    # guard exists for: arriving somewhere and settling a field without reading it.
+    at_page_load = clipboard.get(_PAGE_READS_KEY)
+    if at_page_load is not None and reads > int(at_page_load):
         return None
     return (
-        "You have not read anything since the completeness check asked for those "
-        "fields, so you cannot yet say the source does not publish them. Look where "
-        "each value would be first — evaluate, extract, find_links, read_pages, scroll "
-        "or read_file — then mark absent only what is genuinely not there."
+        "You have not read this page, so you cannot yet say the source does not "
+        "publish those fields. Look where each value would be first — evaluate, "
+        "extract, find_links, read_pages, scroll or read_file — then mark absent "
+        "only what is genuinely not there. Reading output.json back does not count: "
+        "it shows what you have recorded, not what the page publishes."
     )
 
 

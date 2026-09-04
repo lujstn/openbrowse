@@ -184,3 +184,69 @@ def test_schema_enrich(run_scenario, fixture_url):
     assert_used(trace, "update_items")
     assert_no_doom_loop(trace)
     assert_output(trace, {"staff": expected})
+
+
+def _conditional_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "found": {"type": "boolean"},
+            "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "firstItem": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["found"],
+        "if": {"properties": {"found": {"const": False}}},
+        "then": {"required": ["reason"]},
+        "else": {"not": {"required": ["reason"]}},
+    }
+
+
+def test_schema_conditional_field(run_scenario, fixture_url):
+    """`reason` only applies when the page was not found. Without the conditional
+    the gate bounces a complete run and the agent spends four steps settling a
+    field the schema itself says does not apply."""
+    trace = run_scenario(
+        "schema_conditional",
+        f"Go to {fixture_url}/two_items.html. Set found to true and put the name of "
+        "the first case for sale in firstItem. Leave reason alone: it applies only "
+        "when a page could not be retrieved.",
+        output_schema=_conditional_schema(),
+        max_cost_usd=0.15,
+    )
+    assert_success(trace)
+    assert_no_doom_loop(trace)
+    assert_not_used(trace, "mark_absent")
+    out = trace.output
+    assert out.get("found") is True, trace.describe()
+    assert out.get("reason") is None, trace.describe()
+    assert TWO_ITEMS[0]["name"] in (out.get("firstItem") or ""), trace.describe()
+
+
+def test_schema_seeded_defaults(run_scenario, fixture_url):
+    """A field the caller already knows arrives filled, and the agent is asked only
+    for the one it does not."""
+    seeded = "Wardian cases, sold as seen"
+    schema = {
+        "type": "object",
+        "properties": {
+            "catalogueNote": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": seeded,
+            },
+            "secondItem": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["secondItem"],
+    }
+    trace = run_scenario(
+        "schema_seeded_defaults",
+        f"Go to {fixture_url}/two_items.html and put the name of the SECOND case for "
+        "sale in secondItem. catalogueNote is already filled in for you — leave it "
+        "exactly as it is.",
+        output_schema=schema,
+        max_cost_usd=0.15,
+    )
+    assert_success(trace)
+    assert_no_doom_loop(trace)
+    out = trace.output
+    assert out.get("catalogueNote") == seeded, trace.describe()
+    assert TWO_ITEMS[1]["name"] in (out.get("secondItem") or ""), trace.describe()

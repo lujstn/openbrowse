@@ -43,10 +43,11 @@ from openbrowse.agent.leak_repair import (
     repair_anthropic_message,
 )
 from openbrowse.agent.output_store import OutputStore
-from openbrowse.agent.schema import json_schema_to_pydantic
+from openbrowse.agent.schema import json_schema_to_pydantic, schema_directives
 from openbrowse.agent.textguard import guard_key
 from openbrowse.agent.captcha import install_captcha_bridge, register_captcha_tools
 from openbrowse.agent.tools import (
+    note_page,
     note_read_action,
     TabManager,
     _eval_js,
@@ -202,6 +203,18 @@ _ACTION_CONTRACT_EXTENSION = (
 _BEGIN_EXTENSION = (
     "Begin your browsing by recalling startUrl and opening that page in a new tab."
 )
+
+
+def _begin_extension(start_url: str | None) -> str:
+    """How to open the first page.
+
+    Naming the URL costs the same tokens as naming the key it is stored under and
+    saves the whole recall step, so the recall wording is kept only for a task
+    whose start URL could not be read out of its text.
+    """
+    if not start_url:
+        return _BEGIN_EXTENSION
+    return f"Begin your browsing by opening {start_url} in a new tab."
 
 _GOAL_PROMPT = (
     "Reply with one sentence stating this task's goal: what a complete and "
@@ -430,6 +443,52 @@ def _inject_followup_task(agent: Any, message: str) -> None:
         agent._message_manager.add_new_task(message)
 
 
+_QUOTED_NAME_RE = re.compile(r"[`\"']([A-Za-z_][A-Za-z0-9_]{1,63})[`\"']")
+
+
+def _unsatisfiable_demand(reason: str, store: "OutputStore | None") -> str | None:
+    """The field a review demands that the output store has no room for.
+
+    Only names the review itself quoted or backticked are considered: the store
+    cannot be made to hold a field the schema never declared, so asking again
+    buys another continuation turn and another judge call for a change that
+    cannot land. Unquoted prose is left alone deliberately — ordinary English
+    words collide with field names, and a false positive here would end a review
+    that was going to succeed.
+    """
+    if store is None:
+        return None
+    known = set(store.output_model.model_fields)
+    item_model = store.item_model
+    if item_model is not None:
+        known |= set(item_model.model_fields)
+    for candidate in _QUOTED_NAME_RE.findall(reason or ""):
+        if candidate not in known:
+            return candidate
+    return None
+
+
+async def _report_seeding(
+    session_id: str, applied: list[str], skipped: list[str]
+) -> None:
+    """Put seeded fields in the feed, so a cheap run is still an auditable one."""
+    if not applied and not skipped:
+        return
+    parts: list[str] = []
+    if applied:
+        parts.append("prefilled from the schema: " + ", ".join(applied))
+    if skipped:
+        parts.append("rejected, left for the agent: " + ", ".join(skipped))
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="event",
+        data=json.dumps({"category": "schema", "action": "seed"}),
+        summary=("Output " + "; ".join(parts))[:200],
+        count_step=False,
+    )
+
+
 def _last_judgement(history: Any) -> Any:
     try:
         return getattr(history.history[-1].result[-1], "judgement", None)
@@ -438,7 +497,10 @@ def _last_judgement(history: Any) -> Any:
 
 
 def _review_message(reason: str, replies_left: int) -> str:
-    if replies_left > 0:
+    # @nonobvious(must-hold): the demand wording has to fire on the LAST round the
+    # loop will run, not one past it, or the conversation stops for cost while the
+    # agent has only ever been invited to argue and never told to comply.
+    if replies_left > 1:
         plural = "replies" if replies_left != 1 else "reply"
         return (
             "A reviewer has assessed your submitted result and requests "
@@ -468,7 +530,10 @@ async def _run_with_review(
     that would otherwise complete as a success: the review re-enters the agent
     as a continuation turn. The model may talk back — a continuation that
     leaves the output untouched counts as a justification, and after
-    ``_MAX_REVIEW_JUSTIFICATIONS`` of those the message demands the changes.
+    ``_MAX_REVIEW_JUSTIFICATIONS`` of those the conversation stops rather than
+    asking again: an agent that has been told twice and changed nothing either
+    disagrees, having said why, or cannot comply, and either way further rounds
+    cost a continuation turn and a judge call to arrive back where they started.
     ``_MAX_REVIEW_ROUNDS`` bounds the whole conversation; the final verdict is
     recorded either way.
     """
@@ -485,6 +550,21 @@ async def _run_with_review(
             (judgement.failure_reason or judgement.reasoning or "").split()
         )[:_REVIEW_REASON_CAP]
         if not reason:
+            break
+        impossible = _unsatisfiable_demand(reason, store)
+        if impossible:
+            await crud.create_message(
+                session_id=session_id,
+                role="ai",
+                msg_type="event",
+                summary=(
+                    f"Review asks for '{impossible}', which the output schema has "
+                    "no field for — stopping the review conversation and recording "
+                    "the standing verdict"
+                ),
+                data=json.dumps({"category": "judge", "action": "review"}),
+                count_step=False,
+            )
             break
         await crud.create_message(
             session_id=session_id,
@@ -523,6 +603,19 @@ async def _run_with_review(
             break
         if store is not None and store.read_output() == snapshot:
             justifications += 1
+            if justifications >= _MAX_REVIEW_JUSTIFICATIONS:
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    summary=(
+                        "Review round left the output unchanged again — stopping "
+                        "the review conversation and recording the standing verdict"
+                    ),
+                    data=json.dumps({"category": "judge", "action": "review"}),
+                    count_step=False,
+                )
+                break
     return history
 
 
@@ -2405,7 +2498,11 @@ async def run_agent_session(session_id: str) -> None:
                 output_model = None
         store: OutputStore | None = None
         if output_model is not None:
-            store = OutputStore(output_model)
+            directives = schema_directives(output_schema)
+            store = OutputStore(output_model, directives)
+            if directives.defaults:
+                applied, skipped = store.seed(directives.defaults)
+                await _report_seeding(session_id, applied, skipped)
 
         async def _read_progress(label: str) -> None:
             set_activity(session_id, label, spin=True)
@@ -2642,9 +2739,15 @@ async def run_agent_session(session_id: str) -> None:
             if step.model_output and step.model_output.action:
                 action_name = _primary_action_name(step.model_output.action)
                 category = _category_for(action_name)
+                try:
+                    note_page(clipboard, getattr(getattr(step, "state", None), "url", None))
+                except Exception:
+                    logger.debug("page-change note failed", exc_info=True)
                 for act in step.model_output.action:
                     try:
-                        note_read_action(clipboard, _primary_action_name([act]))
+                        dumped = act.model_dump(exclude_none=True)
+                        name = next(iter(dumped), None)
+                        note_read_action(clipboard, name, dumped.get(name))
                     except Exception:
                         logger.debug("read-action count failed", exc_info=True)
             all_action_names, executed_actions, executed_args, error_action = (
@@ -2824,7 +2927,7 @@ async def run_agent_session(session_id: str) -> None:
             )
         if store is not None:
             extension_parts += [_OUTPUT_STORE_EXTENSION, _VERIFY_EXTENSION]
-        extension_parts.append(_BEGIN_EXTENSION)
+        extension_parts.append(_begin_extension(clipboard.get("startUrl")))
         agent_kwargs["extend_system_message"] = "\n\n".join(p for p in extension_parts if p)
         if sensitive_data:
             agent_kwargs["sensitive_data"] = sensitive_data

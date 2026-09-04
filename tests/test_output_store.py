@@ -8,7 +8,7 @@ import json
 import pytest
 
 from openbrowse.agent.output_store import OutputStore
-from openbrowse.agent.schema import json_schema_to_pydantic
+from openbrowse.agent.schema import json_schema_to_pydantic, schema_directives
 
 SCHEMA = {
     "type": "object",
@@ -534,3 +534,102 @@ def test_final_output_matches_read_output_when_items_are_clean() -> None:
     ok, _ = s.add_item({"title": "A", "url": "http://x/1"})
     assert ok
     assert json.loads(s.final_output()) == json.loads(s.read_output())
+
+
+CONDITIONAL_SCHEMA = {
+    "type": "object",
+    "required": ["found"],
+    "properties": {
+        "found": {"type": "boolean"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "tags": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
+    },
+    "if": {"properties": {"found": {"const": False}}},
+    "then": {"required": ["reason"]},
+    "else": {"not": {"required": ["reason"]}},
+}
+
+
+def _conditional_store():
+    return OutputStore(
+        json_schema_to_pydantic(CONDITIONAL_SCHEMA, "Cond"),
+        schema_directives(CONDITIONAL_SCHEMA),
+    )
+
+
+def test_conditional_field_is_not_chased_on_the_branch_that_excuses_it():
+    s = _conditional_store()
+    s.set_field("found", True)
+    s.set_field("title", "Arize")
+    s.add_item("ai")
+    assert s.empty_fields() == []
+    assert "not applicable: reason" in s.coverage_summary()
+
+
+def test_conditional_field_is_chased_on_the_branch_that_needs_it():
+    s = _conditional_store()
+    s.set_field("found", False)
+    assert any("reason" in e for e in s.empty_fields())
+
+
+def test_conditional_field_flips_back_when_the_answer_moves():
+    """The rule is evaluated against live data, not frozen at construction."""
+    s = _conditional_store()
+    s.set_field("found", False)
+    assert any("reason" in e for e in s.empty_fields())
+    s.set_field("found", True)
+    assert not any("reason" in e for e in s.empty_fields())
+
+
+def test_store_without_directives_behaves_as_before():
+    s = OutputStore(json_schema_to_pydantic(CONDITIONAL_SCHEMA, "Plain"))
+    s.set_field("found", True)
+    assert any("reason" in e for e in s.empty_fields())
+
+
+def test_seed_prefills_through_the_validated_writers():
+    s = _conditional_store()
+    applied, skipped = s.seed({"title": "Arize AI", "tags": ["ai", "observability"]})
+    assert applied == ["title", "tags"]
+    assert skipped == []
+    assert json.loads(s.read_output())["title"] == "Arize AI"
+    assert not any("title" in e for e in s.empty_fields())
+
+
+def test_seed_reports_what_it_could_not_apply_and_never_raises():
+    s = _conditional_store()
+    applied, skipped = s.seed(
+        {"title": {"not": "a string"}, "nosuchfield": "x", "found": None}
+    )
+    assert applied == []
+    assert skipped == ["title"]
+    assert json.loads(s.read_output())["title"] is None
+
+
+def test_seeded_array_items_are_validated_one_by_one():
+    s = _conditional_store()
+    applied, skipped = s.seed({"tags": ["ai", {"wrapped": "ok"}]})
+    assert applied == ["tags"]
+    assert json.loads(s.read_output())["tags"] == ["ai", "ok"]
+
+
+def test_update_item_refuses_to_put_an_object_into_a_list_of_values():
+    """The finsmes corruption: a merge onto a list[str] element stored the raw
+    dict and reported success, so the run failed its own schema check."""
+    s = _conditional_store()
+    s.add_item("Purple Ventures")
+    ok, _ = s.update_item(0, {"item": "BlackWood Ventures"})
+    assert ok is True
+    assert json.loads(s.read_output())["tags"] == ["BlackWood Ventures"]
+    ok, msg = s.update_item(0, {"a": "x", "b": "y"})
+    assert ok is False and "plain values" in msg
+    assert json.loads(s.read_output())["tags"] == ["BlackWood Ventures"]
+
+
+def test_update_item_keeps_a_scalar_list_schema_valid():
+    s = _conditional_store()
+    s.set_field("found", True)
+    s.add_item("one")
+    s.update_item(0, {"value": "two"})
+    s.output_model.model_validate(json.loads(s.read_output()))

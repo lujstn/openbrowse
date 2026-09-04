@@ -4638,7 +4638,7 @@ async def test_mark_absent_is_refused_until_the_agent_looks_again() -> None:
 
     refused = await absent.function(field="description", reason="not published anywhere")
     assert refused.error
-    assert "have not read anything since" in refused.error
+    assert "have not read this page" in refused.error
     assert "description" not in store.absent_fields
 
     # the agent does something about it
@@ -4735,3 +4735,138 @@ async def test_find_links_bare_call_collects_all_links(monkeypatch) -> None:
         "https://x.com/detail/2.html",
         "https://x.com/about.html",
     }
+
+
+_GATE_CONDITIONAL_SCHEMA = {
+    "type": "object",
+    "required": ["found"],
+    "properties": {
+        "found": {"type": "boolean"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    },
+    "if": {"properties": {"found": {"const": False}}},
+    "then": {"required": ["reason"]},
+    "else": {"not": {"required": ["reason"]}},
+}
+
+
+def _gate_conditional_store():
+    from openbrowse.agent.output_store import OutputStore
+    from openbrowse.agent.schema import json_schema_to_pydantic, schema_directives
+
+    return OutputStore(
+        json_schema_to_pydantic(_GATE_CONDITIONAL_SCHEMA, "GateCond"),
+        schema_directives(_GATE_CONDITIONAL_SCHEMA),
+    )
+
+
+async def test_completeness_gate_does_not_chase_an_excused_field() -> None:
+    """`reason` is null by design whenever `found` is true. Bouncing for it cost
+    four steps: bounce, refused mark_absent, a read to earn it, then done again."""
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _gate_conditional_store()
+    store.set_field("found", True)
+    store.set_field("title", "Arize")
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(empties: list[str]) -> None:
+        bounces.append(empties)
+
+    register_completeness_gate(tools, store, on_incomplete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is True
+    assert bounces == []
+
+
+async def test_completeness_gate_still_chases_it_on_the_other_branch() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _gate_conditional_store()
+    store.set_field("found", False)
+    bounces: list[list[str]] = []
+
+    async def on_incomplete(empties: list[str]) -> None:
+        bounces.append(empties)
+
+    register_completeness_gate(tools, store, on_incomplete)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+
+    first = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert first.is_done is False
+    assert any("reason" in e for e in bounces[0])
+
+
+def test_reading_your_own_answer_does_not_earn_an_absence_claim() -> None:
+    """Observed: an agent bounced for a field it had never looked for satisfied the
+    guard by opening output.json, which says nothing about what the page publishes."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_read_action(clip, "read_file", {"file_name": "output.json"})
+    note_read_action(clip, "read_output", {})
+    note_read_action(clip, "search_output", {"query": "x"})
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    note_read_action(clip, "read_file", {"file_name": "output.json"})
+    assert _absent_needs_a_look(clip) is not None
+
+    note_read_action(clip, "read_file", {"file_name": "pages.json"})
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_a_read_of_the_current_page_earns_the_claim_even_before_the_bounce() -> None:
+    """The measured waste: the agent searched the page one step before the gate
+    asked, and was made to search it again to say the same thing."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_page,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "search_page", {"query": "employees"})
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_arriving_somewhere_new_and_claiming_absence_is_still_refused() -> None:
+    """The case the guard exists for, which must keep failing."""
+    from openbrowse.agent.tools import (
+        _GATE_READS_KEY,
+        _absent_needs_a_look,
+        note_page,
+        note_read_action,
+    )
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "search_page", {"query": "employees"})
+    note_page(clip, "https://www.arize.com/about")
+    clip[_GATE_READS_KEY] = int(clip.get("_reads_done") or 0)
+    assert _absent_needs_a_look(clip) is not None
+
+    note_read_action(clip, "extract", {"query": "headcount"})
+    assert _absent_needs_a_look(clip) is None
+
+
+def test_note_page_ignores_a_repeat_of_the_same_url() -> None:
+    from openbrowse.agent.tools import _PAGE_READS_KEY, note_page, note_read_action
+
+    clip: dict = {}
+    note_page(clip, "https://www.arize.com")
+    note_read_action(clip, "scroll", {})
+    note_page(clip, "https://www.arize.com")
+    assert clip[_PAGE_READS_KEY] == 0

@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from openbrowse.agent.schema import SchemaConversionError, json_schema_to_pydantic
+from openbrowse.agent.schema import (
+    SchemaConversionError,
+    json_schema_to_pydantic,
+    schema_directives,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -238,3 +242,77 @@ def test_uuid_suffix_wins_over_id_suffix():
     model = json_schema_to_pydantic(schema, "Prec")
     with pytest.raises(ValidationError, match="not a UUID"):
         model.model_validate({"companyUuid": "plain-token"})
+
+
+ORG_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["found", "socialLinks"],
+    "properties": {
+        "found": {"type": "boolean"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "title": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": "Arize AI | AI Observability",
+        },
+        "socialLinks": {"type": "array", "items": {"type": "string"}},
+    },
+    "if": {"properties": {"found": {"const": False}}},
+    "then": {"required": ["reason"]},
+    "else": {"not": {"required": ["reason"]}},
+}
+
+
+def test_schema_directives_reads_defaults_and_conditionals():
+    d = schema_directives(ORG_SCHEMA)
+    assert d.defaults == {"title": "Arize AI | AI Observability"}
+    assert d.excused_fields({"found": True}) == frozenset({"reason"})
+    assert d.excused_fields({"found": False}) == frozenset()
+
+
+def test_schema_directives_still_converts_to_a_model():
+    """The keywords must not disturb the shape the model builder sees."""
+    model = json_schema_to_pydantic(ORG_SCHEMA, "Org")
+    assert set(model.model_fields) == {"found", "reason", "title", "socialLinks"}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        None,
+        "not a dict",
+        {},
+        {"if": "nonsense", "then": 42},
+        {"if": {"properties": {"found": {"minimum": 1}}}, "then": {"required": ["r"]}},
+        {"if": {"properties": {}}, "else": {"not": {"required": ["r"]}}},
+        {"then": {"required": ["r"]}},
+    ],
+)
+def test_schema_directives_ignores_what_it_cannot_read(schema):
+    """Anything richer than the narrow form leaves today's behaviour untouched."""
+    d = schema_directives(schema)
+    assert d.conditionals == ()
+    assert d.excused_fields({"found": True}) == frozenset()
+
+
+def test_schema_directives_keeps_asking_when_a_rule_contradicts_itself():
+    d = schema_directives(
+        {
+            "type": "object",
+            "properties": {"found": {"type": "boolean"}},
+            "if": {"properties": {"found": {"const": True}}},
+            "then": {"required": ["reason"], "not": {"required": ["reason"]}},
+        }
+    )
+    assert d.excused_fields({"found": True}) == frozenset()
+
+
+def test_schema_directives_handles_a_multi_property_condition():
+    d = schema_directives(
+        {
+            "if": {"properties": {"found": {"const": True}, "kind": {"const": "org"}}},
+            "then": {"not": {"required": ["reason"]}},
+        }
+    )
+    assert d.excused_fields({"found": True, "kind": "org"}) == frozenset({"reason"})
+    assert d.excused_fields({"found": True, "kind": "event"}) == frozenset()
