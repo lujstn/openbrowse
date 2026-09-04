@@ -216,7 +216,7 @@ def test_schema_conditional_field(run_scenario, fixture_url):
     assert_success(trace)
     assert_no_doom_loop(trace)
     assert_not_used(trace, "mark_absent")
-    out = trace.output()
+    out = trace.output
     assert out.get("found") is True, trace.describe()
     assert out.get("reason") is None, trace.describe()
     assert TWO_ITEMS[0]["name"] in (out.get("firstItem") or ""), trace.describe()
@@ -247,6 +247,6 @@ def test_schema_seeded_defaults(run_scenario, fixture_url):
     )
     assert_success(trace)
     assert_no_doom_loop(trace)
-    out = trace.output()
+    out = trace.output
     assert out.get("catalogueNote") == seeded, trace.describe()
     assert TWO_ITEMS[1]["name"] in (out.get("secondItem") or ""), trace.describe()
