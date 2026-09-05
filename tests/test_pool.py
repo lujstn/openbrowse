@@ -115,3 +115,59 @@ async def test_shutdown_cancels_running_and_queued(monkeypatch):
     await p.shutdown()
     assert p.active_count == 0
     assert p.queued_count == 0
+
+
+async def test_repeat_stop_lets_the_first_teardown_finish(monkeypatch):
+    """A second stop must not cancel a worker that is already unwinding, or it
+    lands inside the teardown and abandons whatever it had left to hand back."""
+    torn_down = asyncio.Event()
+
+    async def fake_run(session_id: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.05)
+            torn_down.set()
+            raise
+
+    monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
+    p = SessionPool(max_concurrent=1)
+    p.submit_nowait("s1")
+    await asyncio.sleep(0)
+
+    first = asyncio.ensure_future(p.cancel("s1"))
+    await asyncio.sleep(0.01)
+    second = asyncio.ensure_future(p.cancel("s1"))
+
+    assert await first is True
+    assert await second is True
+    assert torn_down.is_set()
+    assert p.active_count == 0
+
+
+async def test_a_finished_worker_does_not_unregister_its_replacement(monkeypatch):
+    finishes: list[asyncio.Event] = []
+
+    async def fake_run(session_id: str) -> None:
+        ev = asyncio.Event()
+        finishes.append(ev)
+        await ev.wait()
+
+    monkeypatch.setattr(pool_mod, "run_agent_session", fake_run)
+    p = SessionPool(max_concurrent=2)
+
+    p.submit_nowait("s1")
+    await asyncio.sleep(0)
+    old = p._tasks["s1"]
+
+    p.submit_nowait("s1")
+    await asyncio.sleep(0)
+    replacement = p._tasks["s1"]
+    assert replacement is not old
+
+    finishes[0].set()
+    await asyncio.sleep(0.01)
+
+    assert p._tasks.get("s1") is replacement
+    assert p.active_count == 1
+    assert await p.cancel("s1") is True

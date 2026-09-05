@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import traceback
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +65,12 @@ from openbrowse.agent.tools import (
     register_upload_path_resolution,
     strip_judge_preamble,
 )
-from openbrowse.browser.factory import display_manager, launch_chrome, stop_chrome
+from openbrowse.browser.factory import (
+    NoDisplayCapacityError,
+    display_manager,
+    launch_chrome,
+    stop_chrome,
+)
 from openbrowse.config import settings
 from openbrowse.db import crud
 from openbrowse.profiles import merge
@@ -394,6 +400,11 @@ def _provider_failure_info(error: BaseException) -> tuple[str, int | None, str] 
 def _failure_info(error: BaseException) -> tuple[str, int | None, str]:
     if isinstance(error, BudgetExceededError):
         return "budget_exceeded", None, "stopped"
+    if isinstance(error, NoDisplayCapacityError):
+        # @nonobvious(means): the host was full, not the session at fault, so
+        # this reports as transient — the same work succeeds once a display
+        # frees up.
+        return "no_display_capacity", 503, "timed_out"
     if isinstance(error, asyncio.TimeoutError):
         return "session_timeout", None, "timed_out"
     if isinstance(error, ModelOutputTruncatedError):
@@ -2326,6 +2337,37 @@ async def _record_release(session_id: str, entry: live.LiveSession) -> None:
     await crud.update_session(session_id, status="stopped")
 
 
+# A browser that will not close must not hold its display hostage.
+_BROWSER_STOP_TIMEOUT = 20.0
+
+_teardowns: set[asyncio.Task[None]] = set()
+
+
+async def _run_to_completion(coro: Coroutine[Any, Any, None], label: str) -> None:
+    """Await ``coro`` to the end even if this task is cancelled while waiting.
+
+    Teardown hands back the display slot and the profile registration at its
+    very end. A cancel that lands mid-way through would otherwise skip both and
+    strand them for the life of the process, so cancels are absorbed here and
+    re-raised once the work is done — the caller still ends up cancelled, just
+    not before its resources are back.
+    """
+    task = asyncio.ensure_future(coro)
+    _teardowns.add(task)
+    task.add_done_callback(_teardowns.discard)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            logger.warning("%s failed", label, exc_info=True)
+            break
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 async def run_agent_session(session_id: str) -> None:
     """Execute a browser-use agent for the given session. Runs as a background task.
 
@@ -3071,33 +3113,39 @@ async def run_agent_session(session_id: str) -> None:
         live.unregister(entry)
         if north_star_task is not None and not north_star_task.done():
             north_star_task.cancel()
-        if browser_session:
-            # @nonobvious(forced-by): stop() saves full storage state while CDP
-            # is live; export_storage_state here would wipe imported
-            # localStorage. Shielded against shutdown-cancel truncation.
-            try:
-                await asyncio.shield(browser_session.stop())
-            except Exception:
-                logger.warning(
-                    "Failed to stop browser session %s", session_id, exc_info=True
-                )
-        if profile_state_file is not None and storage_state_path:
-            try:
-                await asyncio.shield(
-                    _merge_state_into_profile(
+
+        async def _teardown() -> None:
+            if browser_session:
+                # @nonobvious(forced-by): stop() saves full storage state while
+                # CDP is live; export_storage_state here would wipe imported
+                # localStorage. Bounded because a browser that will not die must
+                # not hold the display behind it.
+                try:
+                    await asyncio.wait_for(
+                        browser_session.stop(), _BROWSER_STOP_TIMEOUT
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to stop browser session %s", session_id, exc_info=True
+                    )
+            if profile_state_file is not None and storage_state_path:
+                try:
+                    await _merge_state_into_profile(
                         profile_state_file, Path(storage_state_path), baseline_state
                     )
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to merge session %s storage state back into profile",
-                    session_id,
-                    exc_info=True,
-                )
-        # @nonobvious(must-hold): released only once the merge has landed, so a
-        # session still counts as using the profile until its cookies are in it.
-        if joined_profile_id:
-            leave_profile(joined_profile_id, session_id)
-        if slot:
-            await stop_chrome(slot)
-            await display_manager.release(slot.display_num)
+                except Exception:
+                    logger.warning(
+                        "Failed to merge session %s storage state back into profile",
+                        session_id,
+                        exc_info=True,
+                    )
+            # @nonobvious(must-hold): released only once the merge has landed, so
+            # a session still counts as using the profile until its cookies are
+            # in it.
+            if joined_profile_id:
+                leave_profile(joined_profile_id, session_id)
+            if slot:
+                await stop_chrome(slot)
+                await display_manager.release(slot.display_num)
+
+        await _run_to_completion(_teardown(), f"session {session_id} teardown")

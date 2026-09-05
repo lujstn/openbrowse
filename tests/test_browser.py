@@ -1,5 +1,7 @@
 """Browser factory tests -- only test logic, not actual Xvfb/VNC."""
 
+import asyncio
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -210,3 +212,92 @@ async def test_stop_chrome_noop_without_process():
     # Should not raise
     await stop_chrome(slot)
     assert slot.chrome_proc is None
+
+
+@patch("openbrowse.browser.factory.subprocess.Popen")
+async def test_allocate_waits_for_a_slot_rather_than_failing(mock_popen, manager):
+    mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
+    first = await manager.allocate()
+
+    waiting = asyncio.ensure_future(manager.allocate())
+    await asyncio.sleep(0.05)
+    assert not waiting.done()
+
+    with patch("openbrowse.browser.factory.stop_chrome", new=AsyncMock()):
+        await manager.release(first.display_num)
+
+    second = await asyncio.wait_for(waiting, 3)
+    assert second.display_num == first.display_num
+
+
+@patch("openbrowse.browser.factory.subprocess.Popen")
+async def test_allocate_reclaims_a_slot_its_worker_never_gave_back(mock_popen, manager):
+    mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
+
+    async def worker() -> None:
+        await manager.allocate()
+
+    with patch("openbrowse.browser.factory.stop_chrome", new=AsyncMock()):
+        await asyncio.create_task(worker())
+        slot = await asyncio.wait_for(manager.allocate(), 3)
+
+    assert slot.display_num == settings.xvfb_base_display
+    assert len(manager._slots) == 1
+
+
+@patch("openbrowse.browser.factory.subprocess.Popen")
+async def test_allocate_reports_how_full_it_was_when_it_gave_up(
+    mock_popen, manager, monkeypatch
+):
+    import openbrowse.browser.factory as factory_mod
+
+    monkeypatch.setattr(factory_mod, "_ALLOCATE_WAIT_SECONDS", 0.1)
+    mock_popen.return_value = MagicMock(poll=MagicMock(return_value=None))
+
+    holding = asyncio.Event()
+
+    async def holder() -> None:
+        await manager.allocate()
+        await holding.wait()
+
+    task = asyncio.create_task(holder())
+    await asyncio.sleep(0.6)
+
+    with pytest.raises(
+        factory_mod.NoDisplayCapacityError, match="No display slot came free within 0s"
+    ):
+        await manager.allocate()
+
+    holding.set()
+    await task
+
+
+@patch("openbrowse.browser.factory.os.kill")
+@patch("openbrowse.browser.factory.subprocess.run")
+async def test_sweep_kills_only_processes_this_server_would_have_launched(
+    mock_run, mock_kill, manager
+):
+    import openbrowse.browser.factory as factory_mod
+
+    display_num = settings.xvfb_base_display
+    vnc_port = settings.vnc_base_port + display_num
+    novnc_port = settings.novnc_base_port
+    xvfb = " ".join(factory_mod._xvfb_argv(display_num))
+    # websockify is a script, so the kernel prefixes its interpreter.
+    websockify = "/usr/bin/python3 /usr/bin/" + " ".join(
+        factory_mod._websockify_argv(novnc_port, vnc_port)
+    )
+    mock_run.return_value = MagicMock(
+        stdout="\n".join(
+            [
+                f"  4242 {xvfb}",
+                f"  4243 {websockify}",
+                f"  4244 Xvfb :{display_num} -screen 0 800x600x24",
+                "  4245 /usr/bin/some-other-daemon --flag",
+                f"  4246 my-own-thing --note {xvfb}-ish",
+            ]
+        )
+    )
+
+    assert manager.sweep_orphans() == 2
+    assert [call.args[0] for call in mock_kill.call_args_list] == [4242, 4243]
