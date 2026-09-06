@@ -16,13 +16,21 @@ MAX_TRACKED_IPS = 10_000
 
 
 def client_ip(conn: HTTPConnection) -> str:
-    # @nonobvious(forced-by): behind a reverse proxy or tunnel the socket peer
-    # is the proxy itself for every visitor, so the standard forwarding header
-    # is the only per-visitor identity available.
-    raw = conn.headers.get("x-forwarded-for", "")
-    forwarded = raw.split(",")[0].strip() if raw else ""
-    if forwarded:
-        return forwarded
+    """The address to hold responsible for a failed authentication attempt.
+
+    Read from the connection, never from a forwarding header. A proxy appends
+    the true client to X-Forwarded-For rather than replacing it, so the first
+    entry in that header is written by whoever sent the request: trusting it
+    let anyone send a different value with every guess and get a fresh
+    allowance each time, which is no lockout at all.
+
+    The connection is already the right answer because the server resolves it
+    from the forwarding header itself, but only for peers it has been told to
+    trust (uvicorn's ``--forwarded-allow-ips``, which defaults to localhost and
+    so covers a tunnel or proxy running beside it). A proxy on a different host
+    must be named there; until it is, its visitors share one allowance, which
+    is the safe way to be wrong.
+    """
     if conn.client and conn.client.host:
         return conn.client.host
     return "unknown"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import logging
 
 from fastapi import Header, HTTPException, Request, Security
 from fastapi.security import (
@@ -16,6 +17,8 @@ from starlette.requests import HTTPConnection
 
 from openbrowse import auth_throttle
 from openbrowse.config import settings
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=False)
 # @nonobvious(forced-by): auto_error off, because it would answer a fresh
@@ -32,6 +35,20 @@ SETUP_PATH = "/setup"
 # anything having expired. charset says how to encode a non-ASCII password,
 # which is UTF-8 here because that is what this module decodes.
 _BASIC_CHALLENGE = 'Basic realm="OpenBrowse", charset="UTF-8"'
+
+
+def _fetch_context(conn: HTTPConnection) -> str:
+    """How the browser says it made this request.
+
+    A dashboard 401 is otherwise unexplainable after the fact: it cannot be
+    told whether a password was absent or wrong, nor whether the request was a
+    page someone opened or a poll running behind one. Both answers change what
+    is worth doing about it, so both are recorded.
+    """
+    dest = conn.headers.get("sec-fetch-dest") or "?"
+    mode = conn.headers.get("sec-fetch-mode") or "?"
+    site = conn.headers.get("sec-fetch-site") or "?"
+    return f"dest={dest} mode={mode} site={site}"
 
 
 def challenge_headers(conn: HTTPConnection) -> dict[str, str]:
@@ -142,6 +159,11 @@ async def require_dashboard_auth(
             headers={"Location": SETUP_PATH},
         )
     if credentials is None:
+        logger.info(
+            "Dashboard 401 on %s: no credentials presented (%s)",
+            request.url.path,
+            _fetch_context(request),
+        )
         raise HTTPException(
             status_code=401,
             detail="Not authenticated",
@@ -149,6 +171,15 @@ async def require_dashboard_auth(
         )
     if not check_dashboard_credentials(credentials.username, credentials.password):
         auth_throttle.throttle.record_failure(ip)
+        # The username is reported only as known or not: a mistyped password
+        # lands in that field often enough that logging it verbatim would put
+        # passwords in the journal.
+        logger.warning(
+            "Dashboard 401 on %s: credentials rejected, username %s (%s)",
+            request.url.path,
+            "known" if credentials.username == settings.dashboard_user else "unknown",
+            _fetch_context(request),
+        )
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
