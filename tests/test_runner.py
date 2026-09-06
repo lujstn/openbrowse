@@ -2002,3 +2002,38 @@ def test_begin_extension_names_the_url_instead_of_recalling_it() -> None:
     assert "recall" not in named
     assert runner_mod._begin_extension(None) == runner_mod._BEGIN_EXTENSION
     assert runner_mod._begin_extension("") == runner_mod._BEGIN_EXTENSION
+
+
+async def test_teardown_survives_a_cancel_landing_inside_it():
+    from openbrowse.agent.runner import _run_to_completion
+
+    released = asyncio.Event()
+
+    async def teardown() -> None:
+        await asyncio.sleep(0.05)
+        released.set()
+
+    async def worker() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await _run_to_completion(teardown(), "test teardown")
+            raise
+
+    task = asyncio.create_task(worker())
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert released.is_set()
+
+
+def test_a_full_host_reports_as_transient_not_as_a_session_failure():
+    from openbrowse.agent.runner import _failure_info
+    from openbrowse.browser.factory import NoDisplayCapacityError
+
+    kind, status_code, status = _failure_info(NoDisplayCapacityError("host full"))
+    assert (kind, status_code, status) == ("no_display_capacity", 503, "timed_out")

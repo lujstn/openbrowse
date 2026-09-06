@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI):
     if expired:
         logger.info("Expired %d stale session shell(s)", expired)
 
+    orphans = display_manager.sweep_orphans()
+    if orphans:
+        logger.warning(
+            "Killed %d display process(es) left by a previous run", orphans
+        )
+
     prefetch.start()
     sweeper = asyncio.create_task(_stale_session_sweeper())
     metrics_sampler = asyncio.create_task(system_metrics.sampler_loop())
