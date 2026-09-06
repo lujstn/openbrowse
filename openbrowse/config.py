@@ -107,6 +107,17 @@ def _keep_alive_idle_timeout() -> int:
     return seconds
 
 
+def _dashboard_session_days() -> int:
+    raw = os.environ.get("DASHBOARD_SESSION_DAYS", "30")
+    try:
+        days = int(raw)
+    except ValueError:
+        raise ValueError(f"DASHBOARD_SESSION_DAYS must be a whole number; got {raw!r}.")
+    if days < 0:
+        raise ValueError(f"DASHBOARD_SESSION_DAYS must not be negative; got {raw!r}.")
+    return days
+
+
 @dataclass(frozen=True)
 class Settings:
     api_key: str = field(default_factory=lambda: os.environ.get("API_KEY", ""))
@@ -115,6 +126,9 @@ class Settings:
     )
     dashboard_password: str = field(
         default_factory=lambda: os.environ.get("DASHBOARD_PASSWORD", "")
+    )
+    dashboard_session_days: int = field(
+        default_factory=lambda: _dashboard_session_days()
     )
     allow_insecure_no_auth: bool = field(
         default_factory=lambda: os.environ.get("ALLOW_INSECURE_NO_AUTH", "").lower()

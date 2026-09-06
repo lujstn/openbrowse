@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import logging
+import time
 
-from fastapi import Header, HTTPException, Request, Security
+from fastapi import Header, HTTPException, Request, Response, Security
 from fastapi.security import (
     HTTPAuthorizationCredentials,
     HTTPBasic,
@@ -35,6 +37,111 @@ SETUP_PATH = "/setup"
 # anything having expired. charset says how to encode a non-ASCII password,
 # which is UTF-8 here because that is what this module decodes.
 _BASIC_CHALLENGE = 'Basic realm="OpenBrowse", charset="UTF-8"'
+
+
+SESSION_COOKIE = "openbrowse_session"
+
+# Bumped only if the token layout changes, so old tokens stop verifying rather
+# than being misread as a newer shape.
+_SESSION_CONTEXT = b"openbrowse.dashboard.session.v1"
+
+
+def _session_key() -> bytes:
+    """The key that signs a dashboard session.
+
+    Derived from the password rather than generated at startup, for two
+    reasons: a restart does not sign everyone out, and changing the password
+    invalidates every session issued under the old one, which is most of what
+    changing a password is for.
+    """
+    return hmac.new(
+        _SESSION_CONTEXT, _expected_dashboard_password().encode(), hashlib.sha256
+    ).digest()
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(_session_key(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _session_token(user: str, expires_at: int) -> str:
+    name = base64.urlsafe_b64encode(user.encode()).decode().rstrip("=")
+    payload = f"{name}.{expires_at}"
+    return f"{payload}.{_sign(payload)}"
+
+
+def session_user(conn: HTTPConnection) -> str | None:
+    """The signed-in user this request carries, or None.
+
+    A cookie is the difference between a session and a cached password. A
+    browser drops a stored password the moment any request comes back 401,
+    which turns one refused poll into being signed out of a page that was
+    working; it does not do that to a cookie.
+    """
+    if not _expected_dashboard_password():
+        return None
+    raw = conn.cookies.get(SESSION_COOKIE)
+    if not raw:
+        return None
+    payload, _, signature = raw.rpartition(".")
+    if not payload or not signature:
+        return None
+    if not hmac.compare_digest(signature, _sign(payload)):
+        return None
+    name, _, expiry = payload.partition(".")
+    try:
+        if int(expiry) <= time.time():
+            return None
+        user = base64.urlsafe_b64decode(name + "=" * (-len(name) % 4)).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not hmac.compare_digest(user, settings.dashboard_user):
+        return None
+    return user
+
+
+def issue_session(request: Request, response: Response, user: str) -> None:
+    """Start or extend a signed-in session on the response.
+
+    # @nonobvious(forced-by): called from middleware, not from the dependency
+    # that authenticates. FastAPI does not merge a dependency's response
+    # headers into a Response a route returned itself, and every dashboard
+    # route returns one, so a cookie set there would silently never be sent.
+    """
+    days = settings.dashboard_session_days
+    # 0 means the session should last only as long as the browser is open, so
+    # the cookie gets no Max-Age; the token still carries an expiry, because a
+    # token nothing can date is a token that never stops working.
+    lifetime = (days or 1) * 86400
+    response.set_cookie(
+        SESSION_COOKIE,
+        _session_token(user, int(time.time()) + lifetime),
+        max_age=lifetime if days else None,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+
+
+def clear_session(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+def _session_is_stale(conn: HTTPConnection) -> bool:
+    """Whether a valid session is over halfway through its life.
+
+    Renewing on every request would put a Set-Cookie on every poll; renewing
+    only past the halfway mark keeps the session sliding without the noise.
+    """
+    raw = conn.cookies.get(SESSION_COOKIE) or ""
+    payload, _, _ = raw.rpartition(".")
+    _, _, expiry = payload.partition(".")
+    try:
+        remaining = int(expiry) - time.time()
+    except ValueError:
+        return True
+    lifetime = (settings.dashboard_session_days or 1) * 86400
+    return remaining < lifetime / 2
 
 
 def _fetch_context(conn: HTTPConnection) -> str:
@@ -117,6 +224,10 @@ def dashboard_auth_ok(authorization: str | None, conn: HTTPConnection | None = N
         return False
     if not _expected_dashboard_password():
         return settings.allow_insecure_no_auth
+    # A WebSocket handshake carries cookies reliably where it carries a stored
+    # password only sometimes, so the session is the better answer here too.
+    if conn is not None and session_user(conn) is not None:
+        return True
     if not authorization:
         return False
     scheme, _, encoded = authorization.partition(" ")
@@ -158,6 +269,12 @@ async def require_dashboard_auth(
             detail="OpenBrowse is not configured yet; continue at /setup.",
             headers={"Location": SETUP_PATH},
         )
+    signed_in = session_user(request)
+    if signed_in is not None:
+        auth_throttle.throttle.record_success(ip)
+        if _session_is_stale(request):
+            request.state.issue_session_for = signed_in
+        return signed_in
     if credentials is None:
         logger.info(
             "Dashboard 401 on %s: no credentials presented (%s)",
@@ -186,4 +303,5 @@ async def require_dashboard_auth(
             headers=challenge_headers(request),
         )
     auth_throttle.throttle.record_success(ip)
+    request.state.issue_session_for = credentials.username
     return credentials.username

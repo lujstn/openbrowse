@@ -167,6 +167,9 @@ async def test_dashboard_success_resets_the_counter(client):
     for _ in range(FREE_ATTEMPTS):
         await client.get("/", headers=bad)
     assert (await client.get("/", headers=good)).status_code == 200
+    # Signing in starts a session, and a session outranks the password on
+    # every later request. Drop it, or what follows tests nothing.
+    client.cookies.clear()
     for _ in range(FREE_ATTEMPTS):
         resp = await client.get("/", headers=bad)
         assert resp.status_code == 401

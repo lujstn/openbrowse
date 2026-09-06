@@ -35,6 +35,7 @@ from openbrowse.agent.runner import (
 from openbrowse.api.sessions import _to_session_response
 from openbrowse.auth import (
     challenge_headers,
+    clear_session,
     dashboard_auth_ok,
     require_dashboard_auth,
 )
@@ -50,7 +51,10 @@ logger = logging.getLogger(__name__)
 _ENV_PATH = settings.env_path
 _STARTED_AT = time.time()
 _ENV_GROUPS: list[tuple[str, list[str]]] = [
-    ("Authentication", ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD"]),
+    (
+        "Authentication",
+        ["API_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_DAYS"],
+    ),
     ("Model providers", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
     ("CAPTCHA solving", ["CAPSOLVER_API_KEY", "CAPTCHA_MAX_COST_USD"]),
     ("Runtime", ["DEFAULT_MODEL", "CLOUD_MAX_COST_FACTOR"]),
@@ -315,6 +319,18 @@ templates.env.globals["display_state"] = display_state
 
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_auth)])
 vnc_router = APIRouter(tags=["dashboard-vnc"])
+# @nonobvious(forced-by): signing out cannot sit behind the sign-in check —
+# the dependency would hand back a freshly renewed session on the way past,
+# and the response would both end and restart the session.
+session_router = APIRouter(tags=["dashboard-session"])
+
+
+@session_router.get("/logout")
+async def logout():
+    """End the signed-in session and send the browser back to the dashboard."""
+    response = RedirectResponse("/", status_code=303)
+    clear_session(response)
+    return response
 
 MODEL_OPTIONS: list[tuple[str, str]] = [
     ("claude-sonnet-5", "Claude Sonnet 5"),
