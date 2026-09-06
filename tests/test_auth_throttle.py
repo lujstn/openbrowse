@@ -39,7 +39,15 @@ async def setup(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def client():
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, client=("198.51.100.4", 5000))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
+async def other_client():
+    """A caller arriving on a different address from the ``client`` fixture."""
+    transport = ASGITransport(app=app, client=("203.0.113.9", 5000))
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
@@ -94,7 +102,7 @@ def test_table_is_bounded(monkeypatch):
 
 
 async def test_api_locks_out_after_repeated_bad_keys(client):
-    headers = {"X-Browser-Use-API-Key": "wrong", "X-Forwarded-For": "9.9.9.9"}
+    headers = {"X-Browser-Use-API-Key": "wrong"}
     for _ in range(FREE_ATTEMPTS):
         resp = await client.get("/v3/sessions", headers=headers)
         assert resp.status_code == 401
@@ -109,41 +117,41 @@ async def test_lockout_blocks_even_the_right_key(client):
     for _ in range(FREE_ATTEMPTS + 1):
         await client.get(
             "/v3/sessions",
-            headers={"X-Browser-Use-API-Key": "wrong", "X-Forwarded-For": "9.9.9.9"},
+            headers={"X-Browser-Use-API-Key": "wrong"},
         )
     resp = await client.get(
         "/v3/sessions",
-        headers={"X-Browser-Use-API-Key": "secret-key", "X-Forwarded-For": "9.9.9.9"},
+        headers={"X-Browser-Use-API-Key": "secret-key"},
     )
     assert resp.status_code == 429
 
 
-async def test_other_ips_are_unaffected_by_a_lockout(client):
+async def test_other_ips_are_unaffected_by_a_lockout(client, other_client):
     for _ in range(FREE_ATTEMPTS + 1):
         await client.get(
             "/v3/sessions",
-            headers={"X-Browser-Use-API-Key": "wrong", "X-Forwarded-For": "9.9.9.9"},
+            headers={"X-Browser-Use-API-Key": "wrong"},
         )
-    resp = await client.get(
+    resp = await other_client.get(
         "/v3/sessions",
-        headers={"X-Browser-Use-API-Key": "secret-key", "X-Forwarded-For": "8.8.8.8"},
+        headers={"X-Browser-Use-API-Key": "secret-key"},
     )
     assert resp.status_code == 200
 
 
 async def test_requests_without_credentials_do_not_count(client):
     for _ in range(FREE_ATTEMPTS + 5):
-        resp = await client.get("/v3/sessions", headers={"X-Forwarded-For": "9.9.9.9"})
+        resp = await client.get("/v3/sessions", headers={})
         assert resp.status_code == 401
     resp = await client.get(
         "/v3/sessions",
-        headers={"X-Browser-Use-API-Key": "secret-key", "X-Forwarded-For": "9.9.9.9"},
+        headers={"X-Browser-Use-API-Key": "secret-key"},
     )
     assert resp.status_code == 200
 
 
 async def test_dashboard_locks_out_after_repeated_bad_passwords(client):
-    headers = {**_basic("admin", "wrong"), "X-Forwarded-For": "9.9.9.9"}
+    headers = {**_basic("admin", "wrong")}
     for _ in range(FREE_ATTEMPTS):
         resp = await client.get("/", headers=headers)
         assert resp.status_code == 401
@@ -154,21 +162,24 @@ async def test_dashboard_locks_out_after_repeated_bad_passwords(client):
 
 
 async def test_dashboard_success_resets_the_counter(client):
-    bad = {**_basic("admin", "wrong"), "X-Forwarded-For": "9.9.9.9"}
-    good = {**_basic("admin", "secret-key"), "X-Forwarded-For": "9.9.9.9"}
+    bad = {**_basic("admin", "wrong")}
+    good = {**_basic("admin", "secret-key")}
     for _ in range(FREE_ATTEMPTS):
         await client.get("/", headers=bad)
     assert (await client.get("/", headers=good)).status_code == 200
+    # Signing in starts a session, and a session outranks the password on
+    # every later request. Drop it, or what follows tests nothing.
+    client.cookies.clear()
     for _ in range(FREE_ATTEMPTS):
         resp = await client.get("/", headers=bad)
         assert resp.status_code == 401
 
 
 async def test_vnc_route_counts_failures_and_locks(client):
-    headers = {**_basic("admin", "wrong"), "X-Forwarded-For": "9.9.9.9"}
+    headers = {**_basic("admin", "wrong")}
     for _ in range(FREE_ATTEMPTS + 2):
         await client.get("/vnc/some-session/vnc.html", headers=headers)
-    good = {**_basic("admin", "secret-key"), "X-Forwarded-For": "9.9.9.9"}
+    good = {**_basic("admin", "secret-key")}
     resp = await client.get("/vnc/some-session/view", headers=good)
     assert resp.status_code == 401
 
@@ -191,15 +202,34 @@ async def test_health_details_requires_auth(client):
     assert "active_sessions" in body
 
 
-def test_client_ip_prefers_forwarded_header():
+def test_client_ip_ignores_a_forwarding_header():
+    """A proxy appends the real client to X-Forwarded-For rather than replacing
+    it, so its first entry is written by whoever sent the request. Honouring it
+    handed every guess a fresh allowance."""
+
     class Conn:
         def __init__(self, headers, host):
             self.headers = headers
             self.client = type("C", (), {"host": host})() if host else None
 
     assert (
-        auth_throttle.client_ip(Conn({"x-forwarded-for": "2.2.2.2, 3.3.3.3"}, "127.0.0.1"))
-        == "2.2.2.2"
+        auth_throttle.client_ip(Conn({"x-forwarded-for": "2.2.2.2, 3.3.3.3"}, "10.0.0.5"))
+        == "10.0.0.5"
     )
     assert auth_throttle.client_ip(Conn({}, "192.168.0.9")) == "192.168.0.9"
     assert auth_throttle.client_ip(Conn({}, None)) == "unknown"
+
+
+async def test_a_forged_forwarding_header_cannot_buy_a_fresh_allowance(client):
+    """Rotating the header per attempt was a complete bypass of the lockout."""
+    for _ in range(FREE_ATTEMPTS + 2):
+        await client.get(
+            "/v3/sessions",
+            headers={"X-Browser-Use-API-Key": "wrong", "X-Forwarded-For": "9.9.9.9"},
+        )
+
+    resp = await client.get(
+        "/v3/sessions",
+        headers={"X-Browser-Use-API-Key": "wrong", "X-Forwarded-For": "8.8.8.8"},
+    )
+    assert resp.status_code == 429

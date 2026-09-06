@@ -32,7 +32,7 @@ from fastapi.utils import is_body_allowed_for_status_code
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openbrowse import __version__, prefetch, system_metrics, updates
-from openbrowse.auth import require_api_key
+from openbrowse.auth import issue_session, require_api_key
 from openbrowse.agent.pool import pool
 from openbrowse.agent.runner import clear_session_states
 from openbrowse.api.profiles import router as profiles_router
@@ -41,7 +41,11 @@ from openbrowse.api.sessions import router as sessions_router
 from openbrowse.browser.factory import display_manager
 from openbrowse.config import settings
 from openbrowse.dashboard.import_routes import router as import_router
-from openbrowse.dashboard.routes import router as dashboard_router, vnc_router as dashboard_vnc_router
+from openbrowse.dashboard.routes import (
+    router as dashboard_router,
+    session_router as dashboard_session_router,
+    vnc_router as dashboard_vnc_router,
+)
 from openbrowse.dashboard.setup_routes import setup_router
 from openbrowse.db import crud
 from openbrowse.db.models import init_db
@@ -113,6 +117,16 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def _carry_dashboard_session(request: Request, call_next):
+    """Put a session cookie on the way out when this request earned one."""
+    response = await call_next(request)
+    user = getattr(request.state, "issue_session_for", None)
+    if user is not None:
+        issue_session(request, response, user)
+    return response
+
+
 def _jsonable_finite(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return repr(value)
@@ -176,6 +190,7 @@ app.include_router(sessions_router)
 app.include_router(profiles_router)
 app.include_router(import_router)
 app.include_router(setup_router)
+app.include_router(dashboard_session_router)
 app.include_router(dashboard_router)
 app.include_router(dashboard_vnc_router)
 

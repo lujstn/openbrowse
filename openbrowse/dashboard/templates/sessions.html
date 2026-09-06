@@ -82,6 +82,16 @@
     color: #34d399;
     border-bottom-color: #34d399;
   }
+  .monitor-signed-out {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid #f5c66b;
+    border-radius: 8px;
+    background: #fff8e6;
+    color: #7a5200;
+    font-size: 13px;
+  }
+  .monitor-signed-out a { color: inherit; }
   .monitor-strip {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -126,6 +136,10 @@
 {% endblock %} {% block content %}
 <h1>Sessions <span class="badge">{{ total }}</span></h1>
 
+<div class="monitor-signed-out" id="monitor-signed-out" style="display: none">
+  Host monitoring is signed out, so these readings stopped updating.
+  <a href="/sessions">Reload the page</a> to sign back in.
+</div>
 <div class="monitor-strip" id="monitor-strip" style="display: none">
   <div class="monitor-tile">
     <div class="monitor-head">
@@ -313,6 +327,8 @@
 <script>
   (function () {
     var strip = document.getElementById("monitor-strip");
+    var note = document.getElementById("monitor-signed-out");
+    var signedOut = false;
     var CFG = [
       { svg: "mon-cpu", val: "mon-cpu-val", key: "loadPerCore", color: "#60a5fa",
         fmt: function (v) { return v.toFixed(2); }, max: null, threshold: 1.0 },
@@ -358,10 +374,29 @@
         " peak over the last hour";
     }
 
+    // A signed-out poll must not leave the last reading on screen looking
+    // current. Nothing here asks for the password: the browser is not
+    // challenged on a background fetch, so the notice says where to go instead.
+    function showSignedOut() {
+      if (signedOut) return;
+      signedOut = true;
+      strip.style.display = "none";
+      note.style.display = "";
+    }
+
+    function showLive() {
+      signedOut = false;
+      note.style.display = "none";
+      strip.style.display = "";
+    }
+
     function tick() {
-      fetch("/system/metrics.json").then(function (r) { return r.json(); }).then(function (data) {
-        if (!data.history || !data.history.length) return;
-        strip.style.display = "";
+      fetch("/system/metrics.json").then(function (r) {
+        if (r.status === 401) { showSignedOut(); return null; }
+        return r.json();
+      }).then(function (data) {
+        if (!data || !data.history || !data.history.length) return;
+        showLive();
         CFG.forEach(function (cfg) { draw(cfg, data.history, data.thresholds); });
       }).catch(function () {});
     }

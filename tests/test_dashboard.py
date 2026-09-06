@@ -1205,5 +1205,133 @@ async def test_configured_dashboard_challenges_rather_than_redirecting(client):
     resp = await client.get("/")
 
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Basic"
+    assert resp.headers["www-authenticate"].startswith("Basic ")
     assert resp.headers.get("location") is None
+
+
+async def test_challenge_names_a_realm(client):
+    """Browsers key stored credentials on (origin, realm), so a challenge
+    without one leaves them dropping a password nothing had expired."""
+    resp = await client.get("/")
+
+    challenge = resp.headers["www-authenticate"]
+    assert 'realm="OpenBrowse"' in challenge
+    assert 'charset="UTF-8"' in challenge
+
+
+async def test_a_background_fetch_is_refused_without_a_login_box(client):
+    """The dashboard polls every ten seconds. Challenging those polls throws a
+    login box over a page the reader is already using."""
+    resp = await client.get("/system/metrics.json", headers={"sec-fetch-dest": "empty"})
+
+    assert resp.status_code == 401
+    assert "www-authenticate" not in resp.headers
+
+
+async def test_wrong_credentials_on_a_background_fetch_stay_quiet_too(client):
+    resp = await client.get(
+        "/system/metrics.json",
+        headers={"sec-fetch-dest": "empty", **_basic("admin", "wrong")},
+    )
+
+    assert resp.status_code == 401
+    assert "www-authenticate" not in resp.headers
+
+
+async def test_loading_a_page_still_asks_for_the_password(client):
+    resp = await client.get("/sessions", headers={"sec-fetch-dest": "document"})
+
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"].startswith("Basic ")
+
+
+async def test_a_client_that_says_nothing_still_gets_the_challenge(client):
+    """curl and anything older than Sec-Fetch-Dest must keep working, so the
+    challenge is withheld only when the browser says it is a background fetch."""
+    resp = await client.get("/system/metrics.json")
+
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"].startswith("Basic ")
+
+
+async def test_signing_in_starts_a_session(client):
+    resp = await client.get("/", headers=_basic("admin", "secret-key"))
+
+    assert resp.status_code == 200
+    cookie = resp.cookies.get("openbrowse_session")
+    assert cookie
+    header = [v for k, v in resp.headers.multi_items() if k == "set-cookie"][0]
+    assert "HttpOnly" in header
+    assert "SameSite=lax" in header.replace("samesite", "SameSite")
+
+
+async def test_the_session_carries_the_next_request_without_a_password(client):
+    await client.get("/", headers=_basic("admin", "secret-key"))
+
+    resp = await client.get("/sessions")
+
+    assert resp.status_code == 200
+
+
+async def test_a_lost_stored_password_no_longer_signs_you_out(client):
+    """The whole point of the session. A browser throws away its stored
+    password the moment any request comes back 401, and from then on sends
+    none — or, worse, keeps sending a stale one. Either way the page must
+    carry on, because one refused poll ending a working sitting is the bug."""
+    await client.get("/", headers=_basic("admin", "secret-key"))
+
+    # The browser has dropped its password and now sends none at all.
+    assert (await client.get("/sessions")).status_code == 200
+    # A stale one left over does not unseat the session either.
+    stale = await client.get("/sessions", headers=_basic("admin", "wrong"))
+    assert stale.status_code == 200
+
+
+async def test_a_tampered_session_is_refused(client):
+    await client.get("/", headers=_basic("admin", "secret-key"))
+    token = client.cookies.get("openbrowse_session")
+    payload, _, signature = token.rpartition(".")
+    client.cookies.set("openbrowse_session", f"{payload}.{'0' * len(signature)}")
+
+    assert (await client.get("/sessions")).status_code == 401
+
+
+async def test_an_expired_session_is_refused(client):
+    from openbrowse.auth import _session_token
+
+    client.cookies.set("openbrowse_session", _session_token("admin", 1))
+
+    assert (await client.get("/sessions")).status_code == 401
+
+
+async def test_changing_the_password_ends_every_session(client, monkeypatch, setup):
+    from dataclasses import replace as dc_replace
+
+    await client.get("/", headers=_basic("admin", "secret-key"))
+    assert (await client.get("/sessions")).status_code == 200
+
+    rotated = dc_replace(setup, api_key="a-new-key", dashboard_password="")
+    monkeypatch.setattr("openbrowse.auth.settings", rotated)
+
+    assert (await client.get("/sessions")).status_code == 401
+
+
+async def test_logging_out_clears_the_session(client):
+    await client.get("/", headers=_basic("admin", "secret-key"))
+
+    resp = await client.get("/logout", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    cleared = [v for k, v in resp.headers.multi_items() if k == "set-cookie"][0]
+    assert 'openbrowse_session=""' in cleared or "openbrowse_session=;" in cleared
+
+
+async def test_the_vnc_passthrough_accepts_a_session(client):
+    """A WebSocket handshake carries cookies reliably where it carries a stored
+    password only sometimes."""
+    await client.get("/", headers=_basic("admin", "secret-key"))
+
+    resp = await client.get("/vnc/unknown-session/view")
+
+    assert resp.status_code != 401
