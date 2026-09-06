@@ -1205,5 +1205,50 @@ async def test_configured_dashboard_challenges_rather_than_redirecting(client):
     resp = await client.get("/")
 
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Basic"
+    assert resp.headers["www-authenticate"].startswith("Basic ")
     assert resp.headers.get("location") is None
+
+
+async def test_challenge_names_a_realm(client):
+    """Browsers key stored credentials on (origin, realm), so a challenge
+    without one leaves them dropping a password nothing had expired."""
+    resp = await client.get("/")
+
+    challenge = resp.headers["www-authenticate"]
+    assert 'realm="OpenBrowse"' in challenge
+    assert 'charset="UTF-8"' in challenge
+
+
+async def test_a_background_fetch_is_refused_without_a_login_box(client):
+    """The dashboard polls every ten seconds. Challenging those polls throws a
+    login box over a page the reader is already using."""
+    resp = await client.get("/system/metrics.json", headers={"sec-fetch-dest": "empty"})
+
+    assert resp.status_code == 401
+    assert "www-authenticate" not in resp.headers
+
+
+async def test_wrong_credentials_on_a_background_fetch_stay_quiet_too(client):
+    resp = await client.get(
+        "/system/metrics.json",
+        headers={"sec-fetch-dest": "empty", **_basic("admin", "wrong")},
+    )
+
+    assert resp.status_code == 401
+    assert "www-authenticate" not in resp.headers
+
+
+async def test_loading_a_page_still_asks_for_the_password(client):
+    resp = await client.get("/sessions", headers={"sec-fetch-dest": "document"})
+
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"].startswith("Basic ")
+
+
+async def test_a_client_that_says_nothing_still_gets_the_challenge(client):
+    """curl and anything older than Sec-Fetch-Dest must keep working, so the
+    challenge is withheld only when the browser says it is a background fetch."""
+    resp = await client.get("/system/metrics.json")
+
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"].startswith("Basic ")

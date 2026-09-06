@@ -26,6 +26,28 @@ _basic = HTTPBasic(auto_error=False)
 
 SETUP_PATH = "/setup"
 
+# @nonobvious(forced-by): RFC 7617 requires a realm on a Basic challenge, and
+# browsers key their stored credentials on (origin, realm). Omitting it leaves
+# that key undefined, which is why a cached password would be dropped without
+# anything having expired. charset says how to encode a non-ASCII password,
+# which is UTF-8 here because that is what this module decodes.
+_BASIC_CHALLENGE = 'Basic realm="OpenBrowse", charset="UTF-8"'
+
+
+def challenge_headers(conn: HTTPConnection) -> dict[str, str]:
+    """Headers for a 401, which may or may not ask the browser to log in.
+
+    A Basic challenge answering a background fetch makes the browser throw a
+    login box over a page the reader is already using. The dashboard polls
+    every ten seconds, so one lapsed credential becomes an interruption almost
+    immediately, over and over. A poll is left to fail quietly instead; the
+    next page load is a moment where asking for the password makes sense, and
+    it still carries the challenge.
+    """
+    if conn.headers.get("sec-fetch-dest") == "empty":
+        return {}
+    return {"WWW-Authenticate": _BASIC_CHALLENGE}
+
 
 async def require_api_key(
     request: Request,
@@ -123,14 +145,14 @@ async def require_dashboard_auth(
         raise HTTPException(
             status_code=401,
             detail="Not authenticated",
-            headers={"WWW-Authenticate": "Basic"},
+            headers=challenge_headers(request),
         )
     if not check_dashboard_credentials(credentials.username, credentials.password):
         auth_throttle.throttle.record_failure(ip)
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            headers=challenge_headers(request),
         )
     auth_throttle.throttle.record_success(ip)
     return credentials.username
