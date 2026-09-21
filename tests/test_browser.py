@@ -145,6 +145,7 @@ async def test_launch_chrome(mock_wait_cdp, mock_create_subproc):
     assert "--no-first-run" in args_str
     assert "--no-default-browser-check" in args_str
     assert "--disable-dev-shm-usage" in args_str
+    assert "--password-store=basic" in args_str
     assert "--window-size=1920,1080" in args_str
 
     # Verify chrome_proc stored on slot
@@ -184,6 +185,7 @@ async def test_launch_chrome_light_flags_env_gated(mock_wait_cdp, mock_create_su
     assert "--disable-gpu" in args_str
     assert "--renderer-process-limit=4" in args_str
     assert "--enable-low-end-device-mode" in args_str
+    assert "--password-store=basic" in args_str
     assert "site-per-process" not in args_str
 
 
