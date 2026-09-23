@@ -3166,6 +3166,136 @@ def register_upload_path_resolution(tools: Tools) -> None:
     entry.function = upload_file_abspath
 
 
+_NAV_PROBE_JS = (
+    "JSON.stringify([document.readyState,"
+    "(document.body && document.body.innerText || '').length])"
+)
+_NAV_PROBE_TIMEOUT_S = 3.0
+# @nonobvious(means): long enough to outlast Chrome's 25s keyring wait on a host
+# launched without --password-store=basic, so a slow first load is never mistaken
+# for a dead tab.
+_NAV_READY_DEADLINE_S = 45.0
+_NAV_DEAD_AFTER_S = 20.0
+_NAV_BLANK_AFTER_S = 10.0
+_NAV_POLL_S = 1.0
+_NAV_EMPTY_ERROR = (
+    "Page loaded but returned empty content for {url}. The page may require "
+    "JavaScript that failed to render, use anti-bot measures, or have a connection "
+    "issue (e.g. tunnel/proxy error). Try a different URL or approach."
+)
+
+
+async def _probe_page(browser_session: BrowserSession, target_id: str) -> tuple[str, int] | None:
+    """(readyState, visible text length) for a tab, or None when the tab does not
+    answer within the probe timeout."""
+    try:
+        raw = await asyncio.wait_for(
+            _eval_on_target(browser_session, target_id, _NAV_PROBE_JS),
+            _NAV_PROBE_TIMEOUT_S,
+        )
+        state, text_len = json.loads(raw)
+        return str(state), int(text_len)
+    except Exception:
+        return None
+
+
+async def _await_page(browser_session: BrowserSession, target_id: str) -> str:
+    """Wait for a navigated tab to settle: "ready" once it has visible text, "empty"
+    once it has finished loading and stayed blank for _NAV_BLANK_AFTER_S (or answers
+    but never fills before the deadline), "unresponsive" once it has answered
+    nothing at all for _NAV_DEAD_AFTER_S."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    last_answer = started
+    blank_since: float | None = None
+    answered = False
+    while loop.time() - started < _NAV_READY_DEADLINE_S:
+        probe = await _probe_page(browser_session, target_id)
+        now = loop.time()
+        if probe is None:
+            if now - last_answer >= _NAV_DEAD_AFTER_S:
+                return "unresponsive"
+        else:
+            answered = True
+            last_answer = now
+            state, text_len = probe
+            if text_len > 0 and state in ("interactive", "complete"):
+                return "ready"
+            if state == "complete":
+                blank_since = blank_since if blank_since is not None else now
+                if now - blank_since >= _NAV_BLANK_AFTER_S:
+                    return "empty"
+            else:
+                blank_since = None
+        await asyncio.sleep(_NAV_POLL_S)
+    return "empty" if answered else "unresponsive"
+
+
+def register_navigation_guard(tools: Tools) -> None:
+    """Replace browser-use's same-tab navigate follow-up with one that cannot wedge
+    a session on a tab that has stopped responding.
+
+    browser-use's navigate checks the page with its full DOM capture, whose 30s
+    timeout reads as "empty"; it then re-dispatches the same navigation onto a
+    tab that is still loading. When the tab has stopped answering CDP altogether,
+    that loop never ends: every later state capture times out too and the agent
+    sits on step one until it is stopped by hand. Probe the tab directly with a
+    short evaluate instead, never navigate the same tab twice, and when the tab
+    answers nothing at all, carry on in a fresh tab and close the dead one.
+    """
+    entry = tools.registry.registry.actions.get("navigate")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def navigate_guarded(params: Any = None, **kwargs: Any) -> Any:
+        browser_session = kwargs.get("browser_session")
+        url = getattr(params, "url", "") or ""
+        if (
+            browser_session is None
+            or getattr(params, "new_tab", False)
+            or not url.lower().startswith(("http://", "https://"))
+        ):
+            return await original(params=params, **kwargs)
+
+        try:
+            event = browser_session.event_bus.dispatch(
+                NavigateToUrlEvent(url=url, new_tab=False)
+            )
+            await asyncio.wait_for(event, _NAV_READY_DEADLINE_S)
+            await event.event_result(raise_if_any=True, raise_if_none=False)
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
+            return ActionResult(error=f"Navigation to {url} failed: {e}")
+
+        first_tab = browser_session.agent_focus_target_id
+        outcome = await _await_page(browser_session, first_tab) if first_tab else "ready"
+        if outcome == "ready":
+            memory = f"Navigated to {url}"
+            return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+        if outcome == "empty":
+            return ActionResult(error=_NAV_EMPTY_ERROR.format(url=url))
+
+        logger.warning("navigate: tab %s stopped responding on %s; retrying in a fresh tab", first_tab, url)
+        fresh_tab = await _spawn_tab(browser_session, url)
+        if fresh_tab:
+            await _focus_target(browser_session, fresh_tab)
+            await _close_spawned_tab(browser_session, first_tab)
+            if await _await_page(browser_session, fresh_tab) == "ready":
+                memory = f"Navigated to {url} (the first tab stopped responding and was replaced)"
+                return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+        return ActionResult(
+            error=(
+                f"The browser stopped responding while loading {url}, and a fresh tab "
+                "did not load it either. Try the navigation again; if it keeps "
+                "failing, the site is not reachable from this browser right now."
+            )
+        )
+
+    entry.function = navigate_guarded
+
+
 def register_output_guard_overrides(tools: Tools) -> None:
     """Stop a run's context ballooning: replace any large chunk already seen this
     session with a short back-reference, and (for dump actions only) cap genuinely huge
