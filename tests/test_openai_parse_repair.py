@@ -58,3 +58,39 @@ def test_correction_text_forbids_concluding_a_tool_is_missing() -> None:
     assert "exists and is valid" in text
     assert "never conclude" in text
     assert "do not drop the action" in text
+
+
+def test_unescaped_quotes_inside_a_string_are_repaired() -> None:
+    """Terra at no reasoning sometimes quotes page text with bare double quotes;
+    a BiL session lost three steps to "Expecting ',' delimiter" on exactly that."""
+    llm, out = _llm_and_format()
+    raw = (
+        '{"thinking": "t", "evaluation_previous_goal": "The page says "This calendar is '
+        'launching soon" and lists nothing", "memory": "m", "next_goal": "n", '
+        '"action": [{"screenshot": {"file_name": "shot.png"}}]}'
+    )
+    parsed = llm._parse_structured(raw, out)
+    assert parsed.evaluation_previous_goal == (
+        'The page says "This calendar is launching soon" and lists nothing'
+    )
+    assert parsed.action[0].model_dump(exclude_none=True)["screenshot"]["file_name"] == "shot.png"
+
+
+def test_several_stray_quotes_across_fields_are_repaired() -> None:
+    llm, out = _llm_and_format()
+    raw = (
+        '{"thinking": "saw "A" then "B"", "evaluation_previous_goal": "e", '
+        '"memory": "title reads "Jobs"", "next_goal": "n", '
+        '"action": [{"screenshot": {"file_name": "shot.png"}}]}'
+    )
+    parsed = llm._parse_structured(raw, out)
+    assert parsed.thinking == 'saw "A" then "B"'
+    assert parsed.memory == 'title reads "Jobs"'
+
+
+def test_unrepairable_json_still_raises() -> None:
+    import pytest
+
+    llm, out = _llm_and_format()
+    with pytest.raises(Exception):
+        llm._parse_structured('{"thinking": "t", "action": [}', out)

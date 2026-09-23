@@ -732,6 +732,34 @@ async def _settle_code_stream(llm: Any, result: Any, output_format: Any) -> None
         logger.debug("code stream settle failed", exc_info=True)
 
 
+_MAX_STRAY_QUOTE_REPAIRS = 40
+
+
+def _decode_with_stray_quotes_escaped(text: str) -> Any:
+    """The first JSON object in ``text``, escaping stray double quotes that a
+    model left unescaped inside a string value.
+
+    A quote inside a string ends it early, so the parser then stops where it
+    expected a delimiter; the last quote before that point is the stray one.
+    Escaping it and decoding again recovers a quoted phrase in two passes.
+    Anything else still raises the parser's own error.
+    """
+    decoder = json.JSONDecoder()
+    candidate = text
+    for _ in range(_MAX_STRAY_QUOTE_REPAIRS):
+        try:
+            obj, _ = decoder.raw_decode(candidate)
+            return obj
+        except json.JSONDecodeError as e:
+            if not e.msg.startswith(("Expecting ',' delimiter", "Expecting ':' delimiter")):
+                raise
+            stray = candidate.rfind('"', 0, e.pos)
+            if stray <= 0 or candidate[stray - 1] == "\\":
+                raise
+            candidate = candidate[:stray] + "\\" + candidate[stray:]
+    return decoder.raw_decode(candidate)[0]
+
+
 class _ResponsesChatOpenAI(ChatOpenAI):
     """ChatOpenAI pointed at OpenAI's Responses API instead of chat.completions:
     the Responses endpoint accepts the full reasoning ladder (chat.completions
@@ -892,7 +920,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
             start = cleaned.find("{")
             if start < 0:
                 raise
-            obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            obj = _decode_with_stray_quotes_escaped(cleaned[start:])
             # @nonobvious(mirrors): the Anthropic client repairs argument shapes
             # before validation; without the same pass here, one slightly
             # mis-shaped argument hard-fails the reply, the correction reads as
