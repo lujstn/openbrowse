@@ -45,11 +45,65 @@ def _normalise_cookie(raw: Any) -> dict[str, Any] | None:
     return cookie
 
 
+# @nonobvious(means): login state is small (session ids, JWTs of a few KB); a
+# stored value this large is a site's cache, which a profile has no need to keep.
+_MAX_STORAGE_VALUE_CHARS = 65_536
+_MAX_ORIGIN_STORAGE_CHARS = 262_144
+_STORAGE_KINDS = ("localStorage", "sessionStorage")
+
+
+def _item_size(item: Any) -> int:
+    if not isinstance(item, dict):
+        return 0
+    return len(str(item.get("name") or "")) + len(str(item.get("value") or ""))
+
+
+def trim_origins(origins: Any) -> list[dict[str, Any]]:
+    """Origins with every stored value over _MAX_STORAGE_VALUE_CHARS dropped, and
+    each origin's storage cut to _MAX_ORIGIN_STORAGE_CHARS by dropping its largest
+    values first; origins left with nothing are removed.
+
+    browser-use restores each origin by injecting a script into every document the
+    browser loads. A profile that had merged back 4.8 MB of sites' caches made that
+    injection wedge page loads outright; nothing in a login needs values this size.
+    """
+    if not isinstance(origins, list):
+        return []
+    trimmed: list[dict[str, Any]] = []
+    for entry in origins:
+        if not isinstance(entry, dict) or not entry.get("origin"):
+            continue
+        out: dict[str, Any] = {k: v for k, v in entry.items() if k not in _STORAGE_KINDS}
+        kept: list[tuple[str, dict[str, Any]]] = []
+        for kind in _STORAGE_KINDS:
+            items = entry.get(kind)
+            if isinstance(items, list):
+                kept.extend(
+                    (kind, item)
+                    for item in items
+                    if isinstance(item, dict) and _item_size(item) <= _MAX_STORAGE_VALUE_CHARS
+                )
+        total = sum(_item_size(item) for _, item in kept)
+        for kind, item in sorted(kept, key=lambda pair: _item_size(pair[1]), reverse=True):
+            if total <= _MAX_ORIGIN_STORAGE_CHARS:
+                break
+            kept.remove((kind, item))
+            total -= _item_size(item)
+        for kind in _STORAGE_KINDS:
+            items = [item for k, item in kept if k == kind]
+            if items:
+                out[kind] = items
+        if any(kind in out for kind in _STORAGE_KINDS):
+            trimmed.append(out)
+    return trimmed
+
+
 def normalize_storage_state(raw: Any) -> dict[str, Any]:
     """Return a clean ``{"cookies": [...], "origins": [...]}`` storage state.
 
     Cookies are reduced to CDP CookieParam-valid fields and malformed entries dropped.
-    ``origins`` (localStorage/sessionStorage) are preserved verbatim for browser-use to restore.
+    ``origins`` (localStorage/sessionStorage) are kept for browser-use to restore,
+    trimmed by ``trim_origins``.
     """
     if not isinstance(raw, dict):
         raise ValueError("storage state must be a JSON object")
@@ -57,10 +111,7 @@ def normalize_storage_state(raw: Any) -> dict[str, Any]:
     if not isinstance(cookies_in, list):
         raise ValueError("storage state 'cookies' must be a list")
     cookies_out = [c for c in (_normalise_cookie(c) for c in cookies_in) if c is not None]
-    origins = raw.get("origins")
-    if not isinstance(origins, list):
-        origins = []
-    return {"cookies": cookies_out, "origins": origins}
+    return {"cookies": cookies_out, "origins": trim_origins(raw.get("origins"))}
 
 
 def cookie_domains(state: dict[str, Any] | None) -> list[str]:

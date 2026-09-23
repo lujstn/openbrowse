@@ -156,3 +156,66 @@ def test_write_state_is_atomic_and_round_trips(tmp_path):
     write_state(target, state)
     assert read_state(target) == state
     assert not (target.parent / (target.name + ".tmp")).exists()
+
+
+def test_storage_values_that_are_site_caches_are_not_kept() -> None:
+    """browser-use injects every origin's storage into every document; a profile
+    that had merged back megabytes of caches wedged page loads outright."""
+    from openbrowse.profiles.storage import _MAX_STORAGE_VALUE_CHARS, trim_origins
+
+    origins = [
+        {
+            "origin": "https://shop.example",
+            "localStorage": [
+                {"name": "session", "value": "tok-123"},
+                {"name": "catalogue_cache", "value": "x" * (_MAX_STORAGE_VALUE_CHARS + 1)},
+            ],
+        },
+        {"origin": "https://cache-only.example", "localStorage": [{"name": "c", "value": "y" * 200_000}]},
+    ]
+    trimmed = trim_origins(origins)
+    assert trimmed == [{"origin": "https://shop.example", "localStorage": [{"name": "session", "value": "tok-123"}]}]
+
+
+def test_an_origin_over_its_storage_cap_drops_its_largest_values_first() -> None:
+    from openbrowse.profiles.storage import _MAX_ORIGIN_STORAGE_CHARS, trim_origins
+
+    big = 60_000
+    items = [{"name": f"k{i}", "value": "v" * big} for i in range(6)] + [
+        {"name": "login", "value": "short"}
+    ]
+    trimmed = trim_origins([{"origin": "https://a.example", "localStorage": items}])
+    kept = trimmed[0]["localStorage"]
+    assert {"name": "login", "value": "short"} in kept
+    assert sum(len(i["name"]) + len(i["value"]) for i in kept) <= _MAX_ORIGIN_STORAGE_CHARS
+
+
+def test_merge_writes_back_a_trimmed_profile() -> None:
+    from openbrowse.profiles.merge import merge_storage_states
+
+    bloated = {
+        "cookies": [],
+        "origins": [{"origin": "https://a.example", "localStorage": [{"name": "cache", "value": "z" * 100_000}]}],
+    }
+    merged = merge_storage_states(None, bloated, None)
+    assert merged["origins"] == []
+
+
+def test_session_working_copy_is_trimmed_before_the_browser_loads_it(tmp_path, monkeypatch) -> None:
+    import asyncio
+    import json
+
+    import openbrowse.agent.runner as runner
+
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({
+        "cookies": [{"name": "sid", "value": "1", "domain": "a.example", "path": "/"}],
+        "origins": [{"origin": "https://a.example", "localStorage": [
+            {"name": "login", "value": "t"}, {"name": "cache", "value": "q" * 100_000}]}],
+    }))
+    monkeypatch.setattr(runner, "_session_state_path", lambda sid: tmp_path / f"{sid}.json")
+    working, baseline = asyncio.run(runner._open_session_state("s1", profile))
+    loaded = json.loads(working.read_text())
+    assert loaded["origins"] == [{"origin": "https://a.example", "localStorage": [{"name": "login", "value": "t"}]}]
+    assert loaded["cookies"][0]["name"] == "sid"
+    assert len(baseline["origins"][0]["localStorage"]) == 2

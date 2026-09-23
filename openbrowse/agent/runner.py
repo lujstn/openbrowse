@@ -75,6 +75,7 @@ from openbrowse.browser.factory import (
 from openbrowse.config import settings
 from openbrowse.db import crud
 from openbrowse.profiles import merge
+from openbrowse.profiles.storage import normalize_storage_state
 
 logger = logging.getLogger(__name__)
 
@@ -1649,7 +1650,11 @@ async def _open_session_state(
     async with _storage_lock(str(profile_state_file)):
         baseline = merge.read_state(profile_state_file)
     working_copy = _session_state_path(session_id)
-    merge.write_state(working_copy, baseline or {"cookies": [], "origins": []})
+    try:
+        start_state = normalize_storage_state(baseline or {})
+    except ValueError:
+        start_state = {"cookies": [], "origins": []}
+    merge.write_state(working_copy, start_state)
     return working_copy, baseline
 
 
