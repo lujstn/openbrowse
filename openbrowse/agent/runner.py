@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import traceback
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import anthropic
 from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from browser_use import Agent, BrowserSession, ChatAnthropic, ChatOpenAI, Tools
@@ -1266,7 +1268,64 @@ class _RepairingChatAnthropic(ChatAnthropic):
     into one structured call if the model still splits.
     """
 
+    def _get_usage(self, response: Any) -> ChatInvokeUsage | None:
+        usage = super()._get_usage(response)
+        if usage is None:
+            return None
+        try:
+            served = cost.fallback_cost(
+                self.model, response, usage.pricing_multiplier or 1.0
+            )
+        except Exception:
+            logger.debug("fallback costing failed", exc_info=True)
+            served = None
+        if served is None:
+            return usage
+        return _ServedUsage(**usage.model_dump(), served_cost_usd=served)
+
+    async def _arm_fallbacks(self) -> None:
+        preference = _FALLBACK_NEIGHBOURS.get(self.model)
+        if not preference:
+            return
+        allowed = await _allowed_fallbacks(self.get_client(), self.model)
+        target = next((m for m in preference if m in allowed), None)
+        self.fallbacks = [{"model": target}] if target else None
+
     async def _create_message(self, **params: Any) -> Any:
+        try:
+            response = await self._create_message_once(**params)
+        except anthropic.BadRequestError as e:
+            if not self.fallbacks or "fallback" not in str(e).lower():
+                raise
+            # @nonobvious(forced-by): the API rejects the whole request up front
+            # when a fallback target stops being permitted, so drop the opt-in
+            # rather than fail every step on this model.
+            logger.warning("Refusal fallback rejected for %s, disabling it: %s", self.model, e)
+            _ALLOWED_FALLBACKS[self.model] = (time.monotonic(), ())
+            self.fallbacks = None
+            betas = [b for b in params.pop("betas", None) or [] if not b.startswith("server-side-fallback-")]
+            if betas:
+                params["betas"] = betas
+            extra_body = dict(params.pop("extra_body", None) or {})
+            extra_body.pop("fallbacks", None)
+            if extra_body:
+                params["extra_body"] = extra_body
+            response = await self._create_message_once(**params)
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) if details is not None else None
+            served = getattr(response, "model", None) or self.model
+            raise ModelProviderError(
+                message=(
+                    f"{served} declined this step "
+                    f"(safety classifier: {category or 'unspecified'})"
+                ),
+                status_code=400,
+                model=self.name,
+            )
+        return response
+
+    async def _create_message_once(self, **params: Any) -> Any:
         tool_choice = params.get("tool_choice")
         if isinstance(tool_choice, dict) and tool_choice.get("type") == "auto":
             # @nonobvious(forced-by): extended thinking forces auto tool choice,
@@ -1324,8 +1383,11 @@ class _RepairingChatAnthropic(ChatAnthropic):
         think_parts: list[str] = []
         last_push = 0.0
         began_at: float | None = None
+        iterations: Any = None
         async for event in stream:
             etype = getattr(event, "type", "")
+            if etype == "message_delta":
+                iterations = getattr(getattr(event, "usage", None), "iterations", None) or iterations
             if sid and etype == "content_block_start":
                 block = getattr(event, "content_block", None)
                 # @nonobvious(forced-by): adaptive thinking reasons privately and
@@ -1361,7 +1423,16 @@ class _RepairingChatAnthropic(ChatAnthropic):
         self._reasoning_seconds = (
             round(loop.time() - began_at, 1) if began_at is not None else None
         )
-        return await stream.get_final_message()
+        final = await stream.get_final_message()
+        if iterations is not None:
+            # @nonobvious(forced-by): the SDK's stream accumulator keeps only the
+            # token counts from message_delta, dropping the per-attempt record a
+            # refusal fallback is billed from.
+            try:
+                setattr(final.usage, "iterations", iterations)
+            except Exception:
+                logger.debug("could not attach usage iterations", exc_info=True)
+        return final
 
     async def ainvoke(self, messages: Any, output_format: Any = None, **kwargs: Any) -> Any:
         result = await self._ainvoke_inner(messages, output_format, **kwargs)
@@ -1389,6 +1460,8 @@ class _RepairingChatAnthropic(ChatAnthropic):
             last = getattr(self, "_last_action", None)
             label = "Model reasoning" + (f" · next step after {last}" if last else "")
             set_activity(sid, label, spin=True, kind="reasoning")
+        await self._arm_fallbacks()
+
         async def _call(msgs: Any) -> Any:
             return await super(_RepairingChatAnthropic, self).ainvoke(
                 msgs, output_format, **kwargs
@@ -1415,17 +1488,73 @@ class _RepairingChatAnthropic(ChatAnthropic):
 
 
 _ANTHROPIC_MODELS: tuple[str, ...] = (
+    "claude-fable-5-1",
     "claude-fable-5",
     "claude-mythos-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
 )
 
+
+class _ServedUsage(ChatInvokeUsage):
+    """Usage whose cost was already settled per attempt, because a refusal
+    fallback served the reply at another model's rates."""
+
+    served_cost_usd: float
+
+
+# @nonobvious(means): the models whose safety classifiers can decline a request,
+# each with its nearest neighbours in order; the first one the API permits as a
+# fallback target for that model is the one a declined step is retried on.
+_FALLBACK_NEIGHBOURS: dict[str, tuple[str, ...]] = {
+    "claude-fable-5-1": ("claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"),
+    "claude-fable-5": ("claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"),
+    "claude-opus-5-5": ("claude-opus-5", "claude-opus-4-8"),
+    "claude-opus-5": ("claude-opus-4-8",),
+}
+
+_FALLBACK_BETA = "server-side-fallback-2026-06-01"
+_ALLOWED_FALLBACKS_TTL_S = 6 * 3600
+_ALLOWED_FALLBACKS_RETRY_S = 15 * 60
+_ALLOWED_FALLBACKS: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+async def _allowed_fallbacks(client: Any, model_id: str) -> tuple[str, ...]:
+    """The fallback targets the API permits for ``model_id``, from the Models
+    API. Empty when they cannot be read, so no step fails over a lookup."""
+    now = time.monotonic()
+    cached = _ALLOWED_FALLBACKS.get(model_id)
+    if cached is not None:
+        fetched_at, allowed = cached
+        ttl = _ALLOWED_FALLBACKS_TTL_S if allowed else _ALLOWED_FALLBACKS_RETRY_S
+        if now - fetched_at < ttl:
+            return allowed
+    allowed: tuple[str, ...] = ()
+    try:
+        info = await client.beta.models.retrieve(model_id, betas=[_FALLBACK_BETA])
+        raw = getattr(info, "allowed_fallback_models", None) or []
+        allowed = tuple(
+            m if isinstance(m, str) else (cost._field(m, "id") or cost._field(m, "model"))
+            for m in raw
+        )
+        allowed = tuple(m for m in allowed if m)
+    except Exception:
+        logger.warning("Could not read allowed fallback models for %s", model_id, exc_info=True)
+    if not allowed:
+        logger.warning("No refusal fallback for %s: no permitted target was found", model_id)
+    _ALLOWED_FALLBACKS[model_id] = (now, allowed)
+    return allowed
+
+
 _OPENAI_MODELS: tuple[str, ...] = (
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -1490,15 +1619,22 @@ class ModelReasoning:
 # @nonobvious(must-hold): rows mirror the live APIs as probed 2026-08-16:
 # Fable/Mythos 400 on a disabled config; the Responses endpoint accepts "none"
 # through "max" (chat.completions rejects "max"). Re-probe before editing.
+# Opus 5.5 and GPT-6 Astra rows follow their launch docs (2026-09-23): neither
+# accepts a disabled config, and Opus 5.5 defaults to medium, not high.
 _MODEL_REASONING: dict[str, ModelReasoning] = {
     "claude-sonnet-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-opus-5-5": ModelReasoning(_FULL_LADDER, "medium", False, "adaptive"),
     "claude-opus-5": ModelReasoning(_FULL_LADDER, "high", True, "adaptive"),
+    "claude-fable-5-1": ModelReasoning(_FULL_LADDER, "high", False, "adaptive"),
     "claude-fable-5": ModelReasoning(_FULL_LADDER, "high", False, "adaptive"),
     "claude-mythos-5": ModelReasoning(_FULL_LADDER, "high", False, "adaptive"),
     "claude-opus-4-8": ModelReasoning(_FULL_LADDER, "none", True, "adaptive"),
     "claude-opus-4-7": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
     "claude-opus-4-6": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
     "claude-sonnet-4-6": ModelReasoning(("low", "medium", "high"), "none", True, "budget"),
+    "gpt-6-astra": ModelReasoning(_FULL_LADDER, "medium", False, "openai-responses"),
+    "gpt-6-sol": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
+    "gpt-6-luna": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
     "gpt-5.6-terra": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
     "gpt-5.6-sol": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
     "gpt-5.6-luna": ModelReasoning(_FULL_LADDER, "medium", True, "openai-responses"),
@@ -1619,6 +1755,11 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
     # Claude 5, so "none" must send an explicit disabled config, never omit.
     if effort == "none":
         kwargs["thinking"] = {"type": "disabled"}
+    elif effort == "default" and not spec.can_disable:
+        # @nonobvious(forced-by): equivalent to omitting on the wire, but
+        # browser-use forces tool_choice "tool" whenever thinking is unset, and
+        # always-thinking models such as Opus 5.5 reject forced tool choice.
+        kwargs["thinking"] = {"type": "adaptive"}
     elif effort != "default":
         if spec.style == "adaptive":
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
@@ -2054,10 +2195,13 @@ def _north_star_preflight(requested_model: str, text: str) -> asyncio.Task | Non
     browser launch (first turn) or with the agent waking up (a follow-up).
     """
     try:
-        preflight_effort = "none" if model_reasoning(requested_model).can_disable else "default"
+        spec = model_reasoning(requested_model)
+        preflight_effort = "none" if spec.can_disable else spec.efforts[0]
         _, _, preflight_llm = _build_llm(requested_model, preflight_effort)
         try:
-            preflight_llm.max_tokens = 300
+            # @nonobvious(forced-by): thinking counts toward max_tokens, so an
+            # always-thinking model needs room to reason before the one line.
+            preflight_llm.max_tokens = 300 if spec.can_disable else 4096
         except Exception:
             pass
         return asyncio.create_task(_derive_north_star(preflight_llm, text))

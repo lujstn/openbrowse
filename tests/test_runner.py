@@ -199,7 +199,7 @@ def test_build_llm_always_thinking_models_reject_none(monkeypatch):
 def test_always_thinking_models_are_registered():
     import openbrowse.agent.runner as runner
 
-    for model in ("claude-fable-5", "claude-mythos-5"):
+    for model in ("claude-fable-5-1", "claude-fable-5", "claude-mythos-5", "claude-opus-5-5"):
         assert model in runner._ANTHROPIC_MODELS
         spec = runner._MODEL_REASONING[model]
         assert spec.can_disable is False
@@ -230,9 +230,13 @@ def test_validate_effort_semantics():
     ):
         with pytest.raises(ValueError, match="not a valid reasoning effort"):
             validate_effort(model, bad)
-    for model in ("claude-fable-5", "claude-mythos-5"):
+    for model in (
+        "claude-fable-5-1", "claude-fable-5", "claude-mythos-5", "claude-opus-5-5", "gpt-6-astra"
+    ):
         with pytest.raises(ValueError, match="reasoning cannot be disabled"):
             validate_effort(model, "none")
+    assert validate_effort("gpt-6-sol", "none") == "none"
+    assert validate_effort("gpt-6-luna", "none") == "none"
 
 
 def test_canonical_stored_effort_maps_legacy_off():
@@ -270,6 +274,9 @@ def test_resolve_default_effort_per_generation():
     assert resolve_default_effort("claude-sonnet-4-6") == "none"
     assert resolve_default_effort("gpt-5.6-terra") == "medium"
     assert resolve_default_effort("gpt-5.6-sol") == "medium"
+    assert resolve_default_effort("claude-opus-5-5") == "medium"
+    for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna"):
+        assert resolve_default_effort(model) == "medium"
 
 
 def test_registry_covers_every_model():
@@ -288,9 +295,13 @@ def test_build_llm_wire_shapes(monkeypatch):
     assert llm.thinking == {"type": "disabled"}
     _, _, llm = runner._build_llm("claude-sonnet-4-6", "none")
     assert llm.thinking == {"type": "disabled"}
-    for model in ("claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"):
+    for model in ("claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"):
         _, _, llm = runner._build_llm(model, "default")
         assert getattr(llm, "thinking", None) is None
+        assert getattr(llm, "output_config", None) is None
+    for model in ("claude-fable-5-1", "claude-fable-5", "claude-mythos-5", "claude-opus-5-5"):
+        _, _, llm = runner._build_llm(model, "default")
+        assert llm.thinking == {"type": "adaptive"}
         assert getattr(llm, "output_config", None) is None
     _, _, llm = runner._build_llm("claude-sonnet-5", "max")
     assert llm.thinking == {"type": "adaptive", "display": "summarized"}
@@ -361,6 +372,264 @@ def test_build_llm_opus5_builds(monkeypatch):
     monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
     provider, model_id, _ = runner._build_llm("claude-opus-5", "none")
     assert (provider, model_id) == ("anthropic", "claude-opus-5")
+
+
+def test_resolve_new_generation_models():
+    assert _resolve_model("claude-opus-5-5") == ("anthropic", "claude-opus-5-5")
+    assert _resolve_model("claude-opus-5.5") == ("anthropic", "claude-opus-5-5")
+    assert _resolve_model("gpt-6-astra") == ("openai", "gpt-6-astra")
+    assert _resolve_model("gpt-6-sol") == ("openai", "gpt-6-sol")
+    assert _resolve_model("gpt-6-luna") == ("openai", "gpt-6-luna")
+
+
+def test_opus_5_5_never_forces_tool_choice(monkeypatch):
+    """Opus 5.5 answers a forced tool_choice with a 400, and browser-use forces
+    one for structured output whenever no thinking config is set, so every
+    effort, the unset one included, must reach the wire as auto tool choice."""
+    import openbrowse.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    for effort in ("default", "low", "medium", "high", "xhigh", "max"):
+        _, _, llm = runner._build_llm("claude-opus-5-5", effort)
+        assert llm._requires_auto_tool_choice(), effort
+        assert llm.thinking["type"] == "adaptive", effort
+    with pytest.raises(ValueError, match="reasoning cannot be disabled"):
+        runner._build_llm("claude-opus-5-5", "none")
+    _, _, llm = runner._build_llm("claude-opus-5-5", "medium")
+    assert llm.thinking == {"type": "adaptive", "display": "summarized"}
+    assert llm.output_config == {"effort": "medium"}
+
+
+def test_gpt6_wire_shapes(monkeypatch):
+    import openbrowse.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
+    with pytest.raises(ValueError, match="reasoning cannot be disabled"):
+        runner._build_llm("gpt-6-astra", "none")
+    _, _, llm = runner._build_llm("gpt-6-astra", "low")
+    assert llm.reasoning_effort == "low"
+    for model in ("gpt-6-sol", "gpt-6-luna"):
+        provider, model_id, llm = runner._build_llm(model, "none")
+        assert (provider, model_id) == ("openai", model)
+        assert llm.reasoning_effort == "none"
+
+
+def test_north_star_preflight_keeps_always_thinking_models_legal(monkeypatch):
+    """The pre-flight turns reasoning off where it can; where it cannot, it
+    must pick the lowest valid level rather than an effort the model rejects,
+    and leave room in max_tokens for the thinking."""
+    import openbrowse.agent.runner as runner
+
+    built: list[tuple] = []
+    real = runner._build_llm
+
+    def spy(model, effort):
+        out = real(model, effort)
+        built.append((model, effort, out[2]))
+        return out
+
+    async def fake_derive(llm, task):
+        return task
+
+    monkeypatch.setattr(
+        runner, "settings", _fake_settings(anthropic="sk-ant-x", openai="sk-x")
+    )
+    monkeypatch.setattr(runner, "_build_llm", spy)
+    monkeypatch.setattr(runner, "_derive_north_star", fake_derive)
+
+    async def go():
+        for model in ("claude-opus-5-5", "gpt-6-astra", "claude-sonnet-5", "gpt-6-sol"):
+            task = runner._north_star_preflight(model, "Find the price.")
+            assert task is not None
+            await task
+
+    asyncio.run(go())
+    efforts = {model: effort for model, effort, _ in built}
+    assert efforts == {
+        "claude-opus-5-5": "low",
+        "gpt-6-astra": "low",
+        "claude-sonnet-5": "none",
+        "gpt-6-sol": "none",
+    }
+    llms = {model: llm for model, _, llm in built}
+    assert llms["claude-opus-5-5"].max_tokens == 4096
+    assert llms["claude-sonnet-5"].max_tokens == 300
+
+
+def _fallback_llm(monkeypatch, model="claude-opus-5-5", allowed=("claude-opus-5", "claude-opus-4-8")):
+    import openbrowse.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    monkeypatch.setattr(runner, "_ALLOWED_FALLBACKS", {})
+    calls: list[str] = []
+
+    async def retrieve(model_id, betas):
+        calls.append(model_id)
+        assert betas == [runner._FALLBACK_BETA]
+        return types.SimpleNamespace(allowed_fallback_models=list(allowed))
+
+    client = types.SimpleNamespace(
+        beta=types.SimpleNamespace(models=types.SimpleNamespace(retrieve=retrieve))
+    )
+    _, _, llm = runner._build_llm(model, "medium")
+    object.__setattr__(llm, "get_client", lambda: client)
+    return runner, llm, calls
+
+
+def test_refusal_fallback_goes_to_nearest_permitted_neighbour(monkeypatch):
+    runner, llm, calls = _fallback_llm(monkeypatch)
+    asyncio.run(llm._arm_fallbacks())
+    assert llm.fallbacks == [{"model": "claude-opus-5"}]
+    assert llm._get_betas_for_invoke() == [runner._FALLBACK_BETA]
+    assert llm._get_extra_body_for_invoke()["fallbacks"] == [{"model": "claude-opus-5"}]
+    asyncio.run(llm._arm_fallbacks())
+    assert calls == ["claude-opus-5-5"]
+    assert llm.fallbacks == [{"model": "claude-opus-5"}]
+
+
+def test_refusal_fallback_skips_neighbours_the_api_does_not_permit(monkeypatch):
+    _, llm, _ = _fallback_llm(
+        monkeypatch, model="claude-fable-5-1", allowed=("claude-opus-5", "claude-opus-4-8")
+    )
+    asyncio.run(llm._arm_fallbacks())
+    assert llm.fallbacks == [{"model": "claude-opus-5"}]
+
+
+def test_refusal_fallback_off_when_nothing_is_permitted(monkeypatch):
+    _, llm, _ = _fallback_llm(monkeypatch, allowed=())
+    asyncio.run(llm._arm_fallbacks())
+    assert llm.fallbacks is None
+    assert llm._get_betas_for_invoke() is None
+
+
+def test_refusal_fallback_lookup_failure_sends_no_fallback(monkeypatch):
+    runner, llm, _ = _fallback_llm(monkeypatch)
+
+    async def broken(model_id, betas):
+        raise RuntimeError("models api down")
+
+    object.__setattr__(
+        llm,
+        "get_client",
+        lambda: types.SimpleNamespace(
+            beta=types.SimpleNamespace(models=types.SimpleNamespace(retrieve=broken))
+        ),
+    )
+    asyncio.run(llm._arm_fallbacks())
+    assert llm.fallbacks is None
+
+
+def test_models_without_classifiers_get_no_fallback(monkeypatch):
+    import openbrowse.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant-x"))
+    for model in ("claude-sonnet-5", "claude-mythos-5", "claude-opus-4-8"):
+        _, _, llm = runner._build_llm(model, "high")
+        asyncio.run(llm._arm_fallbacks())
+        assert llm.fallbacks is None, model
+
+
+def test_rejected_fallback_is_dropped_and_the_step_retried(monkeypatch):
+    import anthropic
+
+    runner, llm, _ = _fallback_llm(monkeypatch)
+    asyncio.run(llm._arm_fallbacks())
+    sent: list[dict] = []
+    ok = types.SimpleNamespace(stop_reason="tool_use", content=[], usage=None)
+
+    async def once(**params):
+        sent.append(params)
+        if len(sent) == 1:
+            raise anthropic.BadRequestError(
+                "fallbacks: claude-opus-5 is not a permitted fallback",
+                response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+                body=None,
+            )
+        return ok
+
+    object.__setattr__(llm, "_create_message_once", once)
+    got = asyncio.run(
+        llm._create_message(
+            model="claude-opus-5-5",
+            betas=[runner._FALLBACK_BETA],
+            extra_body={"fallbacks": [{"model": "claude-opus-5"}], "output_config": {"effort": "medium"}},
+        )
+    )
+    assert got is ok
+    assert "betas" not in sent[1]
+    assert sent[1]["extra_body"] == {"output_config": {"effort": "medium"}}
+    assert llm.fallbacks is None
+    assert runner._ALLOWED_FALLBACKS["claude-opus-5-5"][1] == ()
+
+
+def test_refusal_raises_a_named_provider_error(monkeypatch):
+    from browser_use.llm.exceptions import ModelProviderError
+
+    _, llm, _ = _fallback_llm(monkeypatch)
+
+    async def once(**params):
+        return types.SimpleNamespace(
+            stop_reason="refusal",
+            stop_details=types.SimpleNamespace(category="bio"),
+            model="claude-opus-5",
+            content=[],
+        )
+
+    object.__setattr__(llm, "_create_message_once", once)
+    with pytest.raises(ModelProviderError, match=r"claude-opus-5 declined this step \(safety classifier: bio\)"):
+        asyncio.run(llm._create_message(model="claude-opus-5-5"))
+
+
+def test_fallback_served_usage_is_priced_at_the_serving_models_rates(monkeypatch):
+    from anthropic.types import Message
+
+    from openbrowse.agent import cost
+
+    _, llm, _ = _fallback_llm(monkeypatch)
+    message = Message.model_validate(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [
+                {"type": "text", "text": "ok"},
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "iterations": [
+                    {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1000,
+                     "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                    {"type": "fallback_message", "model": "claude-opus-5", "input_tokens": 1000,
+                     "output_tokens": 200, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                ],
+            },
+        }
+    )
+    usage = llm._get_usage(message)
+    assert usage.served_cost_usd == pytest.approx((1000 * 5 + 200 * 25) / 1_000_000)
+    assert cost.usage_cost("claude-opus-5-5", usage) == usage.served_cost_usd
+
+
+def test_unfallen_usage_is_priced_normally(monkeypatch):
+    from anthropic.types import Message
+
+    _, llm, _ = _fallback_llm(monkeypatch)
+    message = Message.model_validate(
+        {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )
+    usage = llm._get_usage(message)
+    assert not hasattr(usage, "served_cost_usd")
 
 
 def _responses_llm(monkeypatch, effort="max"):
@@ -2046,3 +2315,38 @@ def test_review_message_points_a_store_run_at_the_store_tools() -> None:
     assert "set_field, update_item or update_items" in with_store
     assert "changes nothing that is delivered" in with_store
     assert "set_field" not in _review_message("event.url is wrong", 2)
+
+
+def test_streamed_fallback_keeps_the_per_attempt_billing_record(monkeypatch):
+    _, llm, _ = _fallback_llm(monkeypatch)
+    iterations = [{"type": "fallback_message", "model": "claude-opus-5", "output_tokens": 3}]
+    final = types.SimpleNamespace(usage=types.SimpleNamespace(output_tokens=3))
+
+    class _Stream:
+        def __aiter__(self):
+            async def gen():
+                yield types.SimpleNamespace(type="message_start")
+                yield types.SimpleNamespace(
+                    type="message_delta",
+                    usage=types.SimpleNamespace(iterations=iterations),
+                )
+
+            return gen()
+
+        async def get_final_message(self):
+            return final
+
+    got = asyncio.run(llm._drain_stream(_Stream()))
+    assert got.usage.iterations == iterations
+
+
+def test_failed_fallback_lookup_is_retried_once_the_short_ttl_lapses(monkeypatch):
+    runner, llm, calls = _fallback_llm(monkeypatch, allowed=())
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    asyncio.run(llm._arm_fallbacks())
+    asyncio.run(llm._arm_fallbacks())
+    assert calls == ["claude-opus-5-5"]
+    clock[0] += runner._ALLOWED_FALLBACKS_RETRY_S + 1
+    asyncio.run(llm._arm_fallbacks())
+    assert calls == ["claude-opus-5-5", "claude-opus-5-5"]
