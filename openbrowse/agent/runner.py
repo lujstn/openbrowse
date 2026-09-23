@@ -508,7 +508,23 @@ def _last_judgement(history: Any) -> Any:
         return None
 
 
-def _review_message(reason: str, replies_left: int) -> str:
+_STORE_REVIEW_NOTE = (
+    "\n\nYour result is the output store, not the text of done: write every "
+    "change with set_field, update_item or update_items first, then call done. "
+    "JSON written only into done's text changes nothing that is delivered. A "
+    "value the reviewer saw ending \"… [+N more characters, stored in full; "
+    "shortened only for this review]\" is complete in the store; do not try to "
+    "repair it."
+)
+
+
+def _review_message(reason: str, replies_left: int, uses_store: bool = False) -> str:
+    return _review_message_body(reason, replies_left) + (
+        _STORE_REVIEW_NOTE if uses_store else ""
+    )
+
+
+def _review_message_body(reason: str, replies_left: int) -> str:
     # @nonobvious(must-hold): the demand wording has to fire on the LAST round the
     # loop will run, not one past it, or the conversation stops for cost while the
     # agent has only ever been invited to argue and never told to comply.
@@ -593,7 +609,7 @@ async def _run_with_review(
         review_state["snapshot"] = snapshot
         steps_before = len(getattr(history, "history", []) or [])
         replies_left = _MAX_REVIEW_JUSTIFICATIONS - justifications
-        message = _review_message(reason, replies_left)
+        message = _review_message(reason, replies_left, uses_store=store is not None)
         _inject_followup_task(agent, message)
         history = await run_agent()
         # @nonobvious(must-hold): a round that added no steps means the agent

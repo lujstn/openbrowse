@@ -49,6 +49,7 @@ from openbrowse.agent.output_store import (
     _coerce_scalar,
     _name_tokens,
     _peel_optional,
+    elide_for_review,
     elide_long_values,
 )
 from openbrowse.agent import activity
@@ -4974,6 +4975,34 @@ def _gate_link_deficit(
     return msg
 
 
+_MAX_STRANDED_BOUNCES = 2
+
+
+def _done_text_disagrees_with_store(text: str, store: OutputStore) -> list[str]:
+    """Top-level output fields whose values in a JSON object embedded in ``text``
+    differ from the store's. Empty when the text carries no such object, when its
+    keys are not output fields, or when it matches the store.
+
+    The agent sometimes answers a review by writing the corrected result into
+    done's text; the delivered output is the store, so that correction is lost
+    and the reviewer, seeing the old output, reports that nothing changed.
+    """
+    start = (text or "").find("{")
+    if start < 0:
+        return []
+    try:
+        claimed, _ = json.JSONDecoder().raw_decode(text[start:])
+        stored = json.loads(store.read_output())
+    except Exception:
+        return []
+    if not isinstance(claimed, dict) or not isinstance(stored, dict) or not claimed:
+        return []
+    known = set(store.output_model.model_fields)
+    if not set(claimed) <= known:
+        return []
+    return sorted(k for k in claimed if claimed[k] != stored.get(k))
+
+
 def register_completeness_gate(
     tools: Tools,
     store: OutputStore,
@@ -4992,7 +5021,7 @@ def register_completeness_gate(
     if done_entry is None:
         return
     original_done = done_entry.function
-    state = {"bounced": False}
+    state = {"bounced": False, "stranded": 0}
 
     @tools.action(
         done_entry.description,
@@ -5001,6 +5030,20 @@ def register_completeness_gate(
         terminates_sequence=done_entry.terminates_sequence,
     )
     async def done(params: Any, file_system: FileSystem) -> ActionResult:
+        stranded = _done_text_disagrees_with_store(getattr(params, "text", ""), store)
+        if stranded and state["stranded"] < _MAX_STRANDED_BOUNCES:
+            state["stranded"] += 1
+            return ActionResult(
+                is_done=False,
+                extracted_content=(
+                    "Not finished — your done text carries a result whose "
+                    + ", ".join(stranded)
+                    + " differ from the output store, and the store is what is "
+                    "delivered: JSON written only into done's text changes nothing. "
+                    "Write each change with set_field, update_item or update_items "
+                    "(add_item for new records), then call done again."
+                ),
+            )
         if not state["bounced"]:
             empties = _gate_empty_fields(store, clipboard)
             deficit = _gate_link_deficit(store, clipboard) or _gate_refused_items(clipboard)
@@ -5087,7 +5130,7 @@ def register_completeness_gate(
                     # judge fails the run as truncated; eliding long values keeps
                     # every record visible in the same budget.
                     answer = json.dumps(
-                        elide_long_values(json.loads(answer))[0], default=str
+                        elide_for_review(json.loads(answer))[0], default=str
                     )
                     elision_note = "; long values elided for review"
                 if len(answer) > _JUDGE_ANSWER_CAP:
@@ -5100,10 +5143,10 @@ def register_completeness_gate(
                     "third-party frame is equally well identified by the host "
                     "page's own URL or the embedded provider's URL; do not "
                     "fail the run over which of the two a URL field carries. "
-                    'Values rendered as "<N chars>" are display elisions of '
-                    "complete stored data, shortened only for this review — "
-                    "the delivered output contains the full values; do not "
-                    "treat them as truncation or missing content.\n\n"
+                    'A value ending "… [+N more characters, stored in full; '
+                    'shortened only for this review]" is complete in the '
+                    "delivered output; only this review shows its opening, so "
+                    "do not treat it as truncation or missing content.\n\n"
                     f"{params.text}"
                 )
             except Exception:

@@ -1,5 +1,7 @@
 """Tool registration tests (no live API calls)."""
 
+import json
+
 import pytest
 from browser_use import ActionResult, Tools
 
@@ -4870,3 +4872,87 @@ def test_note_page_ignores_a_repeat_of_the_same_url() -> None:
     note_read_action(clip, "scroll", {})
     note_page(clip, "https://www.arize.com")
     assert clip[_PAGE_READS_KEY] == 0
+
+
+async def test_judge_sees_the_opening_of_long_values_not_a_bare_size_marker() -> None:
+    """A bare "<N chars>" reads as truncated output to a reviewer, which then
+    fails a complete run and sends the agent to repair undamaged data."""
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    for i in range(16):
+        store.add_item(
+            {
+                "title": f"Item {i}",
+                "sourceUrl": f"https://x.com/{i}",
+                "description": f"Role {i} overview. " + "long text " * 200,
+            }
+        )
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text="all done", success=True)
+    await entry.function(params=params, file_system=_FakeFileSystem())
+    assert "Role 3 overview." in params.text
+    assert "more characters, stored in full; shortened only for this review]" in params.text
+    assert " chars>" not in params.text
+
+
+async def test_done_carrying_a_different_result_than_the_store_is_sent_back() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d"})
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    corrected = json.dumps(
+        {"items": [{"title": "A (fixed)", "sourceUrl": "https://x.com/a", "description": "d"}]}
+    )
+    params = entry.param_model(text=f"Corrected result: {corrected}", success=True)
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert result.is_done is False
+    assert "items" in result.extracted_content
+    assert "set_field, update_item or update_items" in result.extracted_content
+
+
+async def test_done_carrying_the_same_result_as_the_store_is_accepted() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d"})
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text=f"Result: {store.read_output()}", success=True)
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert result.is_done is True
+
+
+async def test_prose_and_foreign_json_in_done_text_are_not_mistaken_for_a_result() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d"})
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    params = entry.param_model(text='Done. Page said {"status": "ok"}.', success=True)
+    result = await entry.function(params=params, file_system=_FakeFileSystem())
+    assert result.is_done is True
+
+
+async def test_stranded_result_bounce_gives_up_after_two_tries() -> None:
+    from openbrowse.agent.tools import register_completeness_gate
+
+    tools = Tools()
+    store = _items_store()
+    store.add_item({"title": "A", "sourceUrl": "https://x.com/a", "description": "d"})
+    register_completeness_gate(tools, store, None)
+    entry = tools.registry.registry.actions["done"]
+    corrected = json.dumps({"items": []})
+    outcomes = []
+    for _ in range(3):
+        params = entry.param_model(text=corrected, success=True)
+        outcomes.append((await entry.function(params=params, file_system=_FakeFileSystem())).is_done)
+    assert outcomes == [False, False, True]
