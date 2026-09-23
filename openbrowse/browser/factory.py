@@ -358,8 +358,6 @@ async def launch_chrome(slot: DisplaySlot) -> str:
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
-        # @nonobvious(forced-by) a headless Linux host runs no keyring daemon, so Chrome's default Secret Service lookup waits out D-Bus's 25s timeout before it issues its first network request
-        "--password-store=basic",
         "--window-size=1920,1080",
     ]
     if settings.chrome_light_flags:
