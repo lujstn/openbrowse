@@ -3286,6 +3286,43 @@ async def _run_navigation(browser_session: BrowserSession, url: str) -> None:
     await event.event_result(raise_if_any=True, raise_if_none=False)
 
 
+_revive_locks: dict[int, asyncio.Lock] = {}
+
+
+async def revive_dead_focus(browser_session: BrowserSession) -> bool:
+    """Replace the agent's tab with a fresh one on the same URL when it has
+    stopped answering CDP, so a tab that dies mid-run cannot wedge every later
+    state capture. True when a replacement was made.
+
+    A healthy tab answers the first probe within milliseconds. A tab that does not
+    is re-probed until it has been silent for _NAV_COMMITTED_DEAD_S, since a page
+    running heavy scripts is busy, not dead.
+    """
+    lock = _revive_locks.setdefault(id(browser_session), asyncio.Lock())
+    if lock.locked():
+        return False
+    async with lock:
+        tab = getattr(browser_session, "agent_focus_target_id", None)
+        if not tab or await _probe_page(browser_session, tab) is not None:
+            return False
+        url = await _target_url(browser_session, tab)
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return False
+        loop = asyncio.get_running_loop()
+        silent_since = loop.time()
+        while loop.time() - silent_since < _NAV_COMMITTED_DEAD_S:
+            await asyncio.sleep(_NAV_POLL_S)
+            if await _probe_page(browser_session, tab) is not None:
+                return False
+        logger.warning("tab %s stopped responding on %s; reopening it in a fresh tab", tab, url)
+        fresh_tab = await _spawn_tab(browser_session, url)
+        if not fresh_tab:
+            return False
+        await _focus_target(browser_session, fresh_tab)
+        await _close_spawned_tab(browser_session, tab)
+        return True
+
+
 def register_navigation_guard(tools: Tools) -> None:
     """Replace browser-use's same-tab navigate follow-up with one that cannot wedge
     a session on a tab that has stopped responding.

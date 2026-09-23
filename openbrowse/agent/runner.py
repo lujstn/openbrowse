@@ -63,6 +63,7 @@ from openbrowse.agent.tools import (
     register_search_page_flow,
     register_tab_tools,
     register_navigation_guard,
+    revive_dead_focus,
     register_upload_path_resolution,
     strip_judge_preamble,
 )
@@ -724,6 +725,10 @@ def _install_lean_state(browser_session: BrowserSession, flag: dict[str, bool]) 
                         "state remain valid; any browser action returns the full view."
                     ),
                 )
+        try:
+            await revive_dead_focus(browser_session)
+        except Exception:
+            logger.debug("dead-tab check failed", exc_info=True)
         return await original(
             include_screenshot=include_screenshot,
             cached=cached,

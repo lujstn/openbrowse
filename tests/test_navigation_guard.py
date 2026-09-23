@@ -264,3 +264,38 @@ def test_old_page_answering_is_not_mistaken_for_the_new_one(fast, monkeypatch) -
     session = _Session(urls={"tab-1": "https://old.example/"}, nav_error=RuntimeError("net::ERR_CONNECTION_REFUSED"))
     result = _navigate(_guarded(), session)
     assert result.error and "ERR_CONNECTION_REFUSED" in result.error
+
+
+
+def test_healthy_tab_is_left_alone_mid_run(fast, monkeypatch) -> None:
+    _script_tabs(monkeypatch, {"tab-1": [("complete", 400)]})
+    seen = _recovery_spies(monkeypatch)
+    session = _Session(urls={"tab-1": "https://example.com/jobs"})
+    assert asyncio.run(tools_mod.revive_dead_focus(session)) is False
+    assert seen["spawned"] == []
+
+
+def test_tab_that_dies_mid_run_is_reopened_on_its_url(fast, monkeypatch) -> None:
+    _script_tabs(monkeypatch, {"tab-1": [None]})
+    seen = _recovery_spies(monkeypatch, fresh="tab-2")
+    session = _Session(urls={"tab-1": "https://example.com/jobs/42"})
+    assert asyncio.run(tools_mod.revive_dead_focus(session)) is True
+    assert seen["spawned"] == ["https://example.com/jobs/42"]
+    assert seen["focused"] == ["tab-2"]
+    assert seen["closed"] == ["tab-1"]
+
+
+def test_busy_tab_that_answers_in_time_is_not_replaced(fast, monkeypatch) -> None:
+    _script_tabs(monkeypatch, {"tab-1": [None, None, None, ("complete", 400)]})
+    seen = _recovery_spies(monkeypatch)
+    session = _Session(urls={"tab-1": "https://example.com/jobs"})
+    assert asyncio.run(tools_mod.revive_dead_focus(session)) is False
+    assert seen["spawned"] == []
+
+
+def test_silent_non_web_tab_is_not_replaced(fast, monkeypatch) -> None:
+    _script_tabs(monkeypatch, {"tab-1": [None]})
+    seen = _recovery_spies(monkeypatch)
+    session = _Session(urls={"tab-1": "chrome://newtab/"})
+    assert asyncio.run(tools_mod.revive_dead_focus(session)) is False
+    assert seen["spawned"] == []
