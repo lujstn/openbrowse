@@ -3170,14 +3170,20 @@ _NAV_PROBE_JS = (
     "JSON.stringify([document.readyState,"
     "(document.body && document.body.innerText || '').length])"
 )
-_NAV_PROBE_TIMEOUT_S = 3.0
+_NAV_PROBE_TIMEOUT_S = 1.0
+_NAV_POLL_S = 0.25
+# @nonobvious(means): a healthy tab moves off its old URL within 0.6s of the
+# navigation being sent (27 of 27 launches on a Raspberry Pi 5); one that has not,
+# and answers nothing, after this long is dead.
+_NAV_UNCOMMITTED_DEAD_S = 3.0
+# @nonobvious(means): a tab that has moved to the new URL but will not answer is
+# busy running the page's scripts, not dead, so it gets far longer.
+_NAV_COMMITTED_DEAD_S = 20.0
 # @nonobvious(means): long enough to outlast Chrome's 25s keyring wait on a host
 # launched without --password-store=basic, so a slow first load is never mistaken
 # for a dead tab.
 _NAV_READY_DEADLINE_S = 45.0
-_NAV_DEAD_AFTER_S = 20.0
 _NAV_BLANK_AFTER_S = 10.0
-_NAV_POLL_S = 1.0
 _NAV_EMPTY_ERROR = (
     "Page loaded but returned empty content for {url}. The page may require "
     "JavaScript that failed to render, use anti-bot measures, or have a connection "
@@ -3199,28 +3205,70 @@ async def _probe_page(browser_session: BrowserSession, target_id: str) -> tuple[
         return None
 
 
-async def _await_page(browser_session: BrowserSession, target_id: str) -> str:
-    """Wait for a navigated tab to settle: "ready" once it has visible text, "empty"
-    once it has finished loading and stayed blank for _NAV_BLANK_AFTER_S (or answers
-    but never fills before the deadline), "unresponsive" once it has answered
-    nothing at all for _NAV_DEAD_AFTER_S."""
+async def _target_url(browser_session: BrowserSession, target_id: str) -> str | None:
+    """The tab's committed URL as the browser process reports it, which it does
+    even when the tab itself has stopped answering; None when it cannot be read."""
+    root = getattr(browser_session, "_cdp_client_root", None)
+    if root is None:
+        return None
+    try:
+        info = await asyncio.wait_for(
+            root.send.Target.getTargetInfo(params={"targetId": target_id}),
+            _NAV_PROBE_TIMEOUT_S,
+        )
+        return (info.get("targetInfo") or {}).get("url")
+    except Exception:
+        return None
+
+
+async def _await_page(
+    browser_session: BrowserSession,
+    target_id: str,
+    url_before: str | None = None,
+    navigation: asyncio.Future | None = None,
+) -> str:
+    """Wait for a navigated tab to settle.
+
+    Returns "ready" once it has visible text; "empty" once it has finished loading
+    and stayed blank for _NAV_BLANK_AFTER_S, or answered but never filled by the
+    deadline; "failed" when the navigation itself raised; "unresponsive" when it
+    answers nothing and has not moved off ``url_before`` for
+    _NAV_UNCOMMITTED_DEAD_S, or answers nothing for _NAV_COMMITTED_DEAD_S at all.
+    """
     loop = asyncio.get_running_loop()
     started = loop.time()
     last_answer = started
     blank_since: float | None = None
     answered = False
     while loop.time() - started < _NAV_READY_DEADLINE_S:
+        if navigation is not None and navigation.done() and navigation.exception():
+            return "failed"
         probe = await _probe_page(browser_session, target_id)
         now = loop.time()
         if probe is None:
-            if now - last_answer >= _NAV_DEAD_AFTER_S:
+            silent_for = now - last_answer
+            if silent_for >= _NAV_COMMITTED_DEAD_S:
                 return "unresponsive"
+            if silent_for >= _NAV_UNCOMMITTED_DEAD_S:
+                current = await _target_url(browser_session, target_id)
+                if current is not None and current in ("", url_before):
+                    return "unresponsive"
         else:
             answered = True
             last_answer = now
             state, text_len = probe
             if text_len > 0 and state in ("interactive", "complete"):
-                return "ready"
+                # @nonobvious(must-hold): watching starts as the navigation is sent,
+                # so the old page answers first; only a tab that has moved off its
+                # old URL, or a navigation that has finished cleanly, is the new page.
+                settled = navigation is None or (
+                    navigation.done() and not navigation.exception()
+                )
+                if settled or url_before is None:
+                    return "ready"
+                current = await _target_url(browser_session, target_id)
+                if current not in (None, "", url_before):
+                    return "ready"
             if state == "complete":
                 blank_since = blank_since if blank_since is not None else now
                 if now - blank_since >= _NAV_BLANK_AFTER_S:
@@ -3231,6 +3279,12 @@ async def _await_page(browser_session: BrowserSession, target_id: str) -> str:
     return "empty" if answered else "unresponsive"
 
 
+async def _run_navigation(browser_session: BrowserSession, url: str) -> None:
+    event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=False))
+    await event
+    await event.event_result(raise_if_any=True, raise_if_none=False)
+
+
 def register_navigation_guard(tools: Tools) -> None:
     """Replace browser-use's same-tab navigate follow-up with one that cannot wedge
     a session on a tab that has stopped responding.
@@ -3239,9 +3293,9 @@ def register_navigation_guard(tools: Tools) -> None:
     timeout reads as "empty"; it then re-dispatches the same navigation onto a
     tab that is still loading. When the tab has stopped answering CDP altogether,
     that loop never ends: every later state capture times out too and the agent
-    sits on step one until it is stopped by hand. Probe the tab directly with a
-    short evaluate instead, never navigate the same tab twice, and when the tab
-    answers nothing at all, carry on in a fresh tab and close the dead one.
+    sits on step one until it is stopped by hand. Watch the tab directly from the
+    moment the navigation is sent, never navigate the same tab twice, and when the
+    tab is dead, carry on in a fresh tab and close the dead one.
     """
     entry = tools.registry.registry.actions.get("navigate")
     if entry is None:
@@ -3258,19 +3312,23 @@ def register_navigation_guard(tools: Tools) -> None:
         ):
             return await original(params=params, **kwargs)
 
-        try:
-            event = browser_session.event_bus.dispatch(
-                NavigateToUrlEvent(url=url, new_tab=False)
-            )
-            await asyncio.wait_for(event, _NAV_READY_DEADLINE_S)
-            await event.event_result(raise_if_any=True, raise_if_none=False)
-        except asyncio.TimeoutError:
-            pass
-        except Exception as e:
-            return ActionResult(error=f"Navigation to {url} failed: {e}")
-
         first_tab = browser_session.agent_focus_target_id
-        outcome = await _await_page(browser_session, first_tab) if first_tab else "ready"
+        url_before = await _target_url(browser_session, first_tab) if first_tab else None
+        navigation = asyncio.ensure_future(_run_navigation(browser_session, url))
+        navigation.add_done_callback(lambda f: f.cancelled() or f.exception())
+        if not first_tab:
+            try:
+                await asyncio.wait_for(asyncio.shield(navigation), _NAV_READY_DEADLINE_S)
+            except asyncio.TimeoutError:
+                pass
+            except Exception as e:
+                return ActionResult(error=f"Navigation to {url} failed: {e}")
+            memory = f"Navigated to {url}"
+            return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+
+        outcome = await _await_page(browser_session, first_tab, url_before, navigation)
+        if outcome == "failed":
+            return ActionResult(error=f"Navigation to {url} failed: {navigation.exception()}")
         if outcome == "ready":
             memory = f"Navigated to {url}"
             return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)

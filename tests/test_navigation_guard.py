@@ -34,11 +34,27 @@ class _Event:
 
 
 class _Session:
-    def __init__(self, focus: str = "tab-1", nav_error: Exception | None = None) -> None:
+    """``urls`` is what the browser process reports as each tab's committed URL;
+    it answers even when the tab itself does not."""
+
+    def __init__(
+        self,
+        focus: str = "tab-1",
+        nav_error: Exception | None = None,
+        urls: dict[str, str] | None = None,
+    ) -> None:
         self.agent_focus_target_id = focus
         self.dispatched: list = []
         self._nav_error = nav_error
+        self.urls = urls if urls is not None else {"tab-1": "chrome://newtab/"}
         self.event_bus = SimpleNamespace(dispatch=self._dispatch)
+
+        async def get_target_info(params):
+            return {"targetInfo": {"url": self.urls.get(params["targetId"], "")}}
+
+        self._cdp_client_root = SimpleNamespace(
+            send=SimpleNamespace(Target=SimpleNamespace(getTargetInfo=get_target_info))
+        )
 
     def _dispatch(self, event):
         self.dispatched.append(event)
@@ -54,8 +70,9 @@ def _same_tab_navigations(session: _Session) -> int:
 @pytest.fixture
 def fast(monkeypatch):
     monkeypatch.setattr(tools_mod, "_NAV_PROBE_TIMEOUT_S", 0.02)
-    monkeypatch.setattr(tools_mod, "_NAV_READY_DEADLINE_S", 0.6)
-    monkeypatch.setattr(tools_mod, "_NAV_DEAD_AFTER_S", 0.15)
+    monkeypatch.setattr(tools_mod, "_NAV_READY_DEADLINE_S", 1.2)
+    monkeypatch.setattr(tools_mod, "_NAV_UNCOMMITTED_DEAD_S", 0.1)
+    monkeypatch.setattr(tools_mod, "_NAV_COMMITTED_DEAD_S", 0.6)
     monkeypatch.setattr(tools_mod, "_NAV_BLANK_AFTER_S", 0.1)
     monkeypatch.setattr(tools_mod, "_NAV_POLL_S", 0.01)
 
@@ -171,12 +188,13 @@ def test_failed_tab_spawn_gives_a_clear_error(fast, monkeypatch) -> None:
 
 
 def test_navigation_failure_is_reported_without_a_second_attempt(fast, monkeypatch) -> None:
-    calls = _script_tabs(monkeypatch, {"tab-1": [("complete", 500)]})
+    _script_tabs(monkeypatch, {"tab-1": [("complete", 500)]})
+    seen = _recovery_spies(monkeypatch)
     session = _Session(nav_error=RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
     result = _navigate(_guarded(), session)
     assert result.error and "ERR_NAME_NOT_RESOLVED" in result.error
     assert _same_tab_navigations(session) == 1
-    assert calls == {}
+    assert seen["spawned"] == []
 
 
 @pytest.mark.parametrize(
@@ -194,3 +212,55 @@ def test_new_tabs_and_non_http_urls_use_the_builtin(fast, monkeypatch, url, new_
     assert ran == [url]
     assert result.extracted_content == "builtin"
     assert session.dispatched == []
+
+
+def test_dead_uncommitted_tab_is_caught_on_the_short_limit(fast, monkeypatch) -> None:
+    """A silent tab still on its old URL is dead well before the long limit."""
+    _script_tabs(monkeypatch, {"tab-1": [None], "tab-2": [("complete", 900)]})
+    seen = _recovery_spies(monkeypatch, fresh="tab-2")
+    session = _Session(urls={"tab-1": "chrome://newtab/"})
+    loop = asyncio.new_event_loop()
+    try:
+        started = loop.time()
+        result = loop.run_until_complete(
+            _guarded()(params=NavigateAction(url="https://example.com/jobs"), browser_session=session)
+        )
+        elapsed = loop.time() - started
+    finally:
+        loop.close()
+    assert result.error is None and seen["closed"] == ["tab-1"]
+    assert elapsed < tools_mod._NAV_COMMITTED_DEAD_S
+
+
+def test_empty_target_url_counts_as_uncommitted(fast, monkeypatch) -> None:
+    _script_tabs(monkeypatch, {"tab-1": [None], "tab-2": [("complete", 900)]})
+    seen = _recovery_spies(monkeypatch, fresh="tab-2")
+    result = _navigate(_guarded(), _Session(urls={"tab-1": ""}))
+    assert result.error is None and seen["spawned"] == ["https://example.com/jobs"]
+
+
+def test_committed_but_busy_tab_is_given_time_before_being_called_dead(fast, monkeypatch) -> None:
+    """Moved to the new URL but not answering means the page's scripts are busy:
+    it must outlast the short limit and load without a replacement tab."""
+    busy_polls = 10
+    _script_tabs(monkeypatch, {"tab-1": [None] * busy_polls + [("complete", 700)]})
+    seen = _recovery_spies(monkeypatch)
+    session = _Session(urls={"tab-1": "chrome://newtab/"})
+
+    async def committed_after_dispatch(params):
+        return {"targetInfo": {"url": "https://example.com/jobs" if session.dispatched else "chrome://newtab/"}}
+
+    session._cdp_client_root.send.Target.getTargetInfo = committed_after_dispatch
+    result = _navigate(_guarded(), session)
+    assert result.error is None
+    assert seen["spawned"] == []
+
+
+def test_old_page_answering_is_not_mistaken_for_the_new_one(fast, monkeypatch) -> None:
+    """The tab answers with the previous page's text while the navigation is
+    still in flight; that must not be reported as the new page having loaded."""
+    _script_tabs(monkeypatch, {"tab-1": [("complete", 300)]})
+    _recovery_spies(monkeypatch)
+    session = _Session(urls={"tab-1": "https://old.example/"}, nav_error=RuntimeError("net::ERR_CONNECTION_REFUSED"))
+    result = _navigate(_guarded(), session)
+    assert result.error and "ERR_CONNECTION_REFUSED" in result.error
