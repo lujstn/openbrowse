@@ -66,6 +66,9 @@ logger = logging.getLogger(__name__)
 # from the same tool take different routes and every tool has both available.
 INLINE_BUDGET = 2000
 POINTER_SAMPLE = 300
+# @nonobvious(must-hold): under _CAPPED_READ_PREVIEW_CHARS, so the output guard
+# never cuts a page that read_file has already sized.
+READ_PAGE_CHARS = 6000
 
 _CAPPED_READ_PREVIEW_CHARS = 8000
 _GUARD_MIN_CHARS = 500
@@ -1682,6 +1685,27 @@ def _awaitable(value: Any) -> Any:
     return value
 
 
+def continuation_note(saved: str | None, shown_to: int, total: int, start: int = 0) -> str:
+    """How every shortened output ends: it says nothing failed, what was shown, and
+    the exact call that shows the next part.
+
+    A reply that only says "truncated" reads as unfinished work, and a model will rerun
+    the work rather than read on, so the note is the same wherever output is cut.
+    """
+    if saved is None:
+        return (
+            f"[Showing characters {start:,} to {shown_to:,} of {total:,}. Saving the rest "
+            "failed, so it is not available: print less and run again.]"
+        )
+    if shown_to >= total:
+        return f"[Characters {start:,} to {total:,} of {total:,}: the end of '{saved}'.]"
+    return (
+        f"[Complete, only this reply is shortened: showing characters {start:,} to "
+        f"{shown_to:,} of {total:,}. All of it is saved as '{saved}'; read on with "
+        f"read_file('{saved}', start={shown_to}).]"
+    )
+
+
 def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> None:
     """Write a FileSystem file so it exists on disk IMMEDIATELY, then schedule the
     official async write to keep browser-use's in-memory file registry in step —
@@ -1694,9 +1718,12 @@ def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> Non
         logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
 
 
-async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult:
+async def _exec_in_sandbox(
+    code: str, namespace: dict[str, Any], file_system: FileSystem | None = None
+) -> ActionResult:
     """Compile and run one script against the persistent sandbox namespace, capturing
-    stdout to a small preview. Shared by ``run_code_file`` — the only executor.
+    stdout to a small preview, with anything longer saved whole for read_file.
+    Shared by ``run_code_file``, the only executor.
     """
     import ast
     import contextlib
@@ -1766,17 +1793,19 @@ async def _exec_in_sandbox(code: str, namespace: dict[str, Any]) -> ActionResult
 
     out = stdout.getvalue()
     total = len(out)
-    # stdout is a report, not a data payload: whatever the script actually produced
-    # belongs in save_json. So it stays a note rather than going through deliver, but
-    # on the same budget as everything else rather than a number of its own.
-    preview = out[:INLINE_BUDGET]
-    if total > INLINE_BUDGET:
-        preview += (
-            f"\n\n[stdout truncated: {total} chars total. Assign large results to a "
-            "variable (it persists across runs) or save_json(obj,'name.json') then "
-            "print only specific keys/slices; never print whole blobs.]"
-        )
-    return ActionResult(extracted_content=preview or "(no output)")
+    if total <= INLINE_BUDGET:
+        return ActionResult(extracted_content=out or "(no output)")
+    saved: str | None = None
+    if file_system is not None:
+        runs = namespace["__stdout_saves__"] = namespace.get("__stdout_saves__", 0) + 1
+        name = f"stdout_{runs}.txt"
+        try:
+            _write_fs_file_sync(file_system, name, out)
+            saved = name
+        except Exception:
+            logger.warning("run_code_file: saving stdout failed", exc_info=True)
+    note = continuation_note(saved, INLINE_BUDGET, total)
+    return ActionResult(extracted_content=f"{out[:INLINE_BUDGET]}\n\n{note}")
 
 
 def register_code_tools(
@@ -1824,7 +1853,8 @@ def register_code_tools(
         "await set_field(key, value) / await mark_absent(field, reason) / "
         "await remove_items(indices, reason) / read_output() (returns the output as a plain dict, like read_json) / "
         "coverage() write straight to the validated output. STDOUT "
-        "is truncated to a small preview — print only counts/keys, never whole blobs. "
+        "over 2,000 characters is saved whole and previewed, with the read_file(name, "
+        "start=) call that shows the rest; print what you need, not whole blobs. "
         "Variables persist across runs."
     )
     async def run_code_file(
@@ -1983,7 +2013,7 @@ def register_code_tools(
             except Exception:
                 logger.debug("code progress emit failed", exc_info=True)
         try:
-            result = await _exec_in_sandbox(code, namespace)
+            result = await _exec_in_sandbox(code, namespace, file_system)
         finally:
             if code_tab is not None:
                 # @nonobvious(forced-by): refocus before closing (a focused-tab
@@ -2019,6 +2049,49 @@ def register_code_tools(
         else:
             result.extracted_content = note
         return result
+
+
+def register_paged_read_file(tools: Tools) -> None:
+    """Replace browser-use's ``read_file`` with one that reads a file in parts.
+
+    Every shortened output names a saved file and the ``start`` to read on from, so
+    the reader has to be able to start there; browser-use's reads only from the top.
+    """
+
+    @tools.action(
+        "Read a file, a part at a time: text files (txt, md, json, csv, jsonl), "
+        f"documents (pdf, docx) and images. Returns up to {READ_PAGE_CHARS:,} "
+        "characters from `start` (0 by default) and says where the next part begins."
+    )
+    async def read_file(
+        file_name: str,
+        available_file_paths: list[str],
+        file_system: FileSystem,
+        start: int = 0,
+    ) -> ActionResult:
+        external = bool(available_file_paths) and file_name in available_file_paths
+        read = await file_system.read_file_structured(file_name, external_file=external)
+        message = read["message"]
+        if read.get("images"):
+            return ActionResult(
+                extracted_content=message,
+                long_term_memory=f"Read image file {file_name}",
+                images=read["images"],
+                include_extracted_content_only_once=True,
+            )
+        opened, closed = message.find("<content>\n"), message.rfind("\n</content>")
+        if opened < 0 or closed < opened:
+            return ActionResult(error=message)
+        content = message[opened + len("<content>\n") : closed]
+        total = len(content)
+        begin = min(max(int(start or 0), 0), total)
+        end = min(begin + READ_PAGE_CHARS, total)
+        note = continuation_note(file_name, end, total, begin)
+        return ActionResult(
+            extracted_content=f"{content[begin:end]}\n{note}",
+            long_term_memory=f"read_file('{file_name}', start={begin}) {note}",
+            include_extracted_content_only_once=True,
+        )
 
 
 def register_clipboard_tools(tools: Tools, clipboard: dict[str, Any]) -> None:
@@ -3022,12 +3095,12 @@ async def deliver(
     if len(body) <= INLINE_BUDGET:
         envelope["data"] = payload if not isinstance(payload, str) else body
     else:
-        envelope["truncated"] = True
+        envelope["shortened"] = continuation_note(saved, POINTER_SAMPLE, len(body))
         envelope["total_chars"] = len(body)
         envelope["sample"] = body[:POINTER_SAMPLE]
         envelope["read_with"] = (
-            f"read_file('{saved}') for the complete data, or read_json('{saved}') "
-            "inside run_code_file"
+            f"read_file('{saved}', start=0) pages through the complete data, or "
+            f"read_json('{saved}') inside run_code_file loads it whole"
             if saved
             else "nothing — saving the data to a file FAILED, so only the sample above "
             "exists. Narrow the query and run it again rather than expecting a file"
@@ -3495,6 +3568,7 @@ def register_output_guard_overrides(tools: Tools) -> None:
             if cap and len(text) > _CAPPED_READ_PREVIEW_CHARS:
                 total = len(text)
                 tail = "narrow your query instead of dumping"
+                saved_as: str | None = None
                 # @nonobvious(must-hold): numbered per output, not per action. A back
                 # reference pins this filename for the rest of the run, so reusing one
                 # name would later hand the agent a different call's content under the
@@ -3504,7 +3578,8 @@ def register_output_guard_overrides(tools: Tools) -> None:
                     try:
                         await file_system.write_file(spill, text)
                         record["where"] = spill
-                        tail = f"saved to '{spill}' — read specific parts instead"
+                        saved_as = spill
+                        tail = f"saved as '{spill}'; read_file('{spill}', start=0) pages through it"
                     except Exception:
                         logger.warning("output guard: failed to save readout", exc_info=True)
                         tail = (
@@ -3523,7 +3598,9 @@ def register_output_guard_overrides(tools: Tools) -> None:
                     result,
                     attr,
                     text[:_CAPPED_READ_PREVIEW_CHARS]
-                    + f"\n[truncated: {total} chars total, {tail}] (output #{record['n']})",
+                    + "\n"
+                    + continuation_note(saved_as, _CAPPED_READ_PREVIEW_CHARS, total)
+                    + f" (output #{record['n']})",
                 )
 
         if repeats >= _REPEAT_BREAK_AT:

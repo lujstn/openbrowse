@@ -57,6 +57,7 @@ from openbrowse.agent.tools import (
     action_param_kinds,
     register_clipboard_tools,
     register_code_tools,
+    register_paged_read_file,
     register_completeness_gate,
     register_fetch_tool,
     register_find_elements_flow,
@@ -2739,6 +2740,7 @@ async def run_agent_session(session_id: str) -> None:
 
         register_fetch_tool(tools)
         register_code_tools(tools, clipboard, store, _code_progress)
+        register_paged_read_file(tools)
         register_clipboard_tools(tools, clipboard)
         register_tab_tools(tools, tab_manager, clipboard, store, _read_progress)
         register_upload_path_resolution(tools)
