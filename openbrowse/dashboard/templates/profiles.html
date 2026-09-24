@@ -149,6 +149,12 @@
   .domains .muted {
     color: #555;
   }
+  .domains a {
+    color: inherit;
+  }
+  .domains a:hover {
+    color: #60a5fa;
+  }
   .np-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -227,7 +233,7 @@
     <tr>
       <th>ID</th>
       <th>Name</th>
-      <th>Cookie Domains</th>
+      <th>Site Data</th>
       <th>Last Used</th>
       <th>Created</th>
       <th></th>
@@ -254,8 +260,8 @@
           readonly
         />
       </td>
-      <td class="domains" title="{{ p.cookie_domains | join(', ') }}">
-        {% if p.cookie_domains %}{{ p.cookie_domains | length }} domain{{ 's' if p.cookie_domains | length != 1 else '' }}{% else %}<span class="muted">empty</span>{% endif %}
+      <td class="domains" title="{{ p.sites | map(attribute='name') | join(', ') }}">
+        {% if p.sites %}<a href="/profiles/{{ p.id }}/sites">{{ p.sites | length }} site{{ 's' if p.sites | length != 1 else '' }}, {{ p.size }}</a>{% elif p.size %}<a class="muted" href="/profiles/{{ p.id }}/sites">empty</a>{% else %}<span class="muted">no file</span>{% endif %}
       </td>
       <td>{{ format_relative(p.last_used_at) if p.last_used_at else '—' }}</td>
       <td>{{ format_relative(p.created_at) }}</td>

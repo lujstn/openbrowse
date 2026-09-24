@@ -145,6 +145,41 @@ def _first_error(exc: ValidationError) -> str:
 
 
 _ELIDE_CHARS = 200
+_REVIEW_HEAD_CHARS = 160
+
+
+def elide_for_review(value: Any) -> tuple[Any, int]:
+    """Copy ``value`` for a reviewer: every string longer than ``_ELIDE_CHARS``
+    keeps its opening and says in words that the rest is stored. A bare size
+    marker reads as truncated output to a reviewer, which then fails complete
+    runs and sends the agent off to repair data that was never damaged.
+    Returns the copy and the number of shortened values.
+    """
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        count = 0
+        for k, v in value.items():
+            out[k], n = elide_for_review(v)
+            count += n
+        return out, count
+    if isinstance(value, list):
+        items = []
+        count = 0
+        for v in value:
+            new, n = elide_for_review(v)
+            items.append(new)
+            count += n
+        return items, count
+    if isinstance(value, str) and len(value) > _ELIDE_CHARS:
+        rest = len(value) - _REVIEW_HEAD_CHARS
+        return (
+            f"{value[:_REVIEW_HEAD_CHARS]}… [+{rest:,} more characters, stored in "
+            "full; shortened only for this review]",
+            1,
+        )
+    return value, 0
+
+
 
 
 def elide_long_values(

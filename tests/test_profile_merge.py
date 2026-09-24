@@ -1,6 +1,6 @@
 """Three-way storage-state merge — what a session sharing a profile writes back."""
 
-from openbrowse.profiles.merge import merge_storage_states, read_state, write_state
+from openbrowse.profiles.merge import merge_storage_states
 
 
 def _cookie(name, value, domain="example.com", path="/"):
@@ -96,15 +96,13 @@ def test_local_storage_merges_per_key():
     assert pairs == {"a": "ours", "b": "theirs"}
 
 
-def test_session_storage_merges_alongside_local_storage():
-    baseline = _state()
+def test_session_storage_is_not_carried_between_sessions():
     ours = _state(origins=_origins("https://x.test", "sessionStorage", {"tab": "ours"}))
     theirs = _state(origins=_origins("https://x.test", "localStorage", {"pref": "dark"}))
-    merged = merge_storage_states(baseline, ours, theirs)
-    entry = merged["origins"][0]
-    assert entry["origin"] == "https://x.test"
-    assert entry["sessionStorage"] == [{"name": "tab", "value": "ours"}]
-    assert entry["localStorage"] == [{"name": "pref", "value": "dark"}]
+    merged = merge_storage_states(None, ours, theirs)
+    assert merged["origins"] == [
+        {"origin": "https://x.test", "localStorage": [{"name": "pref", "value": "dark"}]}
+    ]
 
 
 def test_origins_from_both_sides_are_kept():
@@ -140,19 +138,48 @@ def test_merge_output_is_a_normalised_storage_state():
     assert merged["origins"] == []
 
 
-def test_read_state_survives_a_missing_or_corrupt_file(tmp_path):
-    assert read_state(tmp_path / "nope.json") is None
-    corrupt = tmp_path / "bad.json"
-    corrupt.write_text("{not json")
-    assert read_state(corrupt) is None
-    listy = tmp_path / "list.json"
-    listy.write_text("[]")
-    assert read_state(listy) is None
+def test_origins_the_session_did_not_read_keep_the_profiles_storage():
+    baseline = _state(origins=_origins("https://a.test", "localStorage", {"k": "1"}))
+    ours = _state()
+    theirs = _state(origins=_origins("https://a.test", "localStorage", {"k": "2"}))
+    merged = merge_storage_states(baseline, ours, theirs, origins=set())
+    assert merged["origins"] == _origins("https://a.test", "localStorage", {"k": "2"})
 
 
-def test_write_state_is_atomic_and_round_trips(tmp_path):
-    target = tmp_path / "nested" / "state.json"
-    state = _state(_cookie("a", "1"))
-    write_state(target, state)
-    assert read_state(target) == state
-    assert not (target.parent / (target.name + ".tmp")).exists()
+def test_an_origin_the_session_read_empty_is_emptied():
+    baseline = _state(origins=_origins("https://a.test", "localStorage", {"k": "1"}))
+    theirs = _state(origins=_origins("https://a.test", "localStorage", {"k": "1"}))
+    merged = merge_storage_states(baseline, _state(), theirs, origins={"https://a.test"})
+    assert merged["origins"] == []
+
+
+def test_a_cookie_read_back_with_chromes_extra_fields_is_unchanged():
+    stored = _cookie("sid", "1")
+    read_back = {
+        **stored,
+        "expires": -1,
+        "priority": "Medium",
+        "sourceScheme": "Secure",
+        "sourcePort": 443,
+        "size": 4,
+        "session": True,
+    }
+    merged = merge_storage_states(
+        _state(stored), _state(read_back), _state(_cookie("sid", "newer"))
+    )
+    assert _by_name(merged) == {"sid": "newer"}
+
+
+def test_a_changed_expiry_is_a_change():
+    baseline = _state(_cookie("sid", "1") | {"expires": 1000.25})
+    ours = _state(_cookie("sid", "1") | {"expires": 5000.0})
+    theirs = _state(_cookie("sid", "1") | {"expires": 1000.25})
+    merged = merge_storage_states(baseline, ours, theirs)
+    assert merged["cookies"][0]["expires"] == 5000.0
+
+
+def test_partitioned_cookies_do_not_collide_with_unpartitioned_ones():
+    plain = _cookie("id", "a")
+    partitioned = _cookie("id", "b") | {"partitionKey": {"topLevelSite": "https://top.test"}}
+    merged = merge_storage_states(None, _state(plain), _state(partitioned))
+    assert sorted(c["value"] for c in merged["cookies"]) == ["a", "b"]

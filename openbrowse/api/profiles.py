@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from openbrowse.auth import require_api_key
 from openbrowse.api.errors import error_responses
 from openbrowse.db import crud
-from openbrowse.profiles import storage
+from openbrowse.profiles import storage, store
 from openbrowse.profiles.importer import ProfileImportError, import_profile
 
 router = APIRouter(prefix="/v3/profiles", tags=["profiles"])
@@ -84,7 +84,7 @@ async def create_profile(
     """Create an empty profile, with no cookies and no per-origin storage yet. Fill it by importing a cookie jar, or by letting a session log in while using it."""
     body = body or ProfileCreateRequest()
     profile = await crud.create_profile(name=body.name, user_id=body.userId)
-    storage.write_profile_state(profile["id"], {"cookies": [], "origins": []}, backup=False)
+    store.save(storage.profile_state_path(profile["id"]), store.ProfileData())
     return _to_view(profile)
 
 
@@ -165,7 +165,7 @@ async def delete_profile(profile_id: str, _: str = Depends(require_api_key)):
     existing = await crud.get_profile(profile_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
-    storage.profile_state_path(profile_id).unlink(missing_ok=True)
+    store.remove(storage.profile_state_path(profile_id))
     await crud.delete_profile(profile_id)
 
 

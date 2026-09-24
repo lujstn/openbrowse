@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from openbrowse.db import crud
-from openbrowse.profiles.storage import cookie_domains, normalize_storage_state, write_profile_state
+from openbrowse.profiles import store
+from openbrowse.profiles.storage import cookie_domains, normalize_storage_state, profile_state_path
 
 
 class ProfileImportError(ValueError):
@@ -31,14 +32,18 @@ async def import_profile(
     existing = await crud.get_profile(profile_id)
     normalised = normalize_storage_state(state)
     await crud.upsert_profile(profile_id, name=name)
-    write_profile_state(profile_id, normalised, backup=backup)
+    path = profile_state_path(profile_id)
+    async with store.lock(path):
+        if backup and path.exists():
+            path.with_name(path.name + ".import-bak").write_bytes(path.read_bytes())
+        applied = store.save(path, store.ProfileData(normalised))
     return {
         "id": profile_id,
         "name": name if name is not None else (existing or {}).get("name"),
         "created": existing is None,
-        "cookie_count": len(normalised["cookies"]),
-        "origin_count": len(normalised["origins"]),
-        "domains": cookie_domains(normalised),
+        "cookie_count": len(applied.state["cookies"]),
+        "origin_count": len(applied.state["origins"]),
+        "domains": cookie_domains(applied.state),
     }
 
 

@@ -2037,3 +2037,12 @@ def test_a_full_host_reports_as_transient_not_as_a_session_failure():
 
     kind, status_code, status = _failure_info(NoDisplayCapacityError("host full"))
     assert (kind, status_code, status) == ("no_display_capacity", 503, "timed_out")
+
+
+def test_review_message_points_a_store_run_at_the_store_tools() -> None:
+    from openbrowse.agent.runner import _review_message
+
+    with_store = _review_message("event.url is wrong", 2, uses_store=True)
+    assert "set_field, update_item or update_items" in with_store
+    assert "changes nothing that is delivered" in with_store
+    assert "set_field" not in _review_message("event.url is wrong", 2)

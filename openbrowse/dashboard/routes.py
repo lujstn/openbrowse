@@ -9,6 +9,7 @@ import math
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -44,7 +45,9 @@ from openbrowse.config import settings
 from openbrowse.dashboard.lifecycle import schedule_restart
 from openbrowse.dashboard.states import display_state
 from openbrowse.db import crud
-from openbrowse.profiles.storage import cookie_domains, read_state_file
+from openbrowse.profiles import policy as profile_policy
+from openbrowse.profiles import store as profile_store
+from openbrowse.profiles.storage import cookie_domains
 
 logger = logging.getLogger(__name__)
 
@@ -921,11 +924,40 @@ async def settings_save(request: Request):
     )
 
 
+def _human_size(chars: int) -> str:
+    if chars < 1024:
+        return f"{chars} B"
+    if chars < 1024 * 1024:
+        return f"{chars / 1024:.0f} KB"
+    return f"{chars / (1024 * 1024):.1f} MB"
+
+
+def _profile_path(profile: dict[str, Any]) -> Path | None:
+    stored = profile.get("storage_state_path")
+    return settings.data_dir / stored if stored else None
+
+
+def _profile_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    path = _profile_path(profile)
+    data = profile_store.load(path) if path else None
+    if data is None:
+        return {"sites": [], "size": None, "cookie_domains": []}
+    size = profile_policy.storage_chars(data.state) + sum(
+        len(str(c.get("name") or "")) + len(str(c.get("value") or ""))
+        for c in data.state.get("cookies") or []
+    )
+    return {
+        "sites": profile_store.sites(data),
+        "size": _human_size(size),
+        "cookie_domains": cookie_domains(data.state),
+    }
+
+
 @router.get("/profiles", response_class=HTMLResponse)
 async def profiles_page(request: Request):
     profiles, total = await crud.list_profiles(page=1, page_size=50)
     for p in profiles:
-        p["cookie_domains"] = cookie_domains(read_state_file(p.get("storage_state_path")))
+        p.update(_profile_summary(p))
     return templates.TemplateResponse(
         request,
         "profiles.html",
@@ -937,16 +969,10 @@ async def profiles_page(request: Request):
     )
 
 
-def _profile_state_file(storage_state_path: str):
-    return settings.data_dir / storage_state_path
-
-
 @router.post("/profiles/create")
 async def profiles_create(name: str = Form("")):
     profile = await crud.create_profile(name=(name or None))
-    state_file = _profile_state_file(profile["storage_state_path"])
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"cookies": [], "origins": []}))
+    profile_store.save(_profile_path(profile), profile_store.ProfileData())
     return RedirectResponse("/profiles", status_code=303)
 
 
@@ -964,12 +990,11 @@ async def profiles_edit(
             renamed = await crud.rename_profile(profile_id, new_id)
         except ValueError as exc:
             return HTMLResponse(f"Cannot rename profile: {exc}", status_code=400)
-        if renamed and existing and existing.get("storage_state_path"):
-            old_file = _profile_state_file(existing["storage_state_path"])
-            new_file = _profile_state_file(renamed["storage_state_path"])
-            if old_file.exists():
-                new_file.parent.mkdir(parents=True, exist_ok=True)
-                old_file.replace(new_file)
+        old_path = _profile_path(existing or {})
+        new_path = _profile_path(renamed or {})
+        if old_path and new_path:
+            async with profile_store.lock(old_path):
+                profile_store.move(old_path, new_path)
     return RedirectResponse("/profiles", status_code=303)
 
 
@@ -977,9 +1002,72 @@ async def profiles_edit(
 async def profiles_delete(profile_id: str):
     profile = await crud.get_profile(profile_id)
     await crud.delete_profile_cascade(profile_id)
-    if profile and profile.get("storage_state_path"):
-        _profile_state_file(profile["storage_state_path"]).unlink(missing_ok=True)
+    path = _profile_path(profile or {})
+    if path:
+        async with profile_store.lock(path):
+            profile_store.remove(path)
     return RedirectResponse("/profiles", status_code=303)
+
+
+def _epoch_iso(when: float | None) -> str | None:
+    if not when:
+        return None
+    return datetime.fromtimestamp(when, timezone.utc).isoformat()
+
+
+@router.get("/profiles/{profile_id}/sites", response_class=HTMLResponse)
+async def profile_sites_page(request: Request, profile_id: str):
+    profile = await crud.get_profile(profile_id)
+    if not profile:
+        return HTMLResponse("Profile not found", status_code=404)
+    summary = _profile_summary(profile)
+    rows = [
+        {
+            "name": site.name,
+            "cookies": site.cookies,
+            "stored": _human_size(site.storage_chars) if site.storage_chars else None,
+            "last_used": _epoch_iso(site.last_used),
+        }
+        for site in summary["sites"]
+    ]
+    return templates.TemplateResponse(
+        request,
+        "profile_sites.html",
+        context={
+            "profile": profile,
+            "rows": rows,
+            "size": summary["size"],
+            "limits": {
+                "sites": profile_policy.MAX_SITES,
+                "storage": _human_size(profile_policy.MAX_STORAGE_CHARS),
+                "idle_days": profile_policy.SITE_IDLE_EXPIRY_S // 86400,
+            },
+            "format_relative": _format_relative_time,
+        },
+    )
+
+
+@router.post("/profiles/{profile_id}/sites/delete")
+async def profile_site_delete(profile_id: str, site: str = Form("")):
+    profile = await crud.get_profile(profile_id)
+    path = _profile_path(profile or {})
+    site = site.strip().lower()
+    if path and site:
+        async with profile_store.lock(path):
+            data = profile_store.load(path)
+            if data is not None:
+                profile_store.save(path, profile_store.without_site(data, site))
+    return RedirectResponse(f"/profiles/{profile_id}/sites", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/sites/clear")
+async def profile_sites_clear(profile_id: str):
+    profile = await crud.get_profile(profile_id)
+    path = _profile_path(profile or {})
+    if path and path.exists():
+        async with profile_store.lock(path):
+            profile_store.save(path, profile_store.ProfileData())
+    return RedirectResponse(f"/profiles/{profile_id}/sites", status_code=303)
 
 
 @router.get("/sse/sessions")

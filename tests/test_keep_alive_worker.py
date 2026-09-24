@@ -568,3 +568,58 @@ async def test_successful_turn_clears_stale_failure_classification():
     stored = await crud.get_session(sid)
     assert stored["failure_kind"] is None
     assert stored["failure_status_code"] is None
+
+
+async def test_a_profile_is_restored_before_the_agent_attaches_and_written_back_after(
+    worker_env, monkeypatch
+):
+    import json
+
+    from openbrowse.profiles import store, sync
+    from tests.fake_chrome import FakeChrome
+
+    chrome = FakeChrome()
+    order: list[str] = []
+
+    async def open_fake(cdp_url):
+        assert cdp_url == "ws://cdp"
+        order.append("profile connects")
+        return chrome
+
+    class _OrderedSession(_FakeBrowserSession):
+        def __init__(self, **kwargs) -> None:
+            assert "storage_state" not in kwargs
+            super().__init__(**kwargs)
+
+        async def start(self) -> None:
+            order.append(f"agent attaches with {len(chrome.cookies)} cookie(s) in the jar")
+            chrome.site_sets_cookie("sid", "signed-in", ".shop.example")
+            await super().start()
+
+        async def stop(self) -> None:
+            order.append("agent lets go")
+            await super().stop()
+
+    async def _stop_chrome(_slot):
+        order.append("chrome stopped")
+
+    monkeypatch.setattr(sync.CdpConnection, "open", staticmethod(open_fake))
+    monkeypatch.setattr(runner_mod, "BrowserSession", _OrderedSession)
+    monkeypatch.setattr(runner_mod, "stop_chrome", _stop_chrome)
+
+    profile = await crud.create_profile(name="Shop")
+    path = worker_env.data_dir / profile["storage_state_path"]
+    store.save(
+        path,
+        store.ProfileData(
+            {"cookies": [{"name": "old", "value": "1", "domain": ".shop.example", "path": "/"}]}
+        ),
+    )
+    session = await crud.create_session(task="Check my basket", profile_id=profile["id"])
+    await asyncio.wait_for(runner_mod.run_agent_session(session["id"]), timeout=5)
+
+    assert order[:2] == ["profile connects", "agent attaches with 1 cookie(s) in the jar"]
+    assert order[-2:] == ["agent lets go", "chrome stopped"]
+    saved = {c["name"]: c["value"] for c in json.loads(path.read_text())["cookies"]}
+    assert saved == {"old": "1", "sid": "signed-in"}
+    assert any(s.startswith("Profile loaded in") for s in await _summaries(session["id"]))

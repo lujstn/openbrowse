@@ -49,6 +49,7 @@ from openbrowse.agent.output_store import (
     _coerce_scalar,
     _name_tokens,
     _peel_optional,
+    elide_for_review,
     elide_long_values,
 )
 from openbrowse.agent import activity
@@ -3166,6 +3167,231 @@ def register_upload_path_resolution(tools: Tools) -> None:
     entry.function = upload_file_abspath
 
 
+_NAV_PROBE_JS = (
+    "JSON.stringify([document.readyState,"
+    "(document.body && document.body.innerText || '').length])"
+)
+_NAV_PROBE_TIMEOUT_S = 1.0
+_NAV_POLL_S = 0.25
+# @nonobvious(means): a healthy tab moves off its old URL within 0.6s of the
+# navigation being sent (27 of 27 launches on a Raspberry Pi 5); one that has not,
+# and answers nothing, after this long is dead.
+_NAV_UNCOMMITTED_DEAD_S = 3.0
+# @nonobvious(means): a tab that has moved to the new URL but will not answer is
+# busy running the page's scripts, not dead, so it gets far longer.
+_NAV_COMMITTED_DEAD_S = 20.0
+# @nonobvious(means): long enough to outlast Chrome's 25s keyring wait on a host
+# launched without --password-store=basic, so a slow first load is never mistaken
+# for a dead tab.
+_NAV_READY_DEADLINE_S = 45.0
+_NAV_BLANK_AFTER_S = 10.0
+_NAV_EMPTY_ERROR = (
+    "Page loaded but returned empty content for {url}. The page may require "
+    "JavaScript that failed to render, use anti-bot measures, or have a connection "
+    "issue (e.g. tunnel/proxy error). Try a different URL or approach."
+)
+
+
+async def _probe_page(browser_session: BrowserSession, target_id: str) -> tuple[str, int] | None:
+    """(readyState, visible text length) for a tab, or None when the tab does not
+    answer within the probe timeout."""
+    try:
+        raw = await asyncio.wait_for(
+            _eval_on_target(browser_session, target_id, _NAV_PROBE_JS),
+            _NAV_PROBE_TIMEOUT_S,
+        )
+        state, text_len = json.loads(raw)
+        return str(state), int(text_len)
+    except Exception:
+        return None
+
+
+async def _target_url(browser_session: BrowserSession, target_id: str) -> str | None:
+    """The tab's committed URL as the browser process reports it, which it does
+    even when the tab itself has stopped answering; None when it cannot be read."""
+    root = getattr(browser_session, "_cdp_client_root", None)
+    if root is None:
+        return None
+    try:
+        info = await asyncio.wait_for(
+            root.send.Target.getTargetInfo(params={"targetId": target_id}),
+            _NAV_PROBE_TIMEOUT_S,
+        )
+        return (info.get("targetInfo") or {}).get("url")
+    except Exception:
+        return None
+
+
+async def _await_page(
+    browser_session: BrowserSession,
+    target_id: str,
+    url_before: str | None = None,
+    navigation: asyncio.Future | None = None,
+) -> str:
+    """Wait for a navigated tab to settle.
+
+    Returns "ready" once it has visible text; "empty" once it has finished loading
+    and stayed blank for _NAV_BLANK_AFTER_S, or answered but never filled by the
+    deadline; "failed" when the navigation itself raised; "unresponsive" when it
+    answers nothing and has not moved off ``url_before`` for
+    _NAV_UNCOMMITTED_DEAD_S, or answers nothing for _NAV_COMMITTED_DEAD_S at all.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    last_answer = started
+    blank_since: float | None = None
+    answered = False
+    while loop.time() - started < _NAV_READY_DEADLINE_S:
+        if navigation is not None and navigation.done() and navigation.exception():
+            return "failed"
+        probe = await _probe_page(browser_session, target_id)
+        now = loop.time()
+        if probe is None:
+            silent_for = now - last_answer
+            if silent_for >= _NAV_COMMITTED_DEAD_S:
+                return "unresponsive"
+            if silent_for >= _NAV_UNCOMMITTED_DEAD_S:
+                current = await _target_url(browser_session, target_id)
+                if current is not None and current in ("", url_before):
+                    return "unresponsive"
+        else:
+            answered = True
+            last_answer = now
+            state, text_len = probe
+            if text_len > 0 and state in ("interactive", "complete"):
+                # @nonobvious(must-hold): watching starts as the navigation is sent,
+                # so the old page answers first; only a tab that has moved off its
+                # old URL, or a navigation that has finished cleanly, is the new page.
+                settled = navigation is None or (
+                    navigation.done() and not navigation.exception()
+                )
+                if settled or url_before is None:
+                    return "ready"
+                current = await _target_url(browser_session, target_id)
+                if current not in (None, "", url_before):
+                    return "ready"
+            if state == "complete":
+                blank_since = blank_since if blank_since is not None else now
+                if now - blank_since >= _NAV_BLANK_AFTER_S:
+                    return "empty"
+            else:
+                blank_since = None
+        await asyncio.sleep(_NAV_POLL_S)
+    return "empty" if answered else "unresponsive"
+
+
+async def _run_navigation(browser_session: BrowserSession, url: str) -> None:
+    event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=False))
+    await event
+    await event.event_result(raise_if_any=True, raise_if_none=False)
+
+
+_revive_locks: dict[int, asyncio.Lock] = {}
+
+
+async def revive_dead_focus(browser_session: BrowserSession) -> bool:
+    """Replace the agent's tab with a fresh one on the same URL when it has
+    stopped answering CDP, so a tab that dies mid-run cannot wedge every later
+    state capture. True when a replacement was made.
+
+    A healthy tab answers the first probe within milliseconds. A tab that does not
+    is re-probed until it has been silent for _NAV_COMMITTED_DEAD_S, since a page
+    running heavy scripts is busy, not dead.
+    """
+    lock = _revive_locks.setdefault(id(browser_session), asyncio.Lock())
+    if lock.locked():
+        return False
+    async with lock:
+        tab = getattr(browser_session, "agent_focus_target_id", None)
+        if not tab or await _probe_page(browser_session, tab) is not None:
+            return False
+        url = await _target_url(browser_session, tab)
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return False
+        loop = asyncio.get_running_loop()
+        silent_since = loop.time()
+        while loop.time() - silent_since < _NAV_COMMITTED_DEAD_S:
+            await asyncio.sleep(_NAV_POLL_S)
+            if await _probe_page(browser_session, tab) is not None:
+                return False
+        logger.warning("tab %s stopped responding on %s; reopening it in a fresh tab", tab, url)
+        fresh_tab = await _spawn_tab(browser_session, url)
+        if not fresh_tab:
+            return False
+        await _focus_target(browser_session, fresh_tab)
+        await _close_spawned_tab(browser_session, tab)
+        return True
+
+
+def register_navigation_guard(tools: Tools) -> None:
+    """Replace browser-use's same-tab navigate follow-up with one that cannot wedge
+    a session on a tab that has stopped responding.
+
+    browser-use's navigate checks the page with its full DOM capture, whose 30s
+    timeout reads as "empty"; it then re-dispatches the same navigation onto a
+    tab that is still loading. When the tab has stopped answering CDP altogether,
+    that loop never ends: every later state capture times out too and the agent
+    sits on step one until it is stopped by hand. Watch the tab directly from the
+    moment the navigation is sent, never navigate the same tab twice, and when the
+    tab is dead, carry on in a fresh tab and close the dead one.
+    """
+    entry = tools.registry.registry.actions.get("navigate")
+    if entry is None:
+        return
+    original = entry.function
+
+    async def navigate_guarded(params: Any = None, **kwargs: Any) -> Any:
+        browser_session = kwargs.get("browser_session")
+        url = getattr(params, "url", "") or ""
+        if (
+            browser_session is None
+            or getattr(params, "new_tab", False)
+            or not url.lower().startswith(("http://", "https://"))
+        ):
+            return await original(params=params, **kwargs)
+
+        first_tab = browser_session.agent_focus_target_id
+        url_before = await _target_url(browser_session, first_tab) if first_tab else None
+        navigation = asyncio.ensure_future(_run_navigation(browser_session, url))
+        navigation.add_done_callback(lambda f: f.cancelled() or f.exception())
+        if not first_tab:
+            try:
+                await asyncio.wait_for(asyncio.shield(navigation), _NAV_READY_DEADLINE_S)
+            except asyncio.TimeoutError:
+                pass
+            except Exception as e:
+                return ActionResult(error=f"Navigation to {url} failed: {e}")
+            memory = f"Navigated to {url}"
+            return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+
+        outcome = await _await_page(browser_session, first_tab, url_before, navigation)
+        if outcome == "failed":
+            return ActionResult(error=f"Navigation to {url} failed: {navigation.exception()}")
+        if outcome == "ready":
+            memory = f"Navigated to {url}"
+            return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+        if outcome == "empty":
+            return ActionResult(error=_NAV_EMPTY_ERROR.format(url=url))
+
+        logger.warning("navigate: tab %s stopped responding on %s; retrying in a fresh tab", first_tab, url)
+        fresh_tab = await _spawn_tab(browser_session, url)
+        if fresh_tab:
+            await _focus_target(browser_session, fresh_tab)
+            await _close_spawned_tab(browser_session, first_tab)
+            if await _await_page(browser_session, fresh_tab) == "ready":
+                memory = f"Navigated to {url} (the first tab stopped responding and was replaced)"
+                return ActionResult(extracted_content=f"🔗 {memory}", long_term_memory=memory)
+        return ActionResult(
+            error=(
+                f"The browser stopped responding while loading {url}, and a fresh tab "
+                "did not load it either. Try the navigation again; if it keeps "
+                "failing, the site is not reachable from this browser right now."
+            )
+        )
+
+    entry.function = navigate_guarded
+
+
 def register_output_guard_overrides(tools: Tools) -> None:
     """Stop a run's context ballooning: replace any large chunk already seen this
     session with a short back-reference, and (for dump actions only) cap genuinely huge
@@ -4786,6 +5012,34 @@ def _gate_link_deficit(
     return msg
 
 
+_MAX_STRANDED_BOUNCES = 2
+
+
+def _done_text_disagrees_with_store(text: str, store: OutputStore) -> list[str]:
+    """Top-level output fields whose values in a JSON object embedded in ``text``
+    differ from the store's. Empty when the text carries no such object, when its
+    keys are not output fields, or when it matches the store.
+
+    The agent sometimes answers a review by writing the corrected result into
+    done's text; the delivered output is the store, so that correction is lost
+    and the reviewer, seeing the old output, reports that nothing changed.
+    """
+    start = (text or "").find("{")
+    if start < 0:
+        return []
+    try:
+        claimed, _ = json.JSONDecoder().raw_decode(text[start:])
+        stored = json.loads(store.read_output())
+    except Exception:
+        return []
+    if not isinstance(claimed, dict) or not isinstance(stored, dict) or not claimed:
+        return []
+    known = set(store.output_model.model_fields)
+    if not set(claimed) <= known:
+        return []
+    return sorted(k for k in claimed if claimed[k] != stored.get(k))
+
+
 def register_completeness_gate(
     tools: Tools,
     store: OutputStore,
@@ -4804,7 +5058,7 @@ def register_completeness_gate(
     if done_entry is None:
         return
     original_done = done_entry.function
-    state = {"bounced": False}
+    state = {"bounced": False, "stranded": 0}
 
     @tools.action(
         done_entry.description,
@@ -4813,6 +5067,20 @@ def register_completeness_gate(
         terminates_sequence=done_entry.terminates_sequence,
     )
     async def done(params: Any, file_system: FileSystem) -> ActionResult:
+        stranded = _done_text_disagrees_with_store(getattr(params, "text", ""), store)
+        if stranded and state["stranded"] < _MAX_STRANDED_BOUNCES:
+            state["stranded"] += 1
+            return ActionResult(
+                is_done=False,
+                extracted_content=(
+                    "Not finished — your done text carries a result whose "
+                    + ", ".join(stranded)
+                    + " differ from the output store, and the store is what is "
+                    "delivered: JSON written only into done's text changes nothing. "
+                    "Write each change with set_field, update_item or update_items "
+                    "(add_item for new records), then call done again."
+                ),
+            )
         if not state["bounced"]:
             empties = _gate_empty_fields(store, clipboard)
             deficit = _gate_link_deficit(store, clipboard) or _gate_refused_items(clipboard)
@@ -4899,7 +5167,7 @@ def register_completeness_gate(
                     # judge fails the run as truncated; eliding long values keeps
                     # every record visible in the same budget.
                     answer = json.dumps(
-                        elide_long_values(json.loads(answer))[0], default=str
+                        elide_for_review(json.loads(answer))[0], default=str
                     )
                     elision_note = "; long values elided for review"
                 if len(answer) > _JUDGE_ANSWER_CAP:
@@ -4912,10 +5180,10 @@ def register_completeness_gate(
                     "third-party frame is equally well identified by the host "
                     "page's own URL or the embedded provider's URL; do not "
                     "fail the run over which of the two a URL field carries. "
-                    'Values rendered as "<N chars>" are display elisions of '
-                    "complete stored data, shortened only for this review — "
-                    "the delivered output contains the full values; do not "
-                    "treat them as truncation or missing content.\n\n"
+                    'A value ending "… [+N more characters, stored in full; '
+                    'shortened only for this review]" is complete in the '
+                    "delivered output; only this review shows its opening, so "
+                    "do not treat it as truncation or missing content.\n\n"
                     f"{params.text}"
                 )
             except Exception:
