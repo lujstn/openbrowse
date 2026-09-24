@@ -322,7 +322,7 @@ def test_build_llm_openai_output_budget_scales_with_effort(monkeypatch):
 
     monkeypatch.setattr(runner, "settings", _fake_settings(openai="sk-x"))
     for effort, budget in (
-        ("none", 4096),
+        ("none", 8192),
         ("default", 12288),
         ("low", 8192),
         ("medium", 12288),

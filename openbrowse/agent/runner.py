@@ -1588,8 +1588,10 @@ _THINKING_BUDGETS: dict[str, int] = {
 }
 
 # @nonobvious(forced-by): OpenAI counts reasoning tokens inside the output
-# budget; "default" gets the medium tier because omitted ≈ medium.
+# budget; "default" gets the medium tier because omitted ≈ medium. "none" still
+# needs room: gpt-6-luna at none overran a bare 4,096 in most multi-step runs.
 _OPENAI_REASONING_HEADROOM: dict[str, int] = {
+    "none": 4096,
     "default": 8192,
     "low": 4096,
     "medium": 8192,
