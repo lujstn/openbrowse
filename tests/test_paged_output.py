@@ -9,7 +9,6 @@ read_file pages through to the end.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import types
 
@@ -65,7 +64,6 @@ async def test_a_long_printout_is_saved_whole_and_says_how_to_read_on(fs):
     printed = _roles()
     namespace: dict = {"printed": printed}
     result = await _exec_in_sandbox("print(printed, end='')", namespace, fs)
-    await asyncio.sleep(0)
     text = result.extracted_content
     assert text.startswith(printed[:INLINE_BUDGET])
     assert "Complete, only this reply is shortened" in text
@@ -142,7 +140,6 @@ async def test_the_loop_that_hit_luna_max_now_reaches_every_record(fs):
         browser_session=types.SimpleNamespace(),
         file_system=fs,
     )
-    await asyncio.sleep(0)
     first = result.extracted_content
     assert "ROLE 0" in first and "ROLE 11" not in first
     seen = first.split("\n\n[", 1)[0]
@@ -194,3 +191,11 @@ def test_the_note_is_the_same_wherever_output_is_cut():
     )
     assert continuation_note("a.txt", 9000, 9000, 6000).endswith("the end of 'a.txt'.]")
     assert "not available" in continuation_note(None, 2000, 9000)
+
+
+async def test_a_file_saved_from_a_script_reads_back_whole_at_once(fs):
+    from openbrowse.agent.tools import _write_fs_file_sync
+
+    _write_fs_file_sync(fs, "rows.json", '{"rows": 12}')
+    assert (fs.get_dir() / "rows.json").read_text() == '{"rows": 12}'
+    assert fs.get_file("rows.json").read() == '{"rows": 12}'

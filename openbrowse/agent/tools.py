@@ -1707,15 +1707,30 @@ def continuation_note(saved: str | None, shown_to: int, total: int, start: int =
 
 
 def _write_fs_file_sync(file_system: FileSystem, name: str, content: str) -> None:
-    """Write a FileSystem file so it exists on disk IMMEDIATELY, then schedule the
-    official async write to keep browser-use's in-memory file registry in step —
-    an un-awaited async write used to vanish silently, taking the file with it.
+    """Write a FileSystem file so it exists on disk IMMEDIATELY, and record it in
+    browser-use's in-memory file registry in the same breath, so read_file finds it.
+
+    @nonobvious(must-hold): the registry is updated in memory, never by scheduling
+    browser-use's own write_file, which rewrites the file from a worker thread; a
+    script reading the file back while that rewrite was mid-way read it empty.
     """
     (file_system.get_dir() / name).write_text(content)
+    if not hasattr(file_system, "_get_file_type_class"):
+        try:
+            asyncio.get_running_loop().create_task(file_system.write_file(name, content))
+        except Exception:
+            logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
+        return
     try:
-        asyncio.get_running_loop().create_task(file_system.write_file(name, content))
+        stem, extension = file_system._parse_filename(name)
+        file_class = file_system._get_file_type_class(extension)
+        if file_class is None:
+            return
+        entry = file_system.files.get(name) or file_class(name=stem)
+        entry.write_file_content(content)
+        file_system.files[name] = entry
     except Exception:
-        logger.debug("_write_fs_file_sync: registry catch-up failed", exc_info=True)
+        logger.debug("_write_fs_file_sync: registry update failed", exc_info=True)
 
 
 async def _exec_in_sandbox(
@@ -1800,7 +1815,7 @@ async def _exec_in_sandbox(
         runs = namespace["__stdout_saves__"] = namespace.get("__stdout_saves__", 0) + 1
         name = f"stdout_{runs}.txt"
         try:
-            _write_fs_file_sync(file_system, name, out)
+            await file_system.write_file(name, out)
             saved = name
         except Exception:
             logger.warning("run_code_file: saving stdout failed", exc_info=True)
