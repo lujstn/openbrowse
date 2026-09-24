@@ -34,7 +34,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from openbrowse import __version__, prefetch, system_metrics, updates
 from openbrowse.auth import issue_session, require_api_key
 from openbrowse.agent.pool import pool
-from openbrowse.agent.runner import clear_session_states
 from openbrowse.api.profiles import router as profiles_router
 from openbrowse.api.errors import error_envelope
 from openbrowse.api.sessions import router as sessions_router
@@ -49,6 +48,7 @@ from openbrowse.dashboard.routes import (
 from openbrowse.dashboard.setup_routes import setup_router
 from openbrowse.db import crud
 from openbrowse.db.models import init_db
+from openbrowse.profiles import store as profile_store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,7 +75,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     await init_db()
 
-    clear_session_states()
+    migrated = profile_store.migrate(settings.profiles_dir)
+    if migrated:
+        logger.info("Brought %d profile(s) under the storage limits", migrated)
 
     interrupted = await crud.reconcile_interrupted_sessions()
     if interrupted:

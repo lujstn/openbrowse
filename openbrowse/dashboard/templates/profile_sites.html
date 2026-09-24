@@ -1,0 +1,124 @@
+{% extends "base.html" %} {% block title %}Site data · {{ profile.name or profile.id }} · OpenBrowse{% endblock
+%} {% block head %}
+<style>
+  .lead {
+    color: #999;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    max-width: 680px;
+  }
+  .crumbs {
+    color: #737373;
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .crumbs a {
+    color: #9ca3af;
+  }
+  .btn {
+    border: 1px solid #333;
+    background: #1a1a1a;
+    color: #e5e5e5;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+  .btn:hover {
+    border-color: #444;
+  }
+  .btn-danger:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+  }
+  .toolbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar .size {
+    color: #9ca3af;
+    font-size: 13px;
+  }
+  .muted {
+    color: #555;
+  }
+  td.num {
+    font-variant-numeric: tabular-nums;
+  }
+  table td {
+    vertical-align: middle;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="crumbs"><a href="/profiles">Profiles</a> / {{ profile.id }}</div>
+<h1>Site data <span class="badge">{{ rows | length }}</span></h1>
+
+<p class="lead">
+  What this profile keeps for each site, as a browser's site settings list it: the
+  site's cookies, and the data its pages stored in the browser. A profile keeps stored
+  data for up to {{ limits.sites }} sites and {{ limits.storage }} in all, evicting the
+  site used longest ago first, and drops a site's stored data after {{ limits.idle_days }}
+  days without a visit. Cookies last until they expire. Deleting a site here signs the
+  profile out of it; a session running on this profile when you delete still writes back
+  anything it changes itself.
+</p>
+
+<div class="toolbar">
+  {% if size %}<span class="size">{{ size }} in all</span>{% endif %}
+  {% if rows %}
+  <form method="post" action="/profiles/{{ profile.id }}/sites/clear">
+    <button
+      class="btn btn-danger"
+      type="submit"
+      onclick="return confirm('Delete every cookie and all stored data in this profile? It will be signed out of every site.');"
+    >
+      Delete all site data
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>Site</th>
+      <th>Cookies</th>
+      <th>Stored data</th>
+      <th>Last used</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.name }}</td>
+      <td class="num">{{ row.cookies or '' }}{% if not row.cookies %}<span class="muted">none</span>{% endif %}</td>
+      <td class="num">{{ row.stored or '' }}{% if not row.stored %}<span class="muted">none</span>{% endif %}</td>
+      <td>{{ format_relative(row.last_used) if row.last_used else '' }}{% if not row.last_used %}<span class="muted">not recently</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/profiles/{{ profile.id }}/sites/delete">
+          <input type="hidden" name="site" value="{{ row.name }}" />
+          <button
+            class="btn btn-danger"
+            type="submit"
+            onclick="return confirm('Delete the cookies and stored data for this site?');"
+          >
+            Delete
+          </button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">This profile holds no site data yet. A session that signs in to a site while using it fills it.</p>
+{% endif %}
+{% endblock %}

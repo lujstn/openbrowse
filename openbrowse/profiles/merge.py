@@ -1,82 +1,70 @@
-"""Three-way merge of storage states, so sessions sharing a profile keep each other's cookies.
+"""Three-way merge of storage states, so sessions sharing a profile keep each other's changes.
 
-Each session runs against its own copy of the profile's storage state and merges that copy back
-when its browser closes. The merge is three-way — the baseline the session started from, the state
-it ended with, and whatever the profile holds by the time it finishes — so a session writes back
-only the keys it actually changed and leaves every other key as the profile now has it. Without
-this, the last browser to close would flatten the profile with a jar that predates every login,
-logout and cart change the other session made.
+A session remembers the profile as it found it (the baseline), and when it writes back it
+applies only what it changed since then on top of whatever the profile holds by now. A key
+it never touched keeps the profile's current value, so the last browser to close cannot
+roll back a login, logout or cart change another session made in the meantime.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
+from openbrowse.profiles.policy import cookie_key
 from openbrowse.profiles.storage import normalize_storage_state
 
-_STORAGE_KINDS = ("localStorage", "sessionStorage")
 
-
-def _cookie_key(cookie: dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(cookie.get("name") or ""),
-        str(cookie.get("domain") or cookie.get("url") or ""),
-        str(cookie.get("path") or "/"),
-    )
-
-
-def _index_cookies(state: dict[str, Any] | None) -> dict[tuple[str, str, str], dict[str, Any]]:
+def _index_cookies(state: dict[str, Any] | None) -> dict[tuple[str, str, str, str], dict[str, Any]]:
     cookies = (state or {}).get("cookies") or []
     if not isinstance(cookies, list):
         return {}
-    return {_cookie_key(c): c for c in cookies if isinstance(c, dict) and c.get("name")}
+    return {cookie_key(c): c for c in cookies if isinstance(c, dict) and c.get("name")}
 
 
-def _index_origins(state: dict[str, Any] | None) -> dict[str, dict[str, dict[str, Any]]]:
-    """``{origin: {kind: {name: value}}}`` for every storage kind an origin carries."""
-    indexed: dict[str, dict[str, dict[str, Any]]] = {}
-    origins = (state or {}).get("origins") or []
-    if not isinstance(origins, list):
-        return indexed
-    for entry in origins:
-        if not isinstance(entry, dict):
-            continue
-        origin = entry.get("origin")
-        if not origin:
-            continue
-        kinds = indexed.setdefault(str(origin), {})
-        for kind in _STORAGE_KINDS:
-            items = entry.get(kind)
-            if not isinstance(items, list):
-                continue
-            pairs = kinds.setdefault(kind, {})
-            for item in items:
-                if isinstance(item, dict) and item.get("name") is not None:
-                    pairs[str(item["name"])] = item.get("value")
+def _index_origins(state: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    indexed: dict[str, dict[str, str]] = {}
+    for entry in (state or {}).get("origins") or []:
+        if isinstance(entry, dict) and entry.get("origin"):
+            indexed[str(entry["origin"])] = {
+                str(item["name"]): item.get("value")
+                for item in entry.get("localStorage") or []
+                if isinstance(item, dict) and item.get("name") is not None
+            }
     return indexed
 
 
-def _merge_map(
-    baseline: dict[Any, Any], ours: dict[Any, Any], theirs: dict[Any, Any]
-) -> dict[Any, Any]:
-    """Apply our changes since ``baseline`` on top of ``theirs``.
+def cookie_meaning(cookie: dict[str, Any]) -> tuple[Any, ...]:
+    """What a cookie means to a site, ignoring the bookkeeping fields Chrome adds
+    when it reads a jar back (priority, source scheme and port, fractional expiry)."""
+    expires = cookie.get("expires")
+    lasts = round(expires) if isinstance(expires, (int, float)) and expires > 0 else -1
+    return (
+        cookie.get("value"),
+        bool(cookie.get("secure")),
+        bool(cookie.get("httpOnly")),
+        cookie.get("sameSite") or "",
+        lasts,
+    )
 
-    A key we left untouched keeps whatever the profile now holds, so a session that
-    only logged into one site cannot roll back another site's newer cookie.
-    """
+
+def _merge_map(
+    baseline: dict[Any, Any],
+    ours: dict[Any, Any],
+    theirs: dict[Any, Any],
+    meaning: Callable[[Any], Any] = lambda value: value,
+) -> dict[Any, Any]:
+    """Apply our changes since ``baseline`` on top of ``theirs``."""
     result = dict(theirs)
     for key in set(ours) | set(baseline):
         in_ours = key in ours
         in_base = key in baseline
-        if in_ours and (not in_base or ours[key] != baseline[key]):
+        if in_ours and (not in_base or meaning(ours[key]) != meaning(baseline[key])):
             result[key] = ours[key]
         elif in_base and not in_ours:
             # @nonobvious(must-hold): we deleted it, but a session that finished
             # after our baseline may have written a newer value; theirs wins over
             # our delete, because a stale delete losing beats a fresh login losing.
-            if key in theirs and theirs[key] != baseline[key]:
+            if key in theirs and meaning(theirs[key]) != meaning(baseline[key]):
                 continue
             result.pop(key, None)
     return result
@@ -86,46 +74,41 @@ def merge_storage_states(
     baseline: dict[str, Any] | None,
     ours: dict[str, Any] | None,
     theirs: dict[str, Any] | None,
+    *,
+    origins: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Merge one session's storage state back into the profile's current state."""
-    merged_cookies = _merge_map(
-        _index_cookies(baseline), _index_cookies(ours), _index_cookies(theirs)
-    )
-    cookies = [merged_cookies[key] for key in sorted(merged_cookies, key=lambda k: (k[1], k[2], k[0]))]
+    """Merge one session's storage state back into the profile's current state.
 
+    ``origins`` names the origins whose storage ``ours`` actually read; every other
+    origin keeps what the profile holds, since a session that never opened a site
+    says nothing about that site's storage. None means ``ours`` speaks for every origin.
+    """
+    merged_cookies = _merge_map(
+        _index_cookies(baseline), _index_cookies(ours), _index_cookies(theirs), cookie_meaning
+    )
     base_origins = _index_origins(baseline)
     our_origins = _index_origins(ours)
     their_origins = _index_origins(theirs)
+    spoken_for = set(our_origins) | set(base_origins) if origins is None else set(origins)
 
-    origins: list[dict[str, Any]] = []
-    for origin in sorted(set(base_origins) | set(our_origins) | set(their_origins)):
-        entry: dict[str, Any] = {"origin": origin}
-        for kind in _STORAGE_KINDS:
-            merged = _merge_map(
-                base_origins.get(origin, {}).get(kind, {}),
-                our_origins.get(origin, {}).get(kind, {}),
-                their_origins.get(origin, {}).get(kind, {}),
+    merged_origins: list[dict[str, Any]] = []
+    for origin in sorted(set(their_origins) | spoken_for):
+        if origin in spoken_for:
+            items = _merge_map(
+                base_origins.get(origin, {}),
+                our_origins.get(origin, {}),
+                their_origins.get(origin, {}),
             )
-            if merged:
-                entry[kind] = [{"name": name, "value": merged[name]} for name in sorted(merged)]
-        if len(entry) > 1:
-            origins.append(entry)
+        else:
+            items = their_origins[origin]
+        if items:
+            merged_origins.append(
+                {
+                    "origin": origin,
+                    "localStorage": [{"name": k, "value": items[k]} for k in sorted(items)],
+                }
+            )
 
-    return normalize_storage_state({"cookies": cookies, "origins": origins})
-
-
-def read_state(path: Path) -> dict[str, Any] | None:
-    """Read a storage-state file; None when it is absent, unreadable or not an object."""
-    try:
-        state = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    return state if isinstance(state, dict) else None
-
-
-def write_state(path: Path, state: dict[str, Any]) -> None:
-    """Write a storage state atomically, so a reader never sees a half-written jar."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    return normalize_storage_state(
+        {"cookies": list(merged_cookies.values()), "origins": merged_origins}
+    )

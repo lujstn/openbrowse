@@ -1,30 +1,25 @@
 """Export BU Cloud profile state (cookies + localStorage) using a caller-supplied token.
 
 Mirrors the standalone exporter: boot a cloud browser bound to the profile, read the whole
-cookie jar over CDP before any navigation, then recover each origin's localStorage by serving
-a blank page for it (so the origin is established and readable with no site JS and no effect on
-the real account). sessionStorage and IndexedDB are not persisted by BU Cloud, so they are out
-of reach by design. The token is used only for these calls and is never written to disk.
+cookie jar over CDP before any navigation, then read each origin's localStorage from a blank
+page served for it (see ``seed``), so no site script runs and the real account is untouched.
+sessionStorage and IndexedDB are not persisted by BU Cloud, so they are out of reach by design. The token is used only for these calls and is never written to disk.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
-import json
 import os
 from typing import Any, Callable
 
 import httpx
 
+from openbrowse.profiles.cdp import CdpUseAdapter
+from openbrowse.profiles.seed import read_local_storage, visit_origins
+
 CLOUD_API_BASE = os.environ.get("BROWSER_USE_CLOUD_API_URL", "https://api.browser-use.com").rstrip("/")
 
-_BLANK_BODY = base64.b64encode(b"<!doctype html><html><head></head><body></body></html>").decode()
-_READ_LS = (
-    "(()=>{const o={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);"
-    "o[k]=localStorage.getItem(k);}return JSON.stringify(o);})()"
-)
 
 _cloud_env_lock = asyncio.Lock()
 
@@ -142,75 +137,17 @@ async def _extract_local_storage(
     log: Callable[[str], None],
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
-    cdp = await session.get_or_create_cdp_session()
-    client = cdp.cdp_client
-    sid = cdp.session_id
-
-    def on_paused(event: dict[str, Any], session_id: str | None = None) -> None:
-        rid = event.get("requestId") or event.get("request_id")
-        if not rid:
-            return
-
-        async def _fulfill() -> None:
-            # @nonobvious(forced-by) serving a blank page establishes the origin so its persisted localStorage is readable via CDP, with no site JS and no effect on the real logged-in account.
-            try:
-                await client.send.Fetch.fulfillRequest(
-                    params={
-                        "requestId": rid,
-                        "responseCode": 200,
-                        "responseHeaders": [{"name": "Content-Type", "value": "text/html; charset=utf-8"}],
-                        "body": _BLANK_BODY,
-                    },
-                    session_id=session_id or sid,
-                )
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await client.send.Fetch.continueRequest(
-                        params={"requestId": rid}, session_id=session_id or sid
-                    )
-
-        asyncio.create_task(_fulfill())
-
-    client.register.Fetch.requestPaused(on_paused)
-    await client.send.Fetch.enable(params={"patterns": [{"urlPattern": "*"}]}, session_id=sid)
-    await client.send.Runtime.enable(session_id=sid)
-    await client.send.Page.enable(session_id=sid)
-
     hosts = sorted({c["domain"].lstrip(".") for c in raw_cookies})
     origins_to_check = _candidate_origins(hosts)
-    total = len(origins_to_check)
     if on_progress:
-        on_progress(0, total)
-    found: dict[str, dict[str, str]] = {}
-    for i, origin in enumerate(origins_to_check):
-        try:
-            await asyncio.wait_for(
-                client.send.Page.navigate(params={"url": origin + "/"}, session_id=sid), timeout=15
-            )
-            await asyncio.sleep(0.5)
-            cur = (
-                await client.send.Runtime.evaluate(
-                    params={"expression": "location.origin", "returnByValue": True}, session_id=sid
-                )
-            ).get("result", {}).get("value")
-            lsj = (
-                await client.send.Runtime.evaluate(
-                    params={"expression": _READ_LS, "returnByValue": True}, session_id=sid
-                )
-            ).get("result", {}).get("value")
-            ls = json.loads(lsj or "{}")
-            if ls and cur:
-                found.setdefault(cur, {}).update(ls)
-        except Exception:
-            pass
-        finally:
-            if on_progress:
-                on_progress(i + 1, total)
-
-    key_total = sum(len(d) for d in found.values())
+        on_progress(0, len(origins_to_check))
+    visit = await visit_origins(
+        CdpUseAdapter(session.cdp_client),
+        origins_to_check,
+        read_local_storage,
+        on_progress=on_progress,
+    )
+    found = {origin: items for origin, items in visit.results.items() if items}
+    key_total = sum(len(items) for items in found.values())
     log(f"captured localStorage on {len(found)} origins ({key_total} keys)")
-    return [
-        {"origin": org, "localStorage": [{"name": k, "value": v} for k, v in d.items()]}
-        for org, d in sorted(found.items())
-        if d
-    ]
+    return [{"origin": origin, "localStorage": found[origin]} for origin in sorted(found)]

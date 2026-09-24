@@ -133,7 +133,7 @@ async def test_api_fails_closed_without_key(client, monkeypatch):
     assert resp.status_code == 401
 
 
-async def test_profiles_page_shows_domains_not_user_id(client):
+async def test_profiles_page_shows_site_data_not_user_id(client):
     from openbrowse.profiles.importer import import_profile
 
     await import_profile(
@@ -146,10 +146,57 @@ async def test_profiles_page_shows_domains_not_user_id(client):
     )
     resp = await client.get("/profiles", headers=_basic("admin", "secret-key"))
     assert resp.status_code == 200
-    assert "Cookie Domains" in resp.text
+    assert "Site Data" in resp.text
     assert "<th>User ID</th>" not in resp.text
     assert 'name="user_id"' not in resp.text
-    assert "2 domains" in resp.text
+    assert "2 sites" in resp.text
+    assert 'href="/profiles/pid-1/sites"' in resp.text
+
+
+async def test_site_data_page_lists_and_deletes_a_site(client, tmp_path):
+    import json
+
+    from openbrowse.profiles.importer import import_profile
+
+    await import_profile(
+        "pid-2",
+        {
+            "cookies": [
+                {"name": "sid", "value": "1", "domain": ".shop.example"},
+                {"name": "sid", "value": "2", "domain": ".bank.example"},
+            ],
+            "origins": [
+                {"origin": "https://www.shop.example", "localStorage": [{"name": "cart", "value": "3"}]},
+            ],
+        },
+    )
+    auth = _basic("admin", "secret-key")
+    page = await client.get("/profiles/pid-2/sites", headers=auth)
+    assert page.status_code == 200
+    assert "shop.example" in page.text and "bank.example" in page.text
+
+    resp = await client.post(
+        "/profiles/pid-2/sites/delete", data={"site": "shop.example"}, headers=auth
+    )
+    assert resp.status_code == 303
+    state = json.loads((tmp_path / "data" / "profiles" / "pid-2.json").read_text())
+    assert [c["domain"] for c in state["cookies"]] == [".bank.example"]
+    assert state["origins"] == []
+
+
+async def test_clearing_all_site_data_empties_the_profile(client, tmp_path):
+    import json
+
+    from openbrowse.profiles.importer import import_profile
+
+    await import_profile(
+        "pid-3", {"cookies": [{"name": "sid", "value": "1", "domain": ".a.example"}], "origins": []}
+    )
+    resp = await client.post("/profiles/pid-3/sites/clear", headers=_basic("admin", "secret-key"))
+    assert resp.status_code == 303
+    state = json.loads((tmp_path / "data" / "profiles" / "pid-3.json").read_text())
+    assert state == {"cookies": [], "origins": []}
+    assert (tmp_path / "data" / "profiles" / "pid-3.meta.json").exists()
 
 
 async def test_profile_create_makes_row_and_file(client, tmp_path):

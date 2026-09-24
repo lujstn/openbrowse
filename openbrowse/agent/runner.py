@@ -28,7 +28,7 @@ from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
 from openbrowse.agent import cost, live
 from openbrowse import system_metrics
-from openbrowse.agent.code_stream import CodeStreamObserver
+from openbrowse.agent.code_stream import CodeStreamObserver, codeview_url
 from openbrowse.agent.activity import (
     clear_activity,
     leave_profile,
@@ -75,8 +75,7 @@ from openbrowse.browser.factory import (
 )
 from openbrowse.config import settings
 from openbrowse.db import crud
-from openbrowse.profiles import merge
-from openbrowse.profiles.storage import normalize_storage_state
+from openbrowse.profiles.sync import ProfileSync, Restored
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +498,25 @@ async def _report_seeding(
         msg_type="event",
         data=json.dumps({"category": "schema", "action": "seed"}),
         summary=("Output " + "; ".join(parts))[:200],
+        count_step=False,
+    )
+
+
+async def _report_profile_restore(session_id: str, restored: Restored) -> None:
+    sites = f"{restored.sites} site{'s' if restored.sites != 1 else ''}"
+    summary = (
+        f"Profile loaded in {restored.elapsed_s:.1f}s: {restored.cookies} cookies "
+        f"and stored data for {sites}"
+    )
+    missed = restored.cookie_failures + len(restored.site_failures)
+    if missed:
+        summary += f" ({missed} item{'s' if missed != 1 else ''} could not be loaded)"
+    await crud.create_message(
+        session_id=session_id,
+        role="ai",
+        msg_type="event",
+        data=json.dumps({"category": "system", "action": "profileRestore"}),
+        summary=summary[:200],
         count_step=False,
     )
 
@@ -1612,80 +1630,6 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
     return provider, model_id, _RepairingChatAnthropic(**kwargs)
 
 
-_storage_locks: dict[str, asyncio.Lock] = {}
-
-
-def _storage_lock(path: str) -> asyncio.Lock:
-    lock = _storage_locks.get(path)
-    if lock is None:
-        lock = asyncio.Lock()
-        _storage_locks[path] = lock
-    return lock
-
-
-def _session_state_path(session_id: str) -> Path:
-    """Where a session's private copy of its profile's storage state lives."""
-    return settings.data_dir / "session-state" / f"{session_id}.json"
-
-
-def clear_session_states() -> None:
-    """Drop working copies orphaned by a crash or a restart, so they cannot be
-    merged into a profile long after the run that made them.
-    """
-    directory = settings.data_dir / "session-state"
-    if not directory.is_dir():
-        return
-    for stale in directory.glob("*.json"):
-        try:
-            stale.unlink()
-        except OSError:
-            logger.debug("Could not remove stale storage copy %s", stale, exc_info=True)
-
-
-async def _open_session_state(
-    session_id: str, profile_state_file: Path
-) -> tuple[Path, dict[str, Any] | None]:
-    """Take a session's private copy of a profile's storage state.
-
-    Returns the copy's path and the baseline it was taken from — the same
-    baseline the merge later diffs against, so a key this session never touches
-    is left at whatever the profile holds when the session ends rather than
-    being rolled back to what it held when the session began.
-    """
-    async with _storage_lock(str(profile_state_file)):
-        baseline = merge.read_state(profile_state_file)
-    working_copy = _session_state_path(session_id)
-    try:
-        start_state = normalize_storage_state(baseline or {})
-    except ValueError:
-        start_state = {"cookies": [], "origins": []}
-    merge.write_state(working_copy, start_state)
-    return working_copy, baseline
-
-
-async def _merge_state_into_profile(
-    profile_state_file: Path,
-    working_copy: Path,
-    baseline: dict[str, Any] | None,
-) -> None:
-    """Fold a finished session's storage state back into the profile it shares.
-
-    Read-merge-write happens under the profile's lock, so a session finishing
-    between another's read and write cannot have its cookies dropped.
-    """
-    async with _storage_lock(str(profile_state_file)):
-        ours = merge.read_state(working_copy)
-        if ours is not None:
-            theirs = merge.read_state(profile_state_file)
-            merge.write_state(
-                profile_state_file, merge.merge_storage_states(baseline, ours, theirs)
-            )
-    try:
-        working_copy.unlink(missing_ok=True)
-    except OSError:
-        logger.debug("Could not remove working storage copy %s", working_copy, exc_info=True)
-
-
 def _strip_json_fence(text: str) -> str:
     t = (text or "").strip()
     if t.startswith("```"):
@@ -2481,10 +2425,8 @@ async def run_agent_session(session_id: str) -> None:
     replayed = await live.replay_preamble(session_id, task) if keep_alive else ""
     north_star_task = _north_star_preflight(requested_model, replayed or task)
 
-    # Load profile storage state path
-    storage_state_path: str | None = None
     profile_state_file: Path | None = None
-    baseline_state: dict[str, Any] | None = None
+    profile_sync: ProfileSync | None = None
     joined_profile_id: str | None = None
     profile = None
     if session.get("profile_id"):
@@ -2493,14 +2435,6 @@ async def run_agent_session(session_id: str) -> None:
             state_file = settings.data_dir / profile["storage_state_path"]
             if state_file.exists():
                 profile_state_file = state_file
-                # @nonobvious(forced-by): the browser writes its whole jar back over
-                # whatever path it was handed, so two sessions pointed at the profile
-                # itself would each flatten it with a jar that predates the other's
-                # logins. Each gets a private copy and merges it back on the way out.
-                working_copy, baseline_state = await _open_session_state(
-                    session_id, state_file
-                )
-                storage_state_path = str(working_copy)
             await crud.update_profile(
                 profile["id"],
                 last_used_at=datetime.now(timezone.utc).isoformat(),
@@ -2566,11 +2500,32 @@ async def run_agent_session(session_id: str) -> None:
                 ),
                 count_step=False,
             )
-        browser_session = BrowserSession(
-            cdp_url=cdp_url,
-            storage_state=storage_state_path,
-            cross_origin_iframes=True,
-        )
+        if profile_state_file is not None:
+            profile_sync = ProfileSync(
+                profile_state_file,
+                cdp_url,
+                label=profile["id"],
+                ignore={codeview_url()},
+            )
+            try:
+                restored = await profile_sync.restore()
+            except Exception as exc:
+                # @nonobvious(must-hold): a sync that never learned what reached
+                # the browser has no baseline to merge from, so it must not write back.
+                logger.warning("Profile %s could not be loaded", profile["id"], exc_info=True)
+                await profile_sync.abandon()
+                profile_sync = None
+                await crud.create_message(
+                    session_id=session_id,
+                    role="ai",
+                    msg_type="event",
+                    data=json.dumps({"category": "system", "action": "profileRestore"}),
+                    summary=f"Profile could not be loaded, so this session starts signed out: {exc}"[:200],
+                    count_step=False,
+                )
+            else:
+                await _report_profile_restore(session_id, restored)
+        browser_session = BrowserSession(cdp_url=cdp_url, cross_origin_iframes=True)
         # @nonobvious(forced-by): agent.run() kills the browser at run end
         # unless the profile says keep_alive, because the review loop re-runs the
         # agent, and a reviewer round against a dead browser silently re-judges
@@ -3172,10 +3127,8 @@ async def run_agent_session(session_id: str) -> None:
 
         async def _teardown() -> None:
             if browser_session:
-                # @nonobvious(forced-by): stop() saves full storage state while
-                # CDP is live; export_storage_state here would wipe imported
-                # localStorage. Bounded because a browser that will not die must
-                # not hold the display behind it.
+                # @nonobvious(forced-by): bounded because a browser that will not
+                # die must not hold the display behind it.
                 try:
                     await asyncio.wait_for(
                         browser_session.stop(), _BROWSER_STOP_TIMEOUT
@@ -3184,14 +3137,12 @@ async def run_agent_session(session_id: str) -> None:
                     logger.warning(
                         "Failed to stop browser session %s", session_id, exc_info=True
                     )
-            if profile_state_file is not None and storage_state_path:
+            if profile_sync is not None:
                 try:
-                    await _merge_state_into_profile(
-                        profile_state_file, Path(storage_state_path), baseline_state
-                    )
+                    await profile_sync.write_back()
                 except Exception:
                     logger.warning(
-                        "Failed to merge session %s storage state back into profile",
+                        "Failed to write session %s back into its profile",
                         session_id,
                         exc_info=True,
                     )
