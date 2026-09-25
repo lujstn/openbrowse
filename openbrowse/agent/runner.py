@@ -1635,6 +1635,12 @@ _SANDBOX_CAP_S = 300
 def llm_call_timeout(effort: str | None) -> int:
     return _CALL_TIMEOUT_S.get(effort or "", _DEFAULT_CALL_TIMEOUT_S)
 
+
+# @nonobvious(forced-by): must exceed the call timeout plus the sandbox cap, or it
+# kills long sandbox scripts mid-run.
+def step_timeout(effort: str | None) -> int:
+    return llm_call_timeout(effort) + _SANDBOX_CAP_S + 40
+
 _FULL_LADDER = ("low", "medium", "high", "xhigh", "max")
 
 
@@ -3107,9 +3113,7 @@ async def run_agent_session(session_id: str) -> None:
             "tools": tools,
             "calculate_cost": True,
             "llm_timeout": llm_call_timeout(reasoning_effort),
-            # @nonobvious(forced-by): must exceed llm_timeout + the sandbox cap,
-            # or step_timeout kills long sandbox scripts mid-run.
-            "step_timeout": llm_call_timeout(reasoning_effort) + _SANDBOX_CAP_S + 40,
+            "step_timeout": step_timeout(reasoning_effort),
             # @nonobvious(means): lets store/file work batch into one LLM step;
             # the chain still truncates at the first page-changing action.
             "max_actions_per_step": 8,

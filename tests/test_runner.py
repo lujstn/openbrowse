@@ -2361,6 +2361,13 @@ def test_a_whole_model_call_gets_more_time_at_higher_effort():
     assert llm_call_timeout(None) == 180
 
 
+def test_a_step_always_outlasts_its_model_call_and_a_capped_sandbox_script():
+    from openbrowse.agent.runner import _SANDBOX_CAP_S, llm_call_timeout, step_timeout
+
+    for effort in ("none", "medium", "high", "max", None):
+        assert step_timeout(effort) > llm_call_timeout(effort) + _SANDBOX_CAP_S
+
+
 def test_an_anthropic_call_at_high_effort_is_not_cut_at_three_minutes(monkeypatch):
     import openbrowse.agent.runner as runner
 
