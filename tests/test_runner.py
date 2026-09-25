@@ -343,9 +343,9 @@ def test_build_llm_openai_timeout_scales_with_effort(monkeypatch):
         ("default", 90),
         ("low", 90),
         ("medium", 90),
-        ("high", 240),
-        ("xhigh", 240),
-        ("max", 240),
+        ("high", 300),
+        ("xhigh", 480),
+        ("max", 480),
     ):
         _, _, llm = runner._build_llm("gpt-5.6-terra", effort)
         assert llm.timeout == timeout, effort
@@ -2350,3 +2350,57 @@ def test_failed_fallback_lookup_is_retried_once_the_short_ttl_lapses(monkeypatch
     clock[0] += runner._ALLOWED_FALLBACKS_RETRY_S + 1
     asyncio.run(llm._arm_fallbacks())
     assert calls == ["claude-opus-5-5", "claude-opus-5-5"]
+
+
+def test_a_whole_model_call_gets_more_time_at_higher_effort():
+    from openbrowse.agent.runner import llm_call_timeout
+
+    assert [llm_call_timeout(e) for e in ("none", "default", "low", "medium")] == [180] * 4
+    assert llm_call_timeout("high") == 300
+    assert llm_call_timeout("max") == 480
+    assert llm_call_timeout(None) == 180
+
+
+def test_an_anthropic_call_at_high_effort_is_not_cut_at_three_minutes(monkeypatch):
+    import openbrowse.agent.runner as runner
+
+    monkeypatch.setattr(runner, "settings", _fake_settings(anthropic="sk-ant"))
+    _, _, llm = runner._build_llm("claude-opus-5-5", "high")
+    assert llm.timeout == 300
+
+
+async def test_a_refusal_is_reported_as_a_refusal_not_a_parse_failure(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "max")
+    response = _fake_response(output_text="")
+    response.output = [
+        types.SimpleNamespace(
+            type="message",
+            content=[types.SimpleNamespace(type="refusal", refusal="I can't help with that.")],
+        )
+    ]
+    _patch_client(monkeypatch, llm, response)
+    with pytest.raises(Exception) as caught:
+        await llm.ainvoke(_messages(), output_format=Out)
+    assert "declined this step: I can't help with that." in str(caught.value)
+
+
+async def test_an_empty_reply_says_what_came_back_instead(monkeypatch):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        answer: str
+
+    llm = _responses_llm(monkeypatch, "max")
+    response = _fake_response(output_text="", status="incomplete", incomplete_reason="content_filter")
+    response.output = [types.SimpleNamespace(type="reasoning", summary=[])]
+    _patch_client(monkeypatch, llm, response)
+    with pytest.raises(Exception) as caught:
+        await llm.ainvoke(_messages(), output_format=Out)
+    message = str(caught.value)
+    assert "returned no answer text" in message
+    assert "reason=content_filter" in message and "output=reasoning" in message

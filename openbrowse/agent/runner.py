@@ -863,6 +863,30 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                     parts.append(part_text)
         return "".join(parts)
 
+    def _no_answer_reason(self, response: Any) -> str:
+        """Why a reply carried no answer text, in the model's own words where it gave any.
+
+        A refusal arrives as its own ``refusal`` part rather than as text, so reading
+        text alone turned every refusal into a baffling "failed to parse".
+        """
+        refusals = [
+            str(getattr(part, "refusal", "") or "").strip()
+            for item in getattr(response, "output", None) or []
+            for part in getattr(item, "content", None) or []
+            if getattr(part, "type", None) == "refusal" or getattr(part, "refusal", None)
+        ]
+        refusals = [r for r in refusals if r]
+        if refusals:
+            return f"{self.name} declined this step: {' '.join(refusals)[:300]}"
+        status = getattr(response, "status", None)
+        reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+        kinds = sorted({getattr(i, "type", "?") for i in getattr(response, "output", None) or []})
+        return (
+            f"{self.name} returned no answer text (status={status}"
+            + (f", reason={reason}" if reason else "")
+            + f", output={','.join(kinds) or 'nothing'})"
+        )
+
     def _raise_if_truncated(self, response: Any) -> None:
         details = getattr(response, "incomplete_details", None)
         if getattr(response, "status", None) == "incomplete" and (
@@ -1015,9 +1039,7 @@ class _ResponsesChatOpenAI(ChatOpenAI):
                 )
             if not text:
                 raise ModelProviderError(
-                    message="Failed to parse structured output from model response",
-                    status_code=500,
-                    model=self.name,
+                    message=self._no_answer_reason(response), status_code=500, model=self.name
                 )
             return ChatInvokeCompletion(
                 completion=self._parse_structured(text, output_format),
@@ -1602,6 +1624,17 @@ _OPENAI_REASONING_HEADROOM: dict[str, int] = {
 
 _OPENAI_LONG_EFFORTS = ("high", "xhigh", "max")
 
+# @nonobvious(means): the whole of one model call, retries included. gpt-6-luna at
+# max reasons for 1.5 minutes on a routine step, so a fixed 180 s killed replies it
+# was still producing, each one paid for and thrown away.
+_CALL_TIMEOUT_S: dict[str, int] = {"high": 300, "xhigh": 480, "max": 480}
+_DEFAULT_CALL_TIMEOUT_S = 180
+_SANDBOX_CAP_S = 300
+
+
+def llm_call_timeout(effort: str | None) -> int:
+    return _CALL_TIMEOUT_S.get(effort or "", _DEFAULT_CALL_TIMEOUT_S)
+
 _FULL_LADDER = ("low", "medium", "high", "xhigh", "max")
 
 
@@ -1733,7 +1766,7 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
             api_key=settings.openai_api_key,
             reasoning_effort=None if effort == "default" else effort,
             max_completion_tokens=completion_budget,
-            timeout=240 if effort in _OPENAI_LONG_EFFORTS else 90,
+            timeout=llm_call_timeout(effort) if effort in _OPENAI_LONG_EFFORTS else 90,
             max_retries=3,
             # @nonobvious(forced-by): OpenAI strict structured output forbids the
             # free-form dicts our action registry needs, so the schema rides in
@@ -1748,7 +1781,7 @@ def _build_llm(model: str, reasoning_effort: str | None) -> tuple[str, str, Any]
     kwargs: dict[str, Any] = {
         "model": model_id,
         "api_key": settings.anthropic_api_key,
-        "timeout": 180,
+        "timeout": llm_call_timeout(effort),
         "max_retries": 3,
         "max_tokens": 16384,
     }
@@ -3073,10 +3106,10 @@ async def run_agent_session(session_id: str) -> None:
             "browser": browser_session,
             "tools": tools,
             "calculate_cost": True,
-            "llm_timeout": 180,
-            # @nonobvious(forced-by): must exceed llm_timeout + the 300s sandbox
-            # cap, or step_timeout kills long sandbox scripts mid-run.
-            "step_timeout": 520,
+            "llm_timeout": llm_call_timeout(reasoning_effort),
+            # @nonobvious(forced-by): must exceed llm_timeout + the sandbox cap,
+            # or step_timeout kills long sandbox scripts mid-run.
+            "step_timeout": llm_call_timeout(reasoning_effort) + _SANDBOX_CAP_S + 40,
             # @nonobvious(means): lets store/file work batch into one LLM step;
             # the chain still truncates at the first page-changing action.
             "max_actions_per_step": 8,
