@@ -1,0 +1,4136 @@
+{
+  "key": "key.json",
+  "scoredAt": "2026-09-25",
+  "summary": [
+    {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 48.3,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 235.0,
+      "tokens": 359613.0,
+      "llmCostUsd": 0.9
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 26.7,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 225.0,
+      "tokens": 450024.0,
+      "llmCostUsd": 1.2
+    },
+    {
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 61.2,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 656.0,
+      "tokens": 395958.0,
+      "llmCostUsd": 0.0
+    },
+    {
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 58.6,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 321.0,
+      "tokens": 802160.0,
+      "llmCostUsd": 0.1
+    },
+    {
+      "model": "gpt-6-luna",
+      "effort": "none",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 26.7,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 151.0,
+      "tokens": 250287.0,
+      "llmCostUsd": 0.0
+    },
+    {
+      "model": "gpt-6-sol",
+      "effort": "high",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 57.8,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 365.0,
+      "tokens": 578078.0,
+      "llmCostUsd": 0.7
+    },
+    {
+      "model": "gpt-6-sol",
+      "effort": "none",
+      "variant": "v1 prompt",
+      "runs": 1,
+      "accuracy": 100.0,
+      "proactive": 56.9,
+      "records": [
+        "12/12"
+      ],
+      "faithful": true,
+      "seconds": 300.0,
+      "tokens": 532912.0,
+      "llmCostUsd": 0.6
+    }
+  ],
+  "runs": [
+    {
+      "run": "ae7dfd99-d821-4ada-994e-4f07a4249828",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 48.3,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 16,
+      "seconds": 235,
+      "tokens": 359613,
+      "llmCostUsd": 0.8753952,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 1,
+          "miss": 11,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 0,
+          "miss": 9,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryMin",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryCurrency",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "payPeriod",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "claude-opus-5-5-high-v1-1.json"
+    },
+    {
+      "run": "d2fb0d82-9582-4ed0-bb5f-429bdaf53372",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 26.7,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 16,
+      "seconds": 225,
+      "tokens": 450024,
+      "llmCostUsd": 1.1810725,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 0,
+          "miss": 9,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryMin",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryCurrency",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "payPeriod",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        }
+      ],
+      "file": "claude-opus-5-5-low-v1-1.json"
+    },
+    {
+      "run": "c0298899-057f-43d7-860b-5cc09d7f0b36",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 61.2,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 16,
+      "seconds": 656,
+      "tokens": 395958,
+      "llmCostUsd": 0.04975914,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 1,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "gpt-6-luna-max-v1-1.json"
+    },
+    {
+      "run": "e24310e3-9d18-4748-9313-45cf9da085ff",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 58.6,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 35,
+      "seconds": 321,
+      "tokens": 802160,
+      "llmCostUsd": 0.05035743999999999,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 8,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryMin",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryCurrency",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "payPeriod",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "gpt-6-luna-medium-v1-1.json"
+    },
+    {
+      "run": "22f91c93-a810-4f8e-9930-63e357c76788",
+      "model": "gpt-6-luna",
+      "effort": "none",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 26.7,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 14,
+      "seconds": 151,
+      "tokens": 250287,
+      "llmCostUsd": 0.014674900000000001,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 0,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 0,
+          "miss": 9,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryMin",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "salaryCurrency",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "payPeriod",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyName",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyUrl",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "gpt-6-luna-none-v1-1.json"
+    },
+    {
+      "run": "8bcb0133-52da-4593-8151-b7d2cd67cc8e",
+      "model": "gpt-6-sol",
+      "effort": "high",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 57.8,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 24,
+      "seconds": 365,
+      "tokens": 578078,
+      "llmCostUsd": 0.7215875999999999,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 9,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "gpt-6-sol-high-v1-1.json"
+    },
+    {
+      "run": "11ebf7e4-c794-48ff-b669-fde077ac9db8",
+      "model": "gpt-6-sol",
+      "effort": "none",
+      "variant": "v1 prompt",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 100.0,
+      "proactive": 56.9,
+      "invented": 0,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": true,
+      "careersPageUrl": true,
+      "steps": 23,
+      "seconds": 300,
+      "tokens": 532912,
+      "llmCostUsd": 0.6140400000000001,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "companyDescription": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 7,
+          "miss": 5,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "payPeriod": {
+          "hit": 1,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 1
+        },
+        "seniority": {
+          "hit": 0,
+          "miss": 8,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 8
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "expiresAt": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 8,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 9
+        },
+        "skills": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 0,
+          "miss": 12,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 12
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Principal Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Staff Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior CRM Operations Manager",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "visaSponsorship",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Technical Accountant",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "locationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Workplace Experience Coordinator - part time",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Pricing Data Scientist",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Senior Data Science Manager, Pricing",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Large Loss Handler",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "companyDescription",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "skills",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        },
+        {
+          "kind": "missing",
+          "field": "compensationType",
+          "role": "Claims Fraud Team Lead",
+          "value": null
+        }
+      ],
+      "file": "gpt-6-sol-none-v1-1.json"
+    }
+  ]
+}

@@ -1,11 +1,13 @@
 {
-  "_readme": "The OpenBrowse benchmark task: POST this shape to /v3/sessions (add your own model, reasoningEffort and profileId \u2014 per-row values are in the README benchmark table). Reference results are in README.md.",
-  "task": "RULES (apply to every task!):\n\nLOADING CONTENT:\n1. To load more content on lazy-loading or infinite-scroll pages, scroll incrementally (a few pages at a time) and wait briefly for new items to appear. Click visible \"Load more\" or \"Next\" buttons when present.\n2. If the page displays a total count (e.g. \"Showing 125 companies\", \"245 jobs\"), use that as your completion target. Keep loading content until your count matches the displayed total.\n3. Be persistent about completeness \u2013 keep scrolling and clicking until no new items appear. Do not stop early if you know there is more content to load.\n4. If clicking a button fails via code execution, use browser actions instead: try click by element index, or use send_keys with Tab and Enter to navigate to and activate the button.\n5. Do NOT manipulate JavaScript framework internals to trigger content loading (e.g. calling React component .next() methods, dispatching Redux/Vuex actions, walking fiber/virtual DOM trees, or calling internal API functions like InfiniteScroll handlers).\n\nDATA EXTRACTION:\n6. Code execution is useful for parsing data already on the page. If a code-based extraction approach isn't working after 2-3 attempts, try a different strategy (e.g. switch from DOM parsing to reading page text, or use browser extract action). This applies to extraction strategy \u2013 not to content loading, which should be persistent per rules 1-3.\n7. Do NOT call site backend APIs directly from the sandbox \u2013 they will fail due to CORS or missing auth. Extract data from the rendered page or embedded page data (e.g. __NEXT_DATA__, inline JSON) instead.\n\nOUTPUT:\n8. Return data in the output schema provided. Do NOT save results to workspace files or return prose summaries.\n9. Focus on extracting the entity type specified in the goal (e.g. jobs OR companies, not both). If you encounter additional entity data incidentally, include it in the relevant item's \"extra\" array.\n\nRELIABILITY:\n10. If the browser appears stuck or a page takes an unusually long time to load, do not wait indefinitely. Report what you have gathered so far.\n\nGoal: JSON of all open roles currently listed on this employer's careers or jobs page.\n\nTask: Browse Marshmallow's careers page and collect every open role listed on it.\n\nSteps:\n1. Go to: https://marshmallow.com/jobs\n2. If there is a cookie consent banner or similar interstitial, dismiss it.\n3. This URL may be the employer's homepage rather than its careers page. If it is, find the link to their careers, jobs, vacancies or \"work with us\" section (usually in the header or footer navigation) and follow it. Repeat if that page links onward to the actual role listings.\n4. Set \"careersPageUrl\" to the absolute URL of the page the roles are actually listed on. Leave it null if you never reached a careers page, and never set it to the homepage.\n5. Scroll down to load all open roles. If there is pagination or a \"load more\" control, navigate through it.\n6. For each role, fill the named schema fields you can observe: title, location, department, applyUrl (the direct link to apply for this role), sourceUrl (the absolute URL of the role's own listing page), salary fields if shown. Leave fields null if absent. Put genuinely novel data (equity, tags, contract type, etc.) into the \"extra\" array as {key, value} objects.\n\nOutput: Return a JSON object with a \"jobs\" array and a \"careersPageUrl\" string, matching the provided schema.\n\nRules:\n1. Collect only currently-open roles from this employer. Do not follow links off to external job boards or other companies.\n2. Resolve every sourceUrl and applyUrl to an absolute https link.\n3. If a role links to an external ATS (Greenhouse, Lever, Workday, etc.), use that ATS URL as sourceUrl.\n4. Extract EVERYTHING visible. Act as a thorough human researcher \u2013 if you can see it on the page, it belongs in the JSON.\n5. Include any background data from API responses, page source, or structured data (JSON-LD, meta tags) if accessible, but prioritise what is visually present.",
+  "_readme": "The OpenBrowse benchmark, version 2 (2026-09-25), variant A, which names every field. POST it to /v3/sessions with your own model, reasoningEffort and profileId. Variant B leaves visaSponsorship unnamed: python -m scripts.benchmark variant --unnamed visaSponsorship. How runs are scored, and every raw result, are in README.md and benchmarks/.",
+  "version": 2,
+  "task": "RULES (apply to every task!):\n\nLOADING CONTENT:\n1. To load more content on lazy-loading or infinite-scroll pages, scroll incrementally (a few pages at a time) and wait briefly for new items to appear. Click visible \"Load more\" or \"Next\" buttons when present.\n2. If the page displays a total count (e.g. \"Showing 125 companies\", \"245 jobs\"), use that as your completion target. Keep loading content until your count matches the displayed total.\n3. Be persistent about completeness \u2013 keep scrolling and clicking until no new items appear. Do not stop early if you know there is more content to load.\n4. If clicking a button fails via code execution, use browser actions instead: try click by element index, or use send_keys with Tab and Enter to navigate to and activate the button.\n5. Do NOT manipulate JavaScript framework internals to trigger content loading (e.g. calling React component .next() methods, dispatching Redux/Vuex actions, walking fiber/virtual DOM trees, or calling internal API functions like InfiniteScroll handlers).\n\nDATA EXTRACTION:\n6. Code execution is useful for parsing data already on the page. If a code-based extraction approach isn't working after 2-3 attempts, try a different strategy (e.g. switch from DOM parsing to reading page text, or use browser extract action). This applies to extraction strategy \u2013 not to content loading, which should be persistent per rules 1-3.\n7. Do NOT call site backend APIs directly from the sandbox \u2013 they will fail due to CORS or missing auth. Extract data from the rendered page or embedded page data (e.g. __NEXT_DATA__, inline JSON) instead.\n\nOUTPUT:\n8. Return data in the output schema provided. Do NOT save results to workspace files or return prose summaries.\n9. Focus on extracting the entity type specified in the goal (e.g. jobs OR companies, not both).\n\nRELIABILITY:\n10. If the browser appears stuck or a page takes an unusually long time to load, do not wait indefinitely. Report what you have gathered so far.\n\nGoal: JSON of all open roles currently listed on this employer's careers or jobs page.\n\nTask: Browse Marshmallow's careers page and collect every open role listed on it.\n\nSteps:\n1. Go to: https://marshmallow.com/jobs\n2. If there is a cookie consent banner or similar interstitial, dismiss it.\n3. This URL may be the employer's homepage rather than its careers page. If it is, find the link to their careers, jobs, vacancies or \"work with us\" section (usually in the header or footer navigation) and follow it. Repeat if that page links onward to the actual role listings.\n4. Set \"careersPageUrl\" to the absolute URL of the page the roles are actually listed on. Leave it null if you never reached a careers page, and never set it to the homepage.\n5. Scroll down to load all open roles. If there is pagination or a \"load more\" control, navigate through it.\n6. For each role, fill every field below you can observe; leave fields null if absent.\n   - title: the role's title as listed\n   - description: the role's full description text\n   - sourceUrl: the absolute URL of the role's own listing page\n   - applyUrl: the direct link to apply for this role\n   - location: where the role is based\n   - locationType: whether the role is ONSITE, HYBRID or REMOTE\n   - department: the team or department the role sits in\n   - seniority: the role's seniority as the page words it\n   - postedAt: the date the role was posted\n   - expiresAt: the closing date for applications, only if shown\n   - skills: the skills, tools or technologies the role asks for\n   - compensationType: SALARIED for an employed role, CONTRACT for a contractor role\n   - ir35Status: the role's IR35 status, only if shown\n   - salaryMin: the lowest pay shown in the role's salary or pay details, if it has any\n   - salaryMax: the highest pay shown in the role's salary or pay details, if it has any\n   - salaryCurrency: the currency of the pay shown in the role's salary or pay details, if it has any\n   - payPeriod: how often the pay shown in the role's salary or pay details is paid, if it has any\n   - visaSponsorship: whether the employer will sponsor a work visa for this role, quoted as the page states it\n   - companyName: the hiring company's name\n   - companyUrl: the hiring company's website\n   - companyDescription: the company's description of itself\n\nOutput: Return a JSON object with a \"jobs\" array and a \"careersPageUrl\" string, matching the provided schema.\n\nRules:\n1. Collect only currently-open roles from this employer. Do not follow links off to external job boards or other companies.\n2. Resolve every sourceUrl and applyUrl to an absolute https link.\n3. If a role links to an external ATS (Greenhouse, Lever, Workday, etc.), use that ATS URL as sourceUrl.\n4. Extract EVERYTHING visible. Act as a thorough human researcher \u2013 if you can see it on the page, it belongs in the JSON.\n5. Include structured data already in the page (JSON-LD, meta tags, embedded page data such as __NEXT_DATA__) if accessible, but prioritise what is visually present.",
   "outputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "properties": {
       "jobs": {
+        "description": "every open role listed on the careers page",
         "anyOf": [
           {
             "type": "array",
@@ -13,41 +15,11 @@
               "type": "object",
               "properties": {
                 "title": {
+                  "description": "the role's title as listed",
                   "anyOf": [
                     {
                       "type": "string",
                       "minLength": 1
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "companyName": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "companyUrl": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "companyDescription": {
-                  "anyOf": [
-                    {
-                      "type": "string"
                     },
                     {
                       "type": "null"
@@ -55,6 +27,7 @@
                   ]
                 },
                 "description": {
+                  "description": "the role's full description text",
                   "anyOf": [
                     {
                       "type": "string"
@@ -65,6 +38,7 @@
                   ]
                 },
                 "sourceUrl": {
+                  "description": "the absolute URL of the role's own listing page",
                   "anyOf": [
                     {
                       "type": "string",
@@ -75,7 +49,30 @@
                     }
                   ]
                 },
+                "applyUrl": {
+                  "description": "the direct link to apply for this role",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "location": {
+                  "description": "where the role is based",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "locationType": {
+                  "description": "whether the role is ONSITE, HYBRID or REMOTE",
                   "anyOf": [
                     {
                       "type": "string",
@@ -90,7 +87,8 @@
                     }
                   ]
                 },
-                "location": {
+                "department": {
+                  "description": "the team or department the role sits in",
                   "anyOf": [
                     {
                       "type": "string"
@@ -100,10 +98,78 @@
                     }
                   ]
                 },
-                "address": {
+                "seniority": {
+                  "description": "the role's seniority as the page words it",
                   "anyOf": [
                     {
                       "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "postedAt": {
+                  "description": "the date the role was posted",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "expiresAt": {
+                  "description": "the closing date for applications, only if shown",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skills": {
+                  "description": "the skills, tools or technologies the role asks for",
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "compensationType": {
+                  "description": "SALARIED for an employed role, CONTRACT for a contractor role",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "SALARIED",
+                        "CONTRACT"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ir35Status": {
+                  "description": "the role's IR35 status, only if shown",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "INSIDE_IR35",
+                        "OUTSIDE_IR35",
+                        "UNKNOWN"
+                      ]
                     },
                     {
                       "type": "null"
@@ -111,6 +177,7 @@
                   ]
                 },
                 "salaryMin": {
+                  "description": "the lowest pay shown in the role's salary or pay details, if it has any",
                   "anyOf": [
                     {
                       "type": "number"
@@ -121,6 +188,7 @@
                   ]
                 },
                 "salaryMax": {
+                  "description": "the highest pay shown in the role's salary or pay details, if it has any",
                   "anyOf": [
                     {
                       "type": "number"
@@ -131,6 +199,7 @@
                   ]
                 },
                 "salaryCurrency": {
+                  "description": "the currency of the pay shown in the role's salary or pay details, if it has any",
                   "anyOf": [
                     {
                       "type": "string"
@@ -141,6 +210,7 @@
                   ]
                 },
                 "payPeriod": {
+                  "description": "how often the pay shown in the role's salary or pay details is paid, if it has any",
                   "anyOf": [
                     {
                       "type": "string",
@@ -158,47 +228,8 @@
                     }
                   ]
                 },
-                "seniority": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "department": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "postedAt": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "expiresAt": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "visaSponsorship": {
+                  "description": "whether the employer will sponsor a work visa for this role, quoted as the page states it",
                   "anyOf": [
                     {
                       "type": "string"
@@ -208,62 +239,34 @@
                     }
                   ]
                 },
-                "companySourceId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "skills": {
-                  "anyOf": [
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "applyUrl": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "compensationType": {
+                "companyName": {
+                  "description": "the hiring company's name",
                   "anyOf": [
                     {
                       "type": "string",
-                      "enum": [
-                        "SALARIED",
-                        "CONTRACT"
-                      ]
+                      "minLength": 1
                     },
                     {
                       "type": "null"
                     }
                   ]
                 },
-                "ir35Status": {
+                "companyUrl": {
+                  "description": "the hiring company's website",
                   "anyOf": [
                     {
-                      "type": "string",
-                      "enum": [
-                        "INSIDE_IR35",
-                        "OUTSIDE_IR35",
-                        "UNKNOWN"
-                      ]
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "companyDescription": {
+                  "description": "the company's description of itself",
+                  "anyOf": [
+                    {
+                      "type": "string"
                     },
                     {
                       "type": "null"
@@ -280,6 +283,7 @@
         ]
       },
       "careersPageUrl": {
+        "description": "the absolute URL of the page the roles are listed on",
         "anyOf": [
           {
             "type": "string"

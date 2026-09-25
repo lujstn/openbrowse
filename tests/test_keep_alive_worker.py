@@ -159,6 +159,7 @@ async def worker_env(tmp_path, monkeypatch):
     for name in (
         "register_fetch_tool",
         "register_code_tools",
+        "register_paged_read_file",
         "register_clipboard_tools",
         "register_tab_tools",
         "register_output_store_tools",
