@@ -31,6 +31,17 @@ Given the same real-world extraction task (a careers page with 14 records behind
 
 <sub>[All runs, every model tried, and the task specification](https://openbrowse.co/benchmarks).</sub>
 
+### How runs are scored
+
+The task is [`benchmark.json`](benchmark.json): collect every open role on Marshmallow's careers page into a 21-field schema, with each field named in the prompt by a one-line description. A second variant is identical except that it leaves `visaSponsorship` unnamed (`python -m scripts.benchmark variant --unnamed visaSponsorship`), which shows whether a model fills a field nobody asked it for.
+
+Each run is scored against an answer key captured from the live board just before the batch, and read by hand as well:
+
+- **Accuracy** is the share of values the prompt asks for, and the page shows, that the run got right. Every invented value, duplicate and role that isn't on the page counts against it.
+- **Proactive** is the share of values the prompt doesn't ask for, but the page shows, that the run got right: visa sponsorship in the second variant, and pay that appears only in a role's description.
+
+Every raw run, with its answer key and scores, is kept in [`benchmarks/`](benchmarks).
+
 ## Why OpenBrowse over BU Cloud?
 
 | | BU Cloud | OpenBrowse |
