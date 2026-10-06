@@ -8,11 +8,11 @@ import re
 from collections import Counter
 from pathlib import Path
 from types import UnionType
-from typing import Any, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, Optional, Union, get_args, get_origin
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 
 from browser_use import ActionResult, BrowserSession, Tools
 from browser_use.browser.events import (
@@ -22,6 +22,8 @@ from browser_use.browser.events import (
     TabCreatedEvent,
 )
 from browser_use.filesystem.file_system import FileSystem
+from browser_use.llm.base import BaseChatModel
+from browser_use.llm.messages import SystemMessage, UserMessage
 
 from openbrowse.agent.browser_cdp import (
     _emit_progress,
@@ -2366,6 +2368,184 @@ class TabManager:
         return "Closed the tab and returned to the base tab."
 
 
+_FILL_PAGE_CHARS = 30_000
+_FILL_JSONLD_CHARS = 6_000
+_FILL_BATCH = 16
+_FILL_ATTEMPTED_KEY = "_fill_attempted"
+_FILL_FAILURES_KEY = "_fill_failures"
+_FILL_QUOTES = "page_quotes"
+_FILL_SYSTEM = (
+    "You read one web page and fill the listed fields for the single record it "
+    "describes, as each field's description defines it. Use only what this page "
+    "states, in its text or its structured data. For every field you fill, add a "
+    "quote: the exact line from the page the value comes from. Leave a field null "
+    "when the page does not state it. Never guess, default, or use outside knowledge."
+)
+
+
+class _PageQuote(BaseModel):
+    field: str
+    quote: str
+
+
+def _loose_annotation(annotation: Any) -> Any:
+    """A field's type without its validators, so one malformed value cannot sink a
+    whole page's reply. The store validates every value as it is written."""
+    inner = _peel_optional(annotation)
+    if get_origin(inner) is Annotated:
+        inner = get_args(inner)[0]
+    return Optional[inner]
+
+
+def _field_kind(annotation: Any) -> str:
+    inner = _peel_optional(_loose_annotation(annotation))
+    if get_origin(inner) is Literal:
+        return "one of " + ", ".join(str(v) for v in get_args(inner))
+    if get_origin(inner) is list:
+        args = get_args(inner)
+        return "list of " + (_field_kind(args[0]) if args else "values")
+    return {str: "text", int: "whole number", float: "number", bool: "true or false"}.get(
+        inner, "value"
+    )
+
+
+def _fillable_fields(store: OutputStore) -> list[str]:
+    extra_field, _ = _extra_style_field(store)
+    return [
+        f
+        for f in store.item_model.model_fields
+        if f not in (extra_field, _item_url_field(store), _FILL_QUOTES)
+    ]
+
+
+_RECORD_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f-]{27}|[0-9a-f]{16,}|\d{5,}", re.IGNORECASE)
+
+
+def _page_for_item(url: str, pages: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """The read page an item came from: its own URL, or failing that the one page
+    sharing a record id with it, since an item's URL is often rewritten from the
+    page that embedded it to the ATS's own link."""
+    if url in pages:
+        return pages[url]
+    ids = {m.lower() for m in _RECORD_ID.findall(url)}
+    if not ids:
+        return None
+    matches = [
+        page for key, page in pages.items() if ids & {m.lower() for m in _RECORD_ID.findall(key)}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _fill_targets(
+    store: OutputStore, clipboard: dict[str, Any], fields: list[str]
+) -> list[tuple[int, dict[str, Any], list[str]]]:
+    """(item index, its read page, the given fields still empty on it and not yet
+    looked for on that page), for every item whose own page read_pages saved."""
+    url_field = _item_url_field(store)
+    if not url_field or not store.array_field:
+        return []
+    pages = {
+        _norm_url(str(p.get("url") or "")): p
+        for p in clipboard.get(_READ_PAGES_KEY) or []
+        if not p.get("error") and (p.get("text") or "").strip()
+    }
+    attempted = clipboard.get(_FILL_ATTEMPTED_KEY) or set()
+    out = []
+    for i, item in enumerate(store.data.get(store.array_field) or []):
+        if not isinstance(item, dict):
+            continue
+        page = _page_for_item(_norm_url(str(item.get(url_field) or "")), pages)
+        if page is None:
+            continue
+        key = _norm_url(str(page.get("url") or ""))
+        empty = [
+            f
+            for f in fields
+            if _is_empty_value_like(item.get(f)) and (key, f) not in attempted
+        ]
+        if empty:
+            out.append((i, page, empty))
+    return out
+
+
+def _page_fill_prompt(store: OutputStore, page: dict[str, Any], fields: list[str]) -> str:
+    model_fields = store.item_model.model_fields
+    lines = []
+    for f in fields:
+        description = model_fields[f].description
+        line = f"- {f} ({_field_kind(model_fields[f].annotation)})"
+        lines.append(f"{line}: {description}" if description else line)
+    jsonld = page.get("jsonld")
+    structured = (
+        json.dumps(jsonld, default=str, ensure_ascii=False)[:_FILL_JSONLD_CHARS]
+        if jsonld
+        else "none"
+    )
+    return (
+        "Fields to fill:\n" + "\n".join(lines)
+        + f"\n\nPage: {page.get('title') or ''} {page.get('url') or ''}"
+        + f"\n\nStructured data on the page (JSON-LD):\n{structured}"
+        + f"\n\nPage text:\n{(page.get('text') or '')[:_FILL_PAGE_CHARS]}"
+    )
+
+
+def _grounded_on_page(value: Any, quote: str | None, page_norm: str) -> bool:
+    """True when the page states the value, or states the quoted line it was read
+    from. A long passage also needs nearly all its words on the page, so a reworded
+    summary cannot ride in on one real quote."""
+    if isinstance(value, bool):
+        text = str(value).lower()
+    elif isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    else:
+        text = str(value)
+    if _evidence_contains(page_norm, text):
+        return True
+    if not quote or not _evidence_contains(page_norm, quote):
+        return False
+    if len(text) <= 40:
+        return True
+    words = set(_norm_evidence(text).split())
+    return bool(words) and len(words & set(page_norm.split())) >= 0.9 * len(words)
+
+
+async def _read_fields_from_page(
+    llm: BaseChatModel, store: OutputStore, page: dict[str, Any], fields: list[str]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    model_fields = store.item_model.model_fields
+    spec: dict[str, Any] = {
+        f: (_loose_annotation(model_fields[f].annotation), Field(None)) for f in fields
+    }
+    spec[_FILL_QUOTES] = (list[_PageQuote], Field(default_factory=list))
+    reply_model = create_model("PageFields", **spec)
+    reply = await llm.ainvoke(
+        [
+            SystemMessage(content=_FILL_SYSTEM),
+            UserMessage(content=_page_fill_prompt(store, page, fields)),
+        ],
+        output_format=reply_model,
+    )
+    data = reply.completion
+    quotes = {
+        q.field: q.quote for q in getattr(data, _FILL_QUOTES, None) or [] if q.field in fields
+    }
+    values = {
+        f: getattr(data, f)
+        for f in fields
+        if not _is_empty_value_like(getattr(data, f, None))
+    }
+    return values, quotes
+
+
+def _fill_pending(store: OutputStore, clipboard: dict[str, Any] | None, field: str) -> int:
+    """How many read item pages fill_from_pages has yet to look at for ``field``."""
+    if clipboard is None or not clipboard.get(_READ_PAGES_KEY):
+        return 0
+    if store.item_model is None or field not in _fillable_fields(store):
+        return 0
+    return len(_fill_targets(store, clipboard, [field]))
+
+
 def register_tab_tools(
     tools: Tools,
     tab_manager: TabManager,
@@ -2520,17 +2700,16 @@ def register_tab_tools(
                             )
                             + f". Draft fills: {coverage}."
                             + (
-                                " Not in the draft (fill from the source rows above "
-                                "via update_items, or mark_absent): "
-                                + ", ".join(unfilled) + "."
+                                " Not in the draft: " + ", ".join(unfilled) + "."
                                 if unfilled
                                 else ""
                             )
                             + " Sample (row #0): "
                             + json.dumps(elide_long_values(drafts[0])[0], default=str)
-                            + " Next: add_items_from_file('rows_draft.json'), then ONE "
-                            "update_items call for the rest, mark_absent what no page "
-                            "publishes, and done. No mapping script is needed."
+                            + " Next: add_items_from_file('rows_draft.json'), then "
+                            "fill_from_pages() reads every page's full text for the "
+                            "fields still empty in one step; mark_absent only what it "
+                            "finds on no page, then done. No mapping script is needed."
                         )
                     except Exception:
                         logger.warning("read_pages: failed to save rows_draft.json", exc_info=True)
@@ -2634,6 +2813,135 @@ def register_tab_tools(
             )
         except Exception as e:
             return ActionResult(error=f"read_pages failed: {type(e).__name__}: {e}")
+
+    if store is not None and store.item_model is not None:
+
+        @tools.action(
+            "Fill the fields still empty on your items from the full text of the "
+            "pages read_pages saved: ONE parallel pass, one reading per page with this "
+            "session's model, for values a page states in its prose (a requirement "
+            "list, a sponsorship sentence, a company blurb) or in other words than the "
+            "schema's. Every value is checked against its own page before it is "
+            "written. Call it with no arguments after add_items_from_file, before any "
+            "mark_absent; pass fields=[...] to limit it."
+        )
+        async def fill_from_pages(
+            page_extraction_llm: BaseChatModel,
+            file_system: FileSystem,
+            fields: list[str] | None = None,
+        ) -> ActionResult:
+            if not clipboard.get(_READ_PAGES_KEY):
+                return ActionResult(
+                    error="fill_from_pages reads the pages read_pages saved, and none "
+                    "are saved yet. Run find_links and read_pages first."
+                )
+            eligible = _fillable_fields(store)
+            asked = _tolerate_json_list(fields) if fields else None
+            asked = [asked] if isinstance(asked, str) else asked
+            wanted = [f for f in (asked or eligible) if f in eligible]
+            if not wanted:
+                return ActionResult(
+                    error=f"None of {asked} are item fields it can fill. Item fields: "
+                    + ", ".join(eligible) + "."
+                )
+            targets = _fill_targets(store, clipboard, wanted)
+            if not targets:
+                note = (
+                    "fill_from_pages: nothing left to read. Every requested field "
+                    "already has a value, or has been looked for, on each item whose "
+                    f"page was read. {store.coverage_summary()}"
+                )
+                return ActionResult(extracted_content=note, long_term_memory=note)
+            batch, rest = targets[:_FILL_BATCH], targets[_FILL_BATCH:]
+            replies = await asyncio.gather(
+                *(
+                    _read_fields_from_page(page_extraction_llm, store, page, flds)
+                    for _, page, flds in batch
+                ),
+                return_exceptions=True,
+            )
+            attempted = clipboard.setdefault(_FILL_ATTEMPTED_KEY, set())
+            failures = clipboard.setdefault(_FILL_FAILURES_KEY, {})
+            looked: Counter = Counter()
+            filled: Counter = Counter()
+            refused: list[str] = []
+            unread = 0
+            for (index, page, flds), reply in zip(batch, replies):
+                key = _norm_url(str(page.get("url") or ""))
+                if isinstance(reply, BaseException):
+                    failures[key] = failures.get(key, 0) + 1
+                    logger.warning("fill_from_pages: %s failed: %s", key, reply)
+                    # @nonobvious(forced-by): a page that cannot be read twice counts
+                    # as looked at, or the absence gate would wait on it for ever.
+                    if failures[key] < 2:
+                        unread += 1
+                        continue
+                    attempted.update((key, f) for f in flds)
+                    continue
+                attempted.update((key, f) for f in flds)
+                looked.update(flds)
+                values, quotes = reply
+                page_norm = _norm_evidence(
+                    f"{page.get('text') or ''} "
+                    f"{json.dumps(page.get('jsonld') or {}, default=str)}"
+                )
+                for f, value in values.items():
+                    if isinstance(value, list):
+                        value = [v for v in value if _grounded_on_page(v, None, page_norm)]
+                        grounded = bool(value)
+                    else:
+                        grounded = _grounded_on_page(value, quotes.get(f), page_norm)
+                    if not grounded:
+                        refused.append(f"{f} on item #{index}")
+                        continue
+                    sources = {f: quotes[f]} if f in quotes else None
+                    ok, msg = store.update_item(index, {f: value}, sources)
+                    if ok:
+                        filled[f] += 1
+                    else:
+                        refused.append(f"{f} on item #{index} ({msg})")
+            await _mirror_output(store, file_system)
+
+            still_empty = [
+                f
+                for f in wanted
+                if not any(
+                    isinstance(it, dict) and not _is_empty_value_like(it.get(f))
+                    for it in store.data.get(store.array_field) or []
+                )
+            ]
+            parts = [
+                f"fill_from_pages: read {len(batch) - unread} page(s) for "
+                f"{len(wanted)} field(s)."
+            ]
+            if filled:
+                parts.append(
+                    "Filled: "
+                    + ", ".join(f"{f} on {filled[f]} of {looked[f]}" for f in wanted if filled[f])
+                    + "."
+                )
+            if refused:
+                parts.append(
+                    f"Not written, because the page does not state them: {len(refused)} "
+                    f"value(s), e.g. {'; '.join(refused[:3])}."
+                )
+            if unread:
+                parts.append(
+                    f"{unread} page(s) could not be read this time; call "
+                    "fill_from_pages() again to retry them."
+                )
+            if rest or unread:
+                parts.append(
+                    f"{len(rest)} more item(s) are still to read: call fill_from_pages() "
+                    "again."
+                )
+            elif still_empty:
+                parts.append(
+                    "Found on no page: " + ", ".join(still_empty) + ". Mark those absent."
+                )
+            parts.append(store.coverage_summary())
+            note = " ".join(parts)
+            return ActionResult(extracted_content=note, long_term_memory=note)
 
     @tools.action(
         "Queue URLs as lightweight, UNLOADED background tabs for MANUAL fan-out "
@@ -4134,6 +4442,31 @@ def _strong_overlap(a: set[str], b: set[str]) -> bool:
     return len(common) >= 2
 
 
+# Words that name one concept differently across schema.org, ATS pages and the
+# schemas callers write: hiringOrganization.name is a companyName, sameAs is the
+# organisation's URL, and a "Deadline to Apply" or validThrough is when it expires.
+_CONCEPT_WORDS = {
+    "organization": "company",
+    "organisation": "company",
+    "employer": "company",
+    "hiring": "company",
+    "deadline": "expires",
+    "closing": "expires",
+    "closes": "expires",
+    "expiry": "expires",
+    "expiration": "expires",
+}
+_CONCEPT_PAIRS = {("same", "as"): "url", ("valid", "through"): "expires"}
+
+
+def _concept_tokens(tokens: set[str]) -> set[str]:
+    out = {_CONCEPT_WORDS.get(t, t) for t in tokens}
+    for pair, concept in _CONCEPT_PAIRS.items():
+        if set(pair) <= out:
+            out = (out - set(pair)) | {concept}
+    return out
+
+
 def _top_tied_candidates(tokens: set[str], fields: dict) -> list[tuple[int, str]]:
     """Schema fields whose names overlap the tokens, restricted to the equal
     top-score ties. When the tie-winner rejects a value (enum mismatch) an
@@ -4141,11 +4474,12 @@ def _top_tied_candidates(tokens: set[str], fields: dict) -> list[tuple[int, str]
     farther and would be polluted (a location-type constant landing in
     'location').
     """
+    tokens = _concept_tokens(tokens)
     candidates = sorted(
         (
-            (len(_name_tokens(fname) & tokens), fname)
+            (len(_concept_tokens(_name_tokens(fname)) & tokens), fname)
             for fname in fields
-            if _strong_overlap(_name_tokens(fname), tokens)
+            if _strong_overlap(_concept_tokens(_name_tokens(fname)), tokens)
         ),
         key=lambda pair: -pair[0],
     )
@@ -4182,6 +4516,15 @@ def _labelled_pairs(text: str) -> dict[str, str]:
             continue
         pairs.setdefault(label, value)
     return pairs
+
+
+_LINK_FIELD = re.compile(
+    r"url|uri|href|link|website|site|homepage|image|logo|photo|icon|avatar", re.IGNORECASE
+)
+
+
+def _is_link(value: Any) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"https?://\S+", value.strip()))
 
 
 def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
@@ -4263,6 +4606,10 @@ def _draft_row(store: OutputStore, page: dict[str, Any]) -> dict[str, Any]:
             if isinstance(flat[path], bool) and _peel_optional(
                 fields[fname].annotation
             ) is not bool:
+                continue
+            # @nonobvious(forced-by): an organisation's logo or sameAs ties with
+            # every company* field, and only a field meant for links may hold one.
+            if _is_link(flat[path]) and not _LINK_FIELD.search(fname):
                 continue
             if fname in visual_fields and _upgrades_visual(fname, flat[path]):
                 previous = row.pop(fname)
@@ -4566,6 +4913,14 @@ def _absence_unearned(
             "final state. A partial field needs no marking; do not mark_absent a "
             "field you found on any page."
         )
+    pending = _fill_pending(store, clipboard, field)
+    if pending:
+        return (
+            f"Cannot mark '{field}' absent yet — fill_from_pages() has not read "
+            f"{pending} item page(s) for it. A page often states a value only in its "
+            "prose, so run fill_from_pages() first, then mark absent only what it "
+            "finds on no page."
+        )
     return None
 
 
@@ -4595,9 +4950,11 @@ def _store_bridge(
             _mirror()
         return _AwaitableStr(msg)
 
-    def update_item(index: int, fields: dict[str, Any]) -> str:
+    def update_item(
+        index: int, fields: dict[str, Any], sources: dict[str, str] | None = None
+    ) -> str:
         _refresh_read_items(store, clipboard)
-        ok, msg = store.update_item(index, fields)
+        ok, msg = store.update_item(index, fields, sources)
         if ok:
             _mirror()
         return _AwaitableStr(msg)
@@ -4691,10 +5048,13 @@ def register_output_store_tools(
         "instead of one call per item."
     )
     async def update_item(
-        index: int, fields: dict[str, Any], file_system: FileSystem
+        index: int,
+        fields: dict[str, Any],
+        file_system: FileSystem,
+        sources: dict[str, str] | None = None,
     ) -> ActionResult:
         _refresh_read_items(store, clipboard)
-        ok, msg = store.update_item(index, fields)
+        ok, msg = store.update_item(index, fields, sources)
         if not ok:
             return ActionResult(error=msg)
         await _mirror_output(store, file_system)
@@ -4705,7 +5065,9 @@ def register_output_store_tools(
         f"Merge fields into MANY '{array}' items in one step: pass updates as a list "
         'of {"index": n, "fields": {...}} objects. Each merge is schema-validated; '
         "failures are reported per entry without aborting the rest. Always prefer "
-        "this over a run of single update_item calls."
+        "this over a run of single update_item calls. When a page words an enum "
+        'value differently, add "sources": {field: "the page line"} to that entry: '
+        'the page says "Full time", the schema calls it SALARIED.'
     )
     async def update_items(
         updates: list[dict[str, Any]], file_system: FileSystem
@@ -4757,7 +5119,7 @@ def register_output_store_tools(
         "fields stop counting as unfinished work and done() accepts them empty. A "
         "field found on SOME pages needs no marking — partial is complete once "
         "every page is read. Verifying absence needs no extra browsing: every read "
-        "page's full text is in pages.json, searchable in one run_code_file step."
+        "page's full text is searched for it by fill_from_pages() in one step."
     )
     async def mark_absent(field: str | list[str], reason: str) -> ActionResult:
         field = _tolerate_json_list(field)

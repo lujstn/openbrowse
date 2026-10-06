@@ -357,8 +357,9 @@ class OutputStore:
         return True, f"Added item #{len(arr) - 1} to '{self._array_field}' ({len(arr)} total)."
 
     def update_many(self, updates: Any) -> tuple[bool, str]:
-        """Apply a list of ``{"index": n, "fields": {...}}`` merges in one call.
-        Reports per-entry failures without aborting the rest.
+        """Apply a list of ``{"index": n, "fields": {...}, "sources": {...}}`` merges
+        in one call, ``sources`` optional. Reports per-entry failures without
+        aborting the rest.
         """
         if not isinstance(updates, list) or not updates:
             return False, (
@@ -370,7 +371,9 @@ class OutputStore:
             if not isinstance(entry, dict) or "index" not in entry:
                 failures.append(f"entry {i}: must be an object with index and fields")
                 continue
-            ok, msg = self.update_item(entry.get("index"), entry.get("fields"))
+            ok, msg = self.update_item(
+                entry.get("index"), entry.get("fields"), entry.get("sources")
+            )
             if ok:
                 applied += 1
             else:
@@ -380,7 +383,10 @@ class OutputStore:
             summary += " Failed: " + "; ".join(failures)
         return applied > 0, summary
 
-    def update_item(self, index: Any, fields: Any) -> tuple[bool, str]:
+    def update_item(self, index: Any, fields: Any, sources: Any = None) -> tuple[bool, str]:
+        """Merge ``fields`` into one item. ``sources`` maps a field to the page line
+        its value was read from, which grounds an enum the page words differently.
+        """
         if not self._array_field:
             return False, "This output has no list to update."
         try:
@@ -404,7 +410,11 @@ class OutputStore:
         if not isinstance(fields, dict):
             return False, "update_item expects an object of field/value pairs to merge."
         base = arr[index] if isinstance(arr[index], dict) else {}
-        clean, err = self._validate_item({**base, **fields}, check_keys=set(fields))
+        clean, err = self._validate_item(
+            {**base, **fields},
+            check_keys=set(fields),
+            sources=sources if isinstance(sources, dict) else None,
+        )
         if err:
             return False, err
         arr[index] = clean
@@ -672,21 +682,37 @@ class OutputStore:
                     break
         return hints
 
-    def _ungrounded_enum_error(self, key: str, value: Any, annotation: Any) -> str | None:
+    def _ungrounded_enum_error(
+        self, key: str, value: Any, annotation: Any, source: Any = None
+    ) -> str | None:
+        """Refuse an enum value no read page backs. The value itself on a page backs
+        it, and so does a quoted page line it was read from: "Full time" is what
+        a page says, SALARIED is the schema's word for it.
+        """
         if self.evidence_check is None or not isinstance(value, str) or not value:
             return None
         if get_origin(_peel_optional(annotation)) is not Literal:
             return None
         try:
-            grounded = bool(self.evidence_check(value))
+            grounded = bool(self.evidence_check(value)) or (
+                isinstance(source, str)
+                and len(source.strip()) >= 3
+                and bool(self.evidence_check(source))
+            )
         except Exception:
             return None
         if grounded:
             return None
+        if source:
+            return (
+                f"'{key}' = '{value}' rejected: the source line given for it is not "
+                "on any read page. Quote the page's own words exactly."
+            )
         return (
-            f"'{key}' = '{value}' rejected: no read page states it. Enum values "
-            "must be observed on a page, never inferred or defaulted — leave the "
-            "field null when the page does not state it."
+            f"'{key}' = '{value}' rejected: no read page states it. When the page "
+            "says it in other words (the page says \"Full time\", the schema calls it "
+            f"SALARIED), pass that line as sources={{'{key}': '<the page line>'}}. "
+            "Never infer or default a value the page does not state; leave it null."
         )
 
     def _scalar_replacement(self, item: Any) -> tuple[Any, str | None]:
@@ -742,7 +768,10 @@ class OutputStore:
         return applied, skipped
 
     def _validate_item(
-        self, item: dict, check_keys: set[str] | None = None
+        self,
+        item: dict,
+        check_keys: set[str] | None = None,
+        sources: dict[str, Any] | None = None,
     ) -> tuple[dict | None, str | None]:
         if self._item_model is None:
             return item, None
@@ -757,7 +786,10 @@ class OutputStore:
         for name in check_keys if check_keys is not None else set(coerced):
             if name in self._item_model.model_fields:
                 err = self._ungrounded_enum_error(
-                    name, coerced.get(name), self._item_model.model_fields[name].annotation
+                    name,
+                    coerced.get(name),
+                    self._item_model.model_fields[name].annotation,
+                    (sources or {}).get(name),
                 )
                 if err:
                     return None, err
