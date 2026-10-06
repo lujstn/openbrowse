@@ -1430,7 +1430,7 @@ async def test_output_guard_compacts_oversized_json_instead_of_truncating() -> N
 
     entry = tools.registry.registry.actions["evaluate"]
     result = await entry.function(params=entry.param_model(js="x"))
-    assert "[truncated:" in result.extracted_content
+    assert "Showing characters 0 to 8,000 of" in result.extracted_content
 
 
 def test_saved_links_skip_offhost_for_no_args_reads() -> None:
@@ -3793,7 +3793,7 @@ async def test_recall_spills_a_big_value_to_a_file_and_names_it() -> None:
     fs = _FakeFileSystem()
     envelope = _delivered(await entry.function(key="blob", file_system=fs))
 
-    assert envelope["truncated"] is True
+    assert "shortened" in envelope
     assert envelope["total_chars"] > INLINE_BUDGET
     assert "read_file(" in envelope["read_with"]
     saved = envelope["file"]
@@ -3842,7 +3842,7 @@ async def test_output_guard_back_reference_names_the_file_it_saved() -> None:
 
     fs = _FakeFileSystem()
     first = _seen_by_model(await entry.function(params=None, file_system=fs))
-    saved_as = first.split("saved to '")[1].split("'")[0]
+    saved_as = first.split("saved as '")[1].split("'")[0]
     assert saved_as.startswith("readout_evaluate")
 
     second = _seen_by_model(await entry.function(params=None, file_system=fs))
@@ -4075,8 +4075,8 @@ async def test_guard_readout_files_are_not_reused_between_outputs() -> None:
     second = _seen_by_model(await entry.function(params=None, file_system=fs))
     third = _seen_by_model(await entry.function(params=None, file_system=fs))
 
-    name_a = first.split("saved to '")[1].split("'")[0]
-    name_b = second.split("saved to '")[1].split("'")[0]
+    name_a = first.split("saved as '")[1].split("'")[0]
+    name_b = second.split("saved as '")[1].split("'")[0]
     assert name_a != name_b, "each spilled output needs its own file"
     assert name_a in third, "the back-reference must name the file holding THAT text"
     assert fs.files[name_a].startswith("A")
@@ -4187,10 +4187,10 @@ async def test_deliver_spills_over_budget_and_points_at_the_file() -> None:
         await deliver(payload, note="found 200 links.", file_system=fs, filename="big.json")
     )
 
-    assert envelope["truncated"] is True
+    assert "shortened" in envelope
     assert envelope["total_chars"] > INLINE_BUDGET
     assert len(envelope["sample"]) <= POINTER_SAMPLE
-    assert "read_file('big.json')" in envelope["read_with"]
+    assert "read_file('big.json', start=0)" in envelope["read_with"]
     assert _json.loads(fs.files["big.json"]) == payload, "the file holds everything"
 
 
@@ -4262,7 +4262,7 @@ async def test_the_route_is_chosen_by_size_not_by_which_tool_it_is(monkeypatch) 
         )
 
     assert "data" in await links_for(5), "a small result must come back inline"
-    assert (await links_for(200)).get("truncated") is True
+    assert "shortened" in (await links_for(200))
     assert tools_mod.INLINE_BUDGET == 2000
 
 
@@ -4454,7 +4454,7 @@ async def test_a_large_fetch_sample_shows_body_not_headers() -> None:
             file_content=body,
         )
     )
-    assert envelope["truncated"] is True
+    assert "shortened" in envelope
     assert "CONTENT-" in envelope["sample"], "the sample must show actual body"
 
 

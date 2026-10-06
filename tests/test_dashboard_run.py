@@ -23,7 +23,12 @@ def test_model_options_curated_list():
         "gpt-5.6-terra",
         "gpt-5.6-sol",
         "gpt-5.6-luna",
+        "claude-opus-5-5",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "claude-opus-5",
+        "claude-fable-5-1",
         "claude-fable-5",
         "claude-mythos-5",
         "claude-opus-4-8",
@@ -77,6 +82,15 @@ def test_reasoning_options_per_generation():
     assert luna["default"] == "max"
     assert dict(luna["options"])["max"] == "Max (Default)"
     assert dict(luna["options"])["medium"] == "Medium (Provider default)"
+    opus55 = options_map["claude-opus-5-5"]
+    assert "none" not in dict(opus55["options"])
+    assert opus55["default"] == "medium"
+    assert dict(opus55["options"])["medium"] == "Medium (Default)"
+    astra = options_map["gpt-6-astra"]
+    assert "none" not in dict(astra["options"])
+    assert astra["default"] == "medium"
+    for model in ("gpt-6-sol", "gpt-6-luna"):
+        assert "none" in dict(options_map[model]["options"]), model
     sonnet46 = options_map["claude-sonnet-4-6"]
     assert "xhigh" not in dict(sonnet46["options"])
     assert sonnet46["default"] == "none"
