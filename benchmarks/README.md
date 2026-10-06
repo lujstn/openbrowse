@@ -20,4 +20,7 @@ One run of variant A of the version 2 prompt, `gpt-5.6-terra` at effort `none`, 
 
 ## `2026-10-07-rerun`
 
-The same run as the trial, on version 3 of the prompt and with `fill_from_pages` in place: all 12 roles, 98.2% accuracy and 100% proactive in 1m 45s for $0.44, against the trial's 54.8% by the same rules for $0.24. It got two values wrong when it read the pages at effort `none`: a seniority taken from a requirement ("senior data science individual contributor") instead of the title's "Head", and `payPeriod: FIXED_TERM` on a fixed-term role that shows no pay, which counts as invented.
+The same run as the trial, on version 3 of the prompt and with `fill_from_pages` in place, against the trial's 54.8% by the same rules for $0.24:
+
+- Run 1 (84f88c9): all 12 roles, 98.2% accuracy and 100% proactive in 1m 45s for $0.44. Reading the pages at effort `none`, it took a seniority from a requirement ("senior data science individual contributor") instead of the title's "Head", and set `payPeriod: FIXED_TERM` on a fixed-term role that shows no pay, which counts as invented.
+- Run 2 (4649ed2, after telling the page reader a value must be about the record itself): all 12 roles, 98.8% accuracy and 100% proactive in 1m 40s for $0.38. The seniority was right this time; `payPeriod: FIXED_TERM` came back.

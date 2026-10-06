@@ -6,15 +6,16 @@
       "model": "gpt-5.6-terra",
       "effort": "none",
       "variant": "A",
-      "runs": 1,
-      "accuracy": 98.2,
+      "runs": 2,
+      "accuracy": 98.5,
       "proactive": 100.0,
       "records": [
+        "12/12",
         "12/12"
       ],
       "faithful": false,
-      "seconds": 105.0,
-      "tokens": 289427.0,
+      "seconds": 102.5,
+      "tokens": 277656.0,
       "llmCostUsd": 0.4
     }
   ],
@@ -249,6 +250,231 @@
         }
       ],
       "file": "gpt-5.6-terra-none-A-1.json"
+    },
+    {
+      "run": "e568d2c3-9a5c-4f18-a222-27f6c678f8ee",
+      "model": "gpt-5.6-terra",
+      "effort": "none",
+      "variant": "A",
+      "status": "stopped",
+      "records": "12/12",
+      "accuracy": 98.8,
+      "proactive": 100.0,
+      "invented": 1,
+      "duplicates": 0,
+      "unlisted": 0,
+      "faithful": false,
+      "careersPageUrl": true,
+      "steps": 11,
+      "seconds": 100,
+      "tokens": 265885,
+      "llmCostUsd": 0.3842642,
+      "fields": {
+        "title": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "description": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "sourceUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "applyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "location": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "locationType": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 8,
+          "proactive": 4
+        },
+        "department": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "seniority": {
+          "hit": 6,
+          "miss": 1,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 1,
+          "asked": 7,
+          "proactive": 0
+        },
+        "postedAt": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "expiresAt": {
+          "hit": 2,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 2,
+          "proactive": 0
+        },
+        "skills": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "compensationType": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "ir35Status": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryMin": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryMax": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "salaryCurrency": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "payPeriod": {
+          "hit": 0,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 1,
+          "grounded": 0,
+          "asked": 0,
+          "proactive": 0
+        },
+        "visaSponsorship": {
+          "hit": 8,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 8,
+          "proactive": 0
+        },
+        "companyName": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyUrl": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        },
+        "companyDescription": {
+          "hit": 12,
+          "miss": 0,
+          "wrong": 0,
+          "invented": 0,
+          "grounded": 0,
+          "asked": 12,
+          "proactive": 0
+        }
+      },
+      "issues": [
+        {
+          "kind": "missing",
+          "field": "seniority",
+          "role": "Operations Associate",
+          "value": null
+        },
+        {
+          "kind": "invented",
+          "field": "payPeriod",
+          "role": "Head of Data Science (12m fixed-term contract)",
+          "value": "FIXED_TERM"
+        }
+      ],
+      "file": "gpt-5.6-terra-none-A-2.json"
     }
   ]
 }
