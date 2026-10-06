@@ -98,6 +98,7 @@ class _FakeModel:
     async def ainvoke(self, messages, output_format=None, **_):
         prompt = messages[-1].content
         self.calls.append(prompt)
+        self.system = messages[0].content
         if self.fail_for and self.fail_for in prompt:
             raise TimeoutError("model call timed out")
         head = HEAD["url"] in prompt
@@ -218,3 +219,13 @@ async def test_an_item_whose_url_was_rewritten_to_the_ats_link_still_finds_its_p
     await _call(tools, "fill_from_pages", fs, llm=_FakeModel())
     assert store.data["jobs"][0]["compensationType"] == "SALARIED"
     assert tools_mod._fill_pending(store, clipboard, "ir35Status") == 0
+
+
+async def test_the_page_reader_is_told_a_value_must_be_about_the_record_itself(fs):
+    store = _store()
+    clipboard = _drafted(store)
+    model = _FakeModel()
+    await _call(_fill_tools(store, clipboard), "fill_from_pages", fs, llm=model)
+    assert "about this record itself" in model.system
+    assert "matches one of a field's options" in model.system
+    assert "such as a requirement" in model.system

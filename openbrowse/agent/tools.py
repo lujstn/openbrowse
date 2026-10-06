@@ -2377,9 +2377,12 @@ _FILL_QUOTES = "page_quotes"
 _FILL_SYSTEM = (
     "You read one web page and fill the listed fields for the single record it "
     "describes, as each field's description defines it. Use only what this page "
-    "states, in its text or its structured data. For every field you fill, add a "
-    "quote: the exact line from the page the value comes from. Leave a field null "
-    "when the page does not state it. Never guess, default, or use outside knowledge."
+    "states, in its text or its structured data. A value must be about this record "
+    "itself: a word that only matches one of a field's options, or a phrase about "
+    "something else on the page such as a requirement, does not fill it. For every "
+    "field you fill, add a quote: the exact line from the page the value comes from. "
+    "Leave a field null when the page does not state it. Never guess, default, or "
+    "use outside knowledge."
 )
 
 
