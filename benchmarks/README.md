@@ -16,4 +16,4 @@ Seven runs of the first prompt (`spec.json`), which named six fields and asked f
 
 ## `2026-09-25-trial`
 
-One run of variant A, `gpt-5.6-terra` at effort `none`, to try the new prompt and scorer before a full batch. It found all 14 roles and invented nothing, but filled only the fields `read_pages` drafted from the pages' structured data, then marked the rest absent: 53.5% accuracy.
+One run of variant A of the version 2 prompt, `gpt-5.6-terra` at effort `none`, to try the new prompt and scorer before a full batch. It found all 14 roles and invented nothing, but filled only the fields `read_pages` drafted from the pages' structured data, then marked the rest absent. By its own prompt that is 67.5% accuracy, and 54.8% by version 3's rules, which ask for visa sponsorship, skills and the company description wherever the description states them (`scores-as-v3.json`). The keys in this folder and in `2026-09-25-v1-prompt` record where each value lives, added after the runs from the same captures.

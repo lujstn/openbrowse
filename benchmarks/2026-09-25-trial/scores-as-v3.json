@@ -5,9 +5,9 @@
     {
       "model": "gpt-5.6-terra",
       "effort": "none",
-      "variant": "A",
+      "variant": "A, scored as v3",
       "runs": 1,
-      "accuracy": 67.5,
+      "accuracy": 54.8,
       "proactive": 0.0,
       "records": [
         "14/14"
@@ -23,10 +23,10 @@
       "run": "5dd9674b-62ea-45c1-861e-43436ffc7572",
       "model": "gpt-5.6-terra",
       "effort": "none",
-      "variant": "A",
+      "variant": "A, scored as v3",
       "status": "stopped",
       "records": "14/14",
-      "accuracy": 67.5,
+      "accuracy": 54.8,
       "proactive": 0.0,
       "invented": 0,
       "duplicates": 0,
@@ -134,8 +134,8 @@
           "wrong": 0,
           "invented": 0,
           "grounded": 0,
-          "asked": 0,
-          "proactive": 14
+          "asked": 14,
+          "proactive": 0
         },
         "compensationType": {
           "hit": 0,
@@ -197,8 +197,8 @@
           "wrong": 0,
           "invented": 0,
           "grounded": 0,
-          "asked": 0,
-          "proactive": 9
+          "asked": 9,
+          "proactive": 0
         },
         "companyName": {
           "hit": 0,
@@ -224,8 +224,8 @@
           "wrong": 0,
           "invented": 0,
           "grounded": 0,
-          "asked": 0,
-          "proactive": 14
+          "asked": 14,
+          "proactive": 0
         }
       },
       "issues": [

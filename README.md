@@ -35,10 +35,10 @@ Given the same real-world extraction task (a careers page with 14 records behind
 
 The task is [`benchmark.json`](benchmark.json): collect every open role on Marshmallow's careers page into a 21-field schema, with each field named in the prompt by a one-line description. A second variant is identical except that it leaves `visaSponsorship` unnamed (`python -m scripts.benchmark variant --unnamed visaSponsorship`), which shows whether a model fills a field nobody asked it for.
 
-Each run is scored against an answer key captured from the live board just before the batch, and read by hand as well:
+Each run is scored against an answer key captured from the live board just before the batch, and read by hand as well. The key records where each value lives: in a field the page shows, in the page's own data (JSON-LD, meta tags, embedded or loaded data), or only in a role's description.
 
-- **Accuracy** is the share of values the prompt asks for, and the page shows, that the run got right. Every invented value, duplicate and role that isn't on the page counts against it.
-- **Proactive** is the share of values the prompt doesn't ask for, but the page shows, that the run got right: visa sponsorship in the second variant, and pay that appears only in a role's description.
+- **Accuracy** is the share of asked values that the run got right. A value is asked when the prompt names its field and the page shows it as a field or in its data, or the prompt tells the agent to look for that field in the description. Every invented value, duplicate and role that isn't on the page counts against it.
+- **Proactive** is the share of the page's other values that the run got right: visa sponsorship in the second variant, and fields such as pay that a role states only in its description when the prompt doesn't ask the agent to look there.
 
 Every raw run, with its answer key and scores, is kept in [`benchmarks/`](benchmarks).
 

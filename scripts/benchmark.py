@@ -6,12 +6,14 @@ Usage:
     python -m scripts.benchmark run --model M --effort E [--variant A|B] -o RUN.json
     python -m scripts.benchmark score RUN.json [...] --key KEY.json [--spec SPEC.json] [-o PATH]
 
-A field is asked when the prompt names it: it has a schema description, or its name
-appears in the task. Every other field is proactive. Pay found only in a role's
-description is proactive too, because the salary fields ask for the role's salary or
-pay details. Accuracy is the share of asked values the page shows that a run got
+The answer key records where each value lives: in a field the page shows, in the
+page's data (JSON-LD, meta tags, embedded or loaded data), or only in the role's
+description. A value is asked when the prompt names its field (a schema description,
+or the name in the task) and it lives in a field or the page's data, or it lives only
+in the description and the spec lists the field in descriptionFields. Every other
+value the page shows is proactive. Accuracy is the share of asked values a run got
 right, with every invented value, duplicate and unlisted record counted against it.
-Proactive is the share of proactive values the page shows that a run got right.
+Proactive is the share of proactive values a run got right.
 """
 
 from __future__ import annotations
@@ -83,6 +85,8 @@ def make_variant(spec: dict, unnamed: tuple[str, ...] | list[str]) -> dict:
     """Leave each field out of the prompt and drop its schema description, nothing else."""
     out = copy.deepcopy(spec)
     props = job_properties(out["outputSchema"])
+    if "descriptionFields" in out:
+        out["descriptionFields"] = [f for f in out["descriptionFields"] if f not in unnamed]
     for name in unnamed:
         text = props[name].pop("description")
         line = bullet(name, text)
@@ -94,6 +98,11 @@ def make_variant(spec: dict, unnamed: tuple[str, ...] | list[str]) -> dict:
 
 def variant_spec(name: str, spec: dict | None = None) -> dict:
     return make_variant(spec or load_spec(), VARIANTS[name])
+
+
+def description_fields(spec: dict) -> set[str]:
+    """Fields the prompt tells the agent to look for in a role's description."""
+    return set(spec.get("descriptionFields") or [])
 
 
 def named_fields(spec: dict) -> set[str]:
@@ -294,8 +303,8 @@ def build_role(job: dict, page: dict | None = None) -> dict:
         ("expiresAt", "ir35Status", "visaSponsorship", *SALARY_FIELDS)
     )
 
-    def accept(*values, **extra) -> dict:
-        return {"accept": [v for v in dict.fromkeys(values) if v], **extra}
+    def accept(*values, source: str = "field", **extra) -> dict:
+        return {"accept": [v for v in dict.fromkeys(values) if v], "source": source, **extra}
 
     fields["title"] = accept(title)
     fields["description"] = accept()
@@ -303,20 +312,26 @@ def build_role(job: dict, page: dict | None = None) -> dict:
     fields["applyUrl"] = accept(job.get("applyUrl"))
     locations = [job.get("location")] + [s.get("location") for s in job.get("secondaryLocations") or []]
     fields["location"] = accept(*locations)
-    kind = _location_type(job.get("workplaceType") or posting.get("workplaceType"), text)
-    fields["locationType"] = accept(*kind) if kind else None
+    workplace = job.get("workplaceType") or posting.get("workplaceType")
+    kind = _location_type(workplace, text)
+    # @nonobvious(mirrors): Ashby shows a "Location Type" field only when the role
+    # has a workplace type; otherwise any hybrid or on-site wording is in the prose.
+    fields["locationType"] = (
+        accept(*kind, source="field" if workplace else "description") if kind else None
+    )
     fields["department"] = accept(job.get("department"), job.get("team"))
     words = [w for w in SENIORITY_WORDS if re.search(rf"\b{w}\b", norm(title))]
     fields["seniority"] = accept(*words) if words else None
     posted = jsonld.get("datePosted") or (job.get("publishedAt") or "")[:10]
-    fields["postedAt"] = accept(parse_date(posted)) if posted else None
-    closing = jsonld.get("validThrough") or posting.get("applicationDeadline")
-    if closing:
-        fields["expiresAt"] = accept(*deadline_dates(closing))
+    fields["postedAt"] = accept(parse_date(posted), source="data") if posted else None
+    if jsonld.get("validThrough"):
+        fields["expiresAt"] = accept(*deadline_dates(jsonld["validThrough"]), source="data")
+    elif posting.get("applicationDeadline"):
+        fields["expiresAt"] = accept(*deadline_dates(posting["applicationDeadline"]))
     skills_shown = re.search(
         r"\b(?:skills?|experience|expertise|knowledge|proficien\w*|familiar\w*|ability to)\b",
         text, re.I)
-    fields["skills"] = accept() if skills_shown else None
+    fields["skills"] = accept(source="description") if skills_shown else None
     employment = job.get("employmentType") or ""
     kinds = {"FullTime": ["SALARIED"], "PartTime": ["SALARIED"], "Contract": ["CONTRACT"],
              "Temporary": ["SALARIED", "CONTRACT"], "Intern": ["SALARIED", "CONTRACT"]}.get(employment)
@@ -325,27 +340,25 @@ def build_role(job: dict, page: dict | None = None) -> dict:
     fields["compensationType"] = accept(*kinds) if kinds else None
     ir35 = re.search(r"\b(inside|outside) ir35\b", text, re.I)
     if ir35:
-        fields["ir35Status"] = accept(f"{ir35.group(1).upper()}_IR35")
+        fields["ir35Status"] = accept(f"{ir35.group(1).upper()}_IR35", source="description")
 
-    pay = _pay_from_ashby(job.get("compensation"))
-    salary_in = "pay details" if pay else None
+    pay, pay_source = _pay_from_ashby(job.get("compensation")), "field"
     if not pay:
-        pay = _pay_from_text(text)
-        salary_in = "description" if pay else None
+        pay, pay_source = _pay_from_text(text), "description"
     if pay:
         for f in SALARY_FIELDS:
             if pay.get(f) is not None:
-                fields[f] = accept(pay[f], quote=pay.get("quote"))
+                fields[f] = accept(pay[f], source=pay_source, quote=pay.get("quote"))
 
     visa = [s for s in _sentences(text) if re.search(r"\bvisa|sponsor", s, re.I)]
     if visa:
         meanings = sorted({m for m in map(visa_meaning, visa) if m})
-        fields["visaSponsorship"] = accept(*meanings, quote=" ".join(visa))
+        fields["visaSponsorship"] = accept(*meanings, source="description", quote=" ".join(visa))
 
-    fields["companyName"] = accept(*COMPANY["name"])
-    fields["companyUrl"] = accept(*COMPANY["hosts"])
-    fields["companyDescription"] = accept()
-    return {"id": job["id"], "title": title, "salaryIn": salary_in, "text": text, "fields": fields}
+    fields["companyName"] = accept(*COMPANY["name"], source="data")
+    fields["companyUrl"] = accept(*COMPANY["hosts"], source="data")
+    fields["companyDescription"] = accept(source="description")
+    return {"id": job["id"], "title": title, "text": text, "fields": fields}
 
 
 def build_key(api: dict, pages: dict[str, dict] | None = None,
@@ -439,19 +452,28 @@ def _output(run: dict) -> dict:
     return out if isinstance(out, dict) else {}
 
 
-def _run_spec(run: dict, spec: dict | None) -> tuple[dict, str]:
-    if run.get("_spec"):
+def _run_spec(run: dict, spec: dict | None, force: bool = False) -> tuple[dict, str]:
+    if run.get("_spec") and not (force and spec is not None):
         return run["_spec"], run.get("_variant") or "?"
     if spec is None:
         raise ValueError(f"run {run.get('id')} has no _spec; pass --spec")
     return spec, spec.get("_variant", "?")
 
 
-def score_run(run: dict, key: dict, spec: dict | None = None) -> dict:
+def _source(role: dict, field: str) -> str:
+    return (role["fields"].get(field) or {}).get("source") or "field"
+
+
+def score_run(run: dict, key: dict, spec: dict | None = None, force_spec: bool = False) -> dict:
     if not key["roles"]:
         raise ValueError("the answer key has no roles")
-    spec, variant = _run_spec(run, spec)
+    spec, variant = _run_spec(run, spec, force_spec)
     named = named_fields(spec)
+    dig = description_fields(spec)
+
+    def is_asked(field: str, role: dict) -> bool:
+        return field in named and (_source(role, field) != "description" or field in dig)
+
     fields = [f for f in job_properties(spec["outputSchema"]) if f in key["roles"][0]["fields"]]
     output = _output(run)
     records = [r for r in output.get("jobs") or [] if isinstance(r, dict)]
@@ -486,8 +508,7 @@ def score_run(run: dict, key: dict, spec: dict | None = None) -> dict:
         for f in fields:
             expected = role["fields"].get(f)
             value = record.get(f)
-            asked = f in named and not (f in SALARY_FIELDS and role["salaryIn"] == "description")
-            bucket = "asked" if asked else "proactive"
+            bucket = "asked" if is_asked(f, role) else "proactive"
             if expected is None:
                 if is_empty(value):
                     continue
@@ -517,8 +538,7 @@ def score_run(run: dict, key: dict, spec: dict | None = None) -> dict:
         for f in fields:
             if role["fields"].get(f) is None:
                 continue
-            asked = f in named and not (f in SALARY_FIELDS and role["salaryIn"] == "description")
-            buckets["asked" if asked else "proactive"][1] += 1
+            buckets["asked" if is_asked(f, role) else "proactive"][1] += 1
             tally[f]["miss"] += 1
 
     careers = output.get("careersPageUrl")
@@ -616,8 +636,9 @@ def cmd_key(args) -> None:
     Path(args.output).write_text(json.dumps(key, indent=2, ensure_ascii=False) + "\n")
     for role in key["roles"]:
         visa = role["fields"]["visaSponsorship"]
+        pay = role["fields"]["salaryMin"] or role["fields"]["salaryMax"]
         print(f"{role['id'][:8]}  {role['title']:<50} visa={visa and visa['accept']} "
-              f"pay={role['salaryIn']}")
+              f"pay={pay and pay['source']}")
     print(f"{len(key['roles'])} roles -> {args.output}")
 
 
@@ -677,7 +698,7 @@ def cmd_run(args) -> None:
 
     session.update({
         "_variant": args.variant,
-        "_spec": {"task": spec["task"], "outputSchema": spec["outputSchema"]},
+        "_spec": {k: spec[k] for k in ("task", "outputSchema", "descriptionFields") if k in spec},
         "_timeline": timeline,
         "_stalled": stalled,
         "_wall_seconds": round(time.time() - started),
@@ -695,7 +716,7 @@ def cmd_score(args) -> None:
         spec["_variant"] = args.spec_variant
     scores = []
     for path in args.runs:
-        result = score_run(json.loads(Path(path).read_text()), key, spec)
+        result = score_run(json.loads(Path(path).read_text()), key, spec, args.as_spec)
         result["file"] = Path(path).name
         scores.append(result)
         print(f"{result['file']}: {result['records']} records, accuracy "
@@ -740,6 +761,8 @@ def main(argv: list[str] | None = None) -> None:
     score.add_argument("--key", required=True)
     score.add_argument("--spec", help="the spec runs used, for runs saved without one")
     score.add_argument("--spec-variant", help="the label for runs scored against --spec")
+    score.add_argument("--as-spec", action="store_true",
+                       help="score every run against --spec, even one saved with its own")
     score.add_argument("-o", "--output")
     score.set_defaults(handler=cmd_score)
 

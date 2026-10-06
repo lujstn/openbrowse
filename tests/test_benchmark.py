@@ -68,7 +68,11 @@ def _run(records, variant="A", careers="https://www.marshmallow.com/jobs#ashby_e
     spec = bench.variant_spec(variant)
     return {
         "id": "run", "model": "m", "reasoningEffort": "none", "_variant": variant,
-        "_spec": {"task": spec["task"], "outputSchema": spec["outputSchema"]},
+        "_spec": {
+            "task": spec["task"],
+            "outputSchema": spec["outputSchema"],
+            "descriptionFields": spec["descriptionFields"],
+        },
         "output": {"jobs": records, "careersPageUrl": careers},
     }
 
@@ -118,12 +122,14 @@ def test_the_key_reads_each_field_the_way_the_page_shows_it(key):
     assert pricing["locationType"]["accept"] == ["HYBRID"]
     assert pricing["seniority"] is None and pricing["expiresAt"] is None
 
-    assert budapest["salaryIn"] == "description"
     pay = budapest["fields"]
+    assert pay["salaryMin"]["source"] == "description"
     assert pay["salaryMin"]["accept"] == [720000.0] and pay["salaryMax"] is None
     assert pay["salaryCurrency"]["accept"] == ["HUF"]
     assert pay["payPeriod"]["accept"] == ["MONTHLY"]
     assert pay["locationType"]["accept"] == ["ONSITE"]
+    assert pay["locationType"]["source"] == "description"
+    assert pricing["locationType"]["source"] == "field"
     assert pay["visaSponsorship"] is None
 
     assert head["visaSponsorship"]["accept"] == ["does not offer"]
@@ -131,6 +137,55 @@ def test_the_key_reads_each_field_the_way_the_page_shows_it(key):
     assert head["seniority"]["accept"] == ["head"]
 
     assert claims["expiresAt"]["accept"] == ["2026-10-08", "2026-10-09"]
+    assert claims["expiresAt"]["source"] == "field"
+
+    assert pricing["postedAt"]["source"] == pricing["companyName"]["source"] == "data"
+    assert {pricing[f]["source"] for f in ("visaSponsorship", "skills", "companyDescription")} == {
+        "description"
+    }
+
+
+def test_only_the_listed_fields_ask_the_agent_to_look_in_the_description():
+    spec = bench.load_spec()
+    props = bench.job_properties(spec["outputSchema"])
+    looks = {f for f, node in props.items() if "role's description" in node["description"]}
+    assert looks == bench.description_fields(spec) == {
+        "visaSponsorship", "skills", "companyDescription",
+    }
+    assert bench.description_fields(bench.variant_spec("B")) == {"skills", "companyDescription"}
+
+
+def test_a_value_only_in_the_description_counts_when_the_prompt_says_to_look_there(key):
+    records = _perfect(key)
+    for record in records:
+        record["skills"] = record["companyDescription"] = None
+    score = bench.score_run(_run(records), key)
+    assert score["accuracy"] < 100.0 and score["proactive"] == 100.0
+
+
+def test_a_value_only_in_the_description_is_proactive_when_the_prompt_does_not_say_so(key):
+    records = _perfect(key)
+    budapest = next(r for r in records if BUDAPEST in r["sourceUrl"])
+    budapest["locationType"] = None
+    score = bench.score_run(_run(records), key)
+    assert score["accuracy"] == 100.0 and score["proactive"] < 100.0
+    pricing = next(r for r in records if PRICING in r["sourceUrl"])
+    pricing["locationType"] = None
+    assert bench.score_run(_run(records), key)["accuracy"] < 100.0
+
+
+def test_a_spec_with_no_description_fields_leaves_every_description_value_proactive(key):
+    old = bench.variant_spec("A")
+    del old["descriptionFields"]
+    records = _perfect(key)
+    for record in records:
+        record["visaSponsorship"] = record["skills"] = None
+    run = _run(records)
+    run["_spec"]["descriptionFields"] = []
+    score = bench.score_run(run, key)
+    assert score["accuracy"] == 100.0 and score["proactive"] < 100.0
+    forced = bench.score_run(run, key, bench.variant_spec("A"), force_spec=True)
+    assert forced["accuracy"] < 100.0
 
 
 def test_a_perfect_run_scores_full_marks(key):
@@ -196,7 +251,10 @@ def test_pay_found_only_in_the_description_is_proactive(key):
         budapest[field] = None
     score = bench.score_run(_run(records), key)
     assert score["accuracy"] == 100.0
-    assert score["proactive"] == 0.0
+    assert score["proactive"] < 100.0
+    assert {i["field"] for i in score["issues"] if i["kind"] == "missing"} == {
+        "salaryMin", "salaryCurrency", "payPeriod",
+    }
 
 
 def test_visa_is_proactive_only_when_the_prompt_leaves_it_unnamed(key):
