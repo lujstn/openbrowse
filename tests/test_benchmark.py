@@ -332,3 +332,13 @@ def test_a_run_saved_without_its_spec_is_scored_by_the_spec_it_names(key):
 )
 def test_pay_figures_read_with_either_thousands_separator(text, number):
     assert bench.parse_number(text) == number
+
+
+@pytest.mark.parametrize(
+    "text, day",
+    [("2026-10-08T22:00:00Z", "2026-10-08"), ("8 October 2026 at 23:00 BST", "2026-10-08"),
+     ("October 8, 2026", "2026-10-08"), ("8 Oct 2026", "2026-10-08"), ("08/10/2026", "2026-10-08"),
+     ("in two weeks", None)],
+)
+def test_a_date_is_read_from_the_start_of_the_page_wording(text, day):
+    assert bench.parse_date(text) == day

@@ -165,13 +165,18 @@ def visa_meaning(value) -> str | None:
 
 
 def parse_date(value) -> str | None:
+    """The calendar date a value names, read from its start, so a page's own wording
+    such as "8 October 2026 at 23:00 BST" counts as that day."""
     text = str(value).strip()
     match = re.match(r"(\d{4}-\d{2}-\d{2})", text)
     if match:
         return match.group(1)
-    for fmt in ("%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%d/%m/%Y"):
+    match = re.match(r"\d{1,2} [A-Za-z]+,? \d{4}|[A-Za-z]+ \d{1,2},? \d{4}|\d{1,2}/\d{1,2}/\d{4}", text)
+    if not match:
+        return None
+    for fmt in ("%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(text, fmt).date().isoformat()
+            return datetime.strptime(match.group(0).replace(",", ""), fmt).date().isoformat()
         except ValueError:
             continue
     return None
