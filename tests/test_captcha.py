@@ -6,6 +6,7 @@ import pathlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from openbrowse.agent.captcha import all_strategies, strategy_for
@@ -776,3 +777,29 @@ def test_probe_js_has_no_host_literals():
     js = probe_mod._PROBE_JS.lower()
     assert "google" not in js
     assert "/sorry/" not in js
+
+
+async def test_client_posts_to_the_configured_api_base():
+    from dataclasses import replace
+
+    from openbrowse.agent.captcha import client as captcha_client
+
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"errorId": 0})
+
+    custom = replace(
+        captcha_client.settings, capsolver_api_base="https://solver.example/"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with patch.object(captcha_client, "settings", custom):
+            await captcha_client.create_task(http, {"type": "ImageToTextTask"})
+            await captcha_client.get_task_result(http, "t1")
+
+    assert seen == [
+        "https://solver.example/createTask",
+        "https://solver.example/getTaskResult",
+    ]
+    assert captcha_client.settings.capsolver_api_base == "https://api.capsolver.com"

@@ -1,4 +1,4 @@
-"""Thin CapSolver HTTP client."""
+"""Thin CapSolver-style HTTP client (base URL from CAPSOLVER_API_BASE)."""
 
 from __future__ import annotations
 
@@ -8,14 +8,16 @@ import httpx
 
 from openbrowse.config import settings
 
-CAPSOLVER_API = "https://api.capsolver.com"
+
+def _api_base() -> str:
+    return settings.capsolver_api_base.rstrip("/")
 
 
 async def create_task(
     client: httpx.AsyncClient, task_payload: dict[str, Any]
 ) -> dict[str, Any]:
     resp = await client.post(
-        f"{CAPSOLVER_API}/createTask",
+        f"{_api_base()}/createTask",
         json={"clientKey": settings.capsolver_api_key, "task": task_payload},
         timeout=30.0,
     )
@@ -26,7 +28,7 @@ async def get_task_result(
     client: httpx.AsyncClient, task_id: str
 ) -> dict[str, Any]:
     resp = await client.post(
-        f"{CAPSOLVER_API}/getTaskResult",
+        f"{_api_base()}/getTaskResult",
         json={"clientKey": settings.capsolver_api_key, "taskId": task_id},
         timeout=30.0,
     )

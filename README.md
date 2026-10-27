@@ -156,7 +156,7 @@ sudo tailscale funnel --bg 8420
 - **Browser-like profiles**: sessions share a profile's logins the way a browser does. Each site's data goes into the browser's own storage before the first page loads, so a page only sees its own site's data; each session merges back only what it changed, even when several share one profile; and the least recently used sites are evicted within fixed limits, so profiles never grow without bound. A site-data page in the dashboard lists and deletes them per site.
 - **Profile import**: bring BU Cloud profiles (cookies + localStorage) via CLI or the dashboard.
 - **Dashboard**: live session feed with model reasoning, per-step costs, JSON export (full / steps / output-only), profile management.
-- **CAPTCHA solving**: optional CapSolver integration.
+- **CAPTCHA solving**: optional CapSolver integration. Set `CAPSOLVER_API_BASE` to use another CapSolver-compatible service; [Solvecha](https://solvecha.com/docs) (`https://api.solvecha.com`) solves reCAPTCHA image and image-to-text challenges only, not AWS WAF or token-based CAPTCHAs.
 - **Multi-provider**: Anthropic and OpenAI models behind one API, with per-provider repair layers for each family's failure modes.
 
 ## Citation
