@@ -1,0 +1,722 @@
+{
+ "id": "11ebf7e4-c794-48ff-b669-fde077ac9db8",
+ "status": "stopped",
+ "model": "gpt-6-sol",
+ "title": "RULES (apply to every task!):\n\nLOADING CONTENT:\n1. To load more content on lazy-",
+ "output": {
+  "jobs": [
+   {
+    "title": "Operations Associate",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n Car Finance at Marshmallow \n Marshmallow is opening up access to credit to migrants, bringing a brand new product to market which provides newcomers to the UK with fairly priced car finance for the first time.\n Our Car Finance team is building a new kind of lending experience from the ground up, making it simple, transparent and accessible for people who need finance to get on the road. We work closely with dealers, brokers and customers to make sure that every application, decision and interaction is fast, fair and easy to understand.\n Because we're a small, high-performing team, everyone has real ownership. We combine hands-on operations - from customer queries and collections to underwriting - with a strong focus on automation and technology. We're designing highly automated, AI-powered processes that let us move faster and smarter than traditional lenders.\n Car Finance is one of the most important growth areas for Marshmallow, and we're looking for someone who's excited to be at the heart of it: working directly with customers and partners today, while helping to build a world-class, highly automated operational engine for the future.\n\n What you'll be doing \n Execute the day-to-day operations of our car finance product, from handling customer queries to underwriting, ensuring a smooth, reliable experience for all stakeholders.\n\n Develop, identify and form improvements that increase speed, reliability, and cost-efficiency while protecting service standards of our processes.\n\n Directly build automation and AI into our operational workflows, using best in class AI tools, and working alongside our dedicated engineering and product team.\n\n Who You Are \n You're excited by startups and technology, motivated by the chance to build highly automated, AI-enabled operations rather than just follow existing processes.\n\n You're deeply interested in AI and fluent using it. Comfort with automation and AI tools (Claude Cowork/Code) is a strong plus.\n\n You enjoy high agency and can operate in ambiguity.\n\n You're organised and detailed.\n\n You care about customers.\n\n What You'll Bring \n Must have: \n Experience in a fast-paced and regulated environment (fintechs, startups, consulting etc\u2026)\n\n Strong analytical skills and comfort working with data to make decisions\n\n Experience using AI tools, using it to drive developments and form improvements\n\n Nice to have: \n You already know some of the stack: Linear, Google Suite, Notion, Intercom, Claude\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are not able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Onsite interview consisting of:\n Case study interview with a couple of the team (60 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/80fb4a0a-0aae-42a4-8958-d584d7229b43?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Car Finance Team",
+    "postedAt": "2026-09-14",
+    "expiresAt": null,
+    "visaSponsorship": "false",
+    "companySourceId": "80fb4a0a-0aae-42a4-8958-d584d7229b43",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/80fb4a0a-0aae-42a4-8958-d584d7229b43/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Head of Data Science (12m fixed-term contract)",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n 12m FTC - (London, hybrid 3 days a week) \n\n Data Science at Marshmallow \n Our data science team supports various business functions across our Product teams and within Pricing and Claims. Working across the full spectrum of data science problems, from traditional machine learning for risk-based decisioning through to generative AI and the automation of complex operational journeys, all within a regulated insurtech/fintech domain. \n This is a hands-on leadership role for someone who can bring a team together and ensure it delivers at pace while its foundations strengthen: leading and developing the people, personally holding the bar on technical quality, and partnering closely with engineering and product. It suits a leader who is strong both leading and growing teams as well as a technical decision-maker.\n\n About the team \n The Data Science team operates as a primary commercial engine for Marshmallow, using data and machine learning to drive tangible business outcomes, from pricing strategy to operational efficiency. The team works closely with senior stakeholders and partners across data, engineering, product and commercial functions to identify the right opportunities and make thoughtful technical trade-offs. We operate with a flat structure, so leaders stay close to the people doing the work and support colleagues at different levels of experience. Our ambition is to keep raising the bar for how data science delivers impact across the business.\n\n Product & Tech at Marshmallow \n Backend and Infrastructure: Latest Java \u03bcService, Spring Boot with Spring Cloud, Dynamodb, Terraform, Docker, AWS Fargate, Datadog, Opslevel, and TeamCity.\n Frontend and Mobile: TypeScript, CSS-in-JS (Styled Components), React, Redux, Redux Hooks, and other modern state management libraries. Kotlin on Android and Swift on iOS.\n Data: SQL, Python, Snowflake, dbt, Airflow & Looker AI at Marshmallow: Sierra.ai for conversational AI, Python and LangChain for agentic AI solutions, Sagemaker and MLflow for Machine Learning, Cursor and Claude Code for developer productivity.\n\n What you'll be doing \n Drive commercial impact at every turn: Proactively identify and prioritise data science opportunities that offer the highest leverage for the business, ensuring every project is measured by its bottom-line contribution and strategic commercial alignment.\n\n Lead the people and culture agenda for data science: set goals, manage performance and development conversations, and keep an evolving team engaged and delivering high-impact projects.\n\n Provide hands-on technical leadership: set and hold a consistent bar on technical standards across the full modelling and data lifecycle.\n\n Represent data science in cross-functional conversations, partnering closely with engineering, product and pricing on technical direction and trade-offs.\n\n Build collective ownership of technical standards across Data Science, coaching people to look beyond their own domain and drive function-wide improvements to shared standards, tooling and best practice.\n\n Who you are \n You bring an inherently commercial-first mindset: you don\u2019t just build models, you build solutions that directly influence the P&L, and you constantly evaluate every technical trade-off through a rigorous lens of business value.\n\n You make confident decisions even when the picture is still forming, and you're comfortable operating across more than one domain at once.\n\n You have a track record of driving visible improvements to team culture, ways of working, and technical standards.\n\n You build trust quickly with a team, and coach others to challenge and disagree constructively, to drive decisions that deliver the highest-impact outcomes\n\n You thrive in a fast paced and ever-evolving environment; you adapt to change well (and in fact relish it!).\n\n You like to take real ownership of your work, drive yourself forward, and work well both autonomously but also collaboratively with the team and your stakeholders.\n\n What we\u2019re looking for from you \n Must have: \n Excellent leadership and team management skills.\n\n A strong background as a senior data science individual contributor, with commercial experience delivering ML solutions end to end\n\n Proven ability to influence technical direction across Data Science and Engineering, including shaping scalable model/service integration patterns and challenging proposals to drive robust, long-term solutions.\n\n Strong stakeholder management skills, with confidence communicating trade-offs and pushing back constructively to C-suite and senior stakeholders across different functions to ensure high-quality outcomes.\n\n Nice to have: \n Experience in insurance, fraud, or another regulated decisioning domain.\n\n Experience of contributing towards the strategy for Gen AI within an organisation, and leading data scientists to deliver Gen AI solutions that drove measurable business value\n\n (We cannot offer visa sponsorship for this role) \n\n Perks & benefits \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n Our process \n Recruiter call with the Talent Acquisition team.\n\n Past experience interview with Hannah Penfold, Hiring Manager.\n\n Technical deep dive or case study focused on technical trade-offs, commercial thinking and influence (2 Senior Stakeholders)\n\n Final leadership and values interviews with senior technology and commercial stakeholders, (CTO & Co-Founder)\n\n We review every application and will always let you know the outcome, though we're unable to provide individual feedback at application stage.\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/3dee50f9-717b-4311-b1f3-1da2cef18c20?embed=js",
+    "locationType": null,
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Data Science",
+    "postedAt": "2026-08-04",
+    "expiresAt": null,
+    "visaSponsorship": "false",
+    "companySourceId": "3dee50f9-717b-4311-b1f3-1da2cef18c20",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/3dee50f9-717b-4311-b1f3-1da2cef18c20/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Principal Data Scientist",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n Data Science at Marshmallow \n Our Data Science team partners across the business to turn data into better decisions, smarter products, and simpler customer journeys. We work closely with Product, Engineering, and Operations to build and ship models and AI systems that are reliable in production and deliver measurable impact.\n Within Data Science, this role sits in Claims , supporting the function and the broader ambition to automate more of the claims journey. Claims is one of Marshmallow's most important customer touchpoints, and we're looking for a Principal Data Scientist who can provide technical leadership across traditional ML and Generative AI, bring system-level thinking to how we scale decisioning, and confidently challenge proposals to ensure we build robust, sustainable solutions.\n\n What you'll be doing \n Provide technical leadership for data science across Claims Fraud, shaping the approach to risk decisioning and fraud detection in partnership with Product and Engineering\n\n Design, build and iterate on production ML and Generative AI/LLM systems that support claims validation and automation\n\n Collaborate closely with other Claims data scientists to bring system-level thinking to how models, data and workflows fit together, identifying architectural improvements needed to scale decisioning and reduce time-to-production\n\n Be vocal about the platform and tooling investments needed (monitoring, feedback loops, QA) to achieve AI-driven end to end claims automation\n\n Advocate for robust, scalable, and strategically aligned technical solutions in cross-functional discussions, ensuring current systems and infrastructure contribute to the multi-year vision for automated claims handling\n\n Set a high bar for statistical rigour, experimentation and measurement, helping improve how Claims performance and uncertainty are understood and communicated to senior stakeholders\n\n Who You Are \n You think in systems: you can connect the dots between data science, engineering, and product to shape scalable solutions that build on each other over time.\n\n You're confident in challenging assumptions and pushing for the right approach, using strong communication skills to influence stakeholders across seniority levels and disciplines with clear, pragmatic reasoning.\n\n You thrive in ambiguity and change, staying resilient and effective during transitions while bringing structure, clarity, and momentum to complex problem spaces.\n\n You're motivated by real-world impact, partnering closely with cross-functional teams to drive meaningful automation and better customer outcomes across the claims journey.\n\n What You'll Bring \n Significant commercial experience delivering end-to-end Machine Learning solutions, from problem framing and experimentation through to production deployment and ongoing monitoring\n\n Hands-on experience building and shipping Generative AI systems in production (not just prototypes), including evaluation, safety/quality considerations, and integration into customer or operational workflows\n\n Strong statistical and modelling foundation, with experience in risk-based decisioning under uncertainty (e.g., fraud, credit, insurance, or other regulated domains)\n\n Proven ability to influence technical direction across Data Science and Engineering, including shaping scalable model/service integration patterns and challenging proposals to drive robust, long-term solutions\n\n Strong stakeholder management skills, with confidence communicating trade-offs and pushing back constructively with Product and Engineering to ensure high-quality outcomes\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Systems Design & Technical interview with a couple of the team (90 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/9c4c710f-6e8a-4081-84ad-325d58832e3b?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Data Science",
+    "postedAt": "2026-09-09",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "9c4c710f-6e8a-4081-84ad-325d58832e3b",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/9c4c710f-6e8a-4081-84ad-325d58832e3b/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Staff Data Scientist",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n Data Science at Marshmallow \n Our Data Science team partners across the business to turn data into better decisions, smarter products, and simpler customer journeys. We work closely with Product, Engineering, and Operations to build and ship models and AI systems that are reliable in production and deliver measurable impact.\n Within Data Science, this role sits in Claims , supporting the function and the broader ambition to automate more of the claims journey. Claims is one of Marshmallow's most important customer touchpoints, and we're looking for a Staff Data Scientist who can provide technical leadership across traditional ML and Generative AI, bring system-level thinking to how we scale decisioning, and confidently challenge proposals to ensure we build robust, sustainable solutions.\n\n What you'll be doing \n Provide technical leadership for data science across Claims Fraud, shaping the approach to risk decisioning and fraud detection in partnership with Product and Engineering\n\n Design, build and iterate on production ML and Generative AI/LLM systems that support claims validation and automation\n\n Collaborate closely with other Claims data scientists to bring system-level thinking to how models, data and workflows fit together, identifying architectural improvements needed to scale decisioning and reduce time-to-production\n\n Be vocal about the platform and tooling investments needed (monitoring, feedback loops, QA) to achieve AI-driven end to end claims automation\n\n Advocate for robust, scalable, and strategically aligned technical solutions in cross-functional discussions, ensuring current systems and infrastructure contribute to the multi-year vision for automated claims handling\n\n Set a high bar for statistical rigour, experimentation and measurement, helping improve how Claims performance and uncertainty are understood and communicated to senior stakeholders\n\n Who You Are \n You think in systems: you can connect the dots between data science, engineering, and product to shape scalable solutions that build on each other over time.\n\n You're confident in challenging assumptions and pushing for the right approach, using strong communication skills to influence stakeholders across seniority levels and disciplines with clear, pragmatic reasoning.\n\n You thrive in ambiguity and change, staying resilient and effective during transitions while bringing structure, clarity, and momentum to complex problem spaces.\n\n You're motivated by real-world impact, partnering closely with cross-functional teams to drive meaningful automation and better customer outcomes across the claims journey.\n\n What You'll Bring \n Significant commercial experience delivering end-to-end Machine Learning solutions, from problem framing and experimentation through to production deployment and ongoing monitoring\n\n Hands-on experience building and shipping Generative AI systems in production (not just prototypes), including evaluation, safety/quality considerations, and integration into customer or operational workflows\n\n Strong statistical and modelling foundation, with experience in risk-based decisioning under uncertainty (e.g., fraud, credit, insurance, or other regulated domains)\n\n Proven ability to influence technical direction across Data Science and Engineering, including shaping scalable model/service integration patterns and challenging proposals to drive robust, long-term solutions\n\n Strong stakeholder management skills, with confidence communicating trade-offs and pushing back constructively with Product and Engineering to ensure high-quality outcomes\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Systems Design & Technical interview with a couple of the team (90 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/ecb457b5-1773-496c-a8b5-fabec42759e2?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Data Science",
+    "postedAt": "2026-09-09",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "ecb457b5-1773-496c-a8b5-fabec42759e2",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/ecb457b5-1773-496c-a8b5-fabec42759e2/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Senior CRM Manager",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n CRM at Marshmallow \n CRM sits within the User Experience team, helping Marshmallow build more effective, joined-up communication with our customers across the business. CRM is a meaningful driver of impact for the organisation, with clear opportunities to improve how we engage customers and measure the value of that work.\n This role will help shape how CRM is used at Marshmallow by building strong foundations, enabling others to use the platform effectively, and creating the governance needed to make customer communications work better across multiple teams. We\u2019re looking for someone who is excited by ownership, enjoys working cross-functionally, and wants to help scale CRM in a thoughtful, high-impact way. This is an individual contributor role with deep platform and governance ownership, rather than a people-management track. Your impact and progression come from the scale and quality of the systems, frameworks, and cross-team relationships you build, not from growing a team. \n\n What you'll be doing \n Own and evolve Marshmallow\u2019s CRM operations capability, helping shape how the platform is used across the organisation.\n\n Build strong governance frameworks for CRM activity, including how campaigns are prioritised, sequenced, and managed across teams\n\n Enable and support stakeholders across the business to use CRM effectively, increasing adoption while maintaining quality and consistency.\n\n Partner cross-functionally with teams across the organisation to identify opportunities, align on priorities, and improve customer communications.\n\n Use data and testing insights to inform decisions, optimise performance, and ensure CRM activity is driving measurable impact\n\n Drive high-quality campaign execution through strong operational processes, audience segmentation, scheduling, and platform management.\n\n Who you are \n You\u2019re a self-starter who is comfortable with a high level of autonomy and enjoys taking ownership of ambiguous, high-impact work.\n\n You\u2019re curious and collaborative , and you like working with lots of different stakeholders to move work forward.\n\n You\u2019re someone who believes in enabling others , not gatekeeping expertise, and you\u2019re motivated by helping teams do better work together\n\n You\u2019re commercially minded and pragmatic , with a strong instinct for where to focus your time to unlock the most value\n\n What you'll bring \n Experience working in CRM operations or CRM management within an in-house, tech-led business , with a strong understanding of growth-focused customer communications.\n\n Recent hands-on experience with Braze is preferable for the role, alongside practical experience building and managing CRM campaigns, segmentation, metadata, scheduling, and audience setup\n\n Proven experience creating CRM governance and enabling other teams to use CRM effectively across an organisation\n\n Strong data literacy , including analysing campaign or email test performance, pulling audiences and segments, and working independently with data rather than relying entirely on analyst support.\n\n Confidence in using data tools or AI-assisted analysis to generate insights and support decision-making.\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Onsite case study interview with a couple of the team (90 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/a28d77c6-2960-42f8-ae70-7b53ae555553?embed=js",
+    "locationType": null,
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Design",
+    "postedAt": "2026-09-10",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "a28d77c6-2960-42f8-ae70-7b53ae555553",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/a28d77c6-2960-42f8-ae70-7b53ae555553/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Senior CRM Operations Manager",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n CRM at Marshmallow \n CRM sits within the User Experience team, helping Marshmallow build more effective, joined-up communication with our customers across the business. CRM is a meaningful driver of impact for the organisation, with clear opportunities to improve how we engage customers and measure the value of that work.\n This role will help shape how CRM is used at Marshmallow by building strong foundations, enabling others to use the platform effectively, and creating the governance needed to make customer communications work better across multiple teams. We\u2019re looking for someone who is excited by ownership, enjoys working cross-functionally, and wants to help scale CRM in a thoughtful, high-impact way. This is an individual contributor role with deep platform and governance ownership, rather than a people-management track. Your impact and progression come from the scale and quality of the systems, frameworks, and cross-team relationships you build, not from growing a team. \n\n What you'll be doing \n Own and evolve Marshmallow\u2019s CRM operations capability, helping shape how the platform is used across the organisation.\n\n Build strong governance frameworks for CRM activity, including how campaigns are prioritised, sequenced, and managed across teams\n\n Enable and support stakeholders across the business to use CRM effectively, increasing adoption while maintaining quality and consistency.\n\n Partner cross-functionally with teams across the organisation to identify opportunities, align on priorities, and improve customer communications.\n\n Use data and testing insights to inform decisions, optimise performance, and ensure CRM activity is driving measurable impact\n\n Drive high-quality campaign execution through strong operational processes, audience segmentation, scheduling, and platform management.\n\n Who you are \n You\u2019re a self-starter who is comfortable with a high level of autonomy and enjoys taking ownership of ambiguous, high-impact work.\n\n You\u2019re curious and collaborative , and you like working with lots of different stakeholders to move work forward.\n\n You\u2019re someone who believes in enabling others , not gatekeeping expertise, and you\u2019re motivated by helping teams do better work together\n\n You\u2019re commercially minded and pragmatic , with a strong instinct for where to focus your time to unlock the most value\n\n What you'll bring \n Experience working in CRM operations or CRM management within an in-house, tech-led business , with a strong understanding of growth-focused customer communications.\n\n Recent hands-on experience with Braze is needed for the role, alongside practical experience building and managing CRM campaigns, segmentation, metadata, scheduling, and audience setup\n\n Proven experience creating CRM governance and enabling other teams to use CRM effectively across an organisation\n\n Strong data literacy , including analysing campaign or email test performance, pulling audiences and segments, and working independently with data rather than relying entirely on analyst support.\n\n Confidence in using data tools or AI-assisted analysis to generate insights and support decision-making.\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Onsite case study interview with a couple of the team (90 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/6c189704-38a9-4702-acf3-637df0cef656?embed=js",
+    "locationType": null,
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Design",
+    "postedAt": "2026-07-20",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "6c189704-38a9-4702-acf3-637df0cef656",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/6c189704-38a9-4702-acf3-637df0cef656/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Technical Accountant",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n About the role \n This is a senior individual contributor role and the Controllership team's primary technical accounting expert. You will own the most complex and judgement-intensive accounting areas across the Group \u2014 spanning the UK insurance broker, claims handling, car finance and its associated SPV structure, and the Group holding company \u2014 and act as the go-to resource for the team, business stakeholders, and external auditors on technical accounting matters.\n You will work with a high degree of autonomy, reporting directly to the Group Financial Controller. You are expected to solve complex problems independently, document and defend accounting positions to audit standard, coach more junior colleagues, and communicate clearly to senior stakeholders across Finance and the wider business. This role sits at the heart of the Group's effort to close legacy accounting gaps, maintain audit readiness, and build controls that scale as Marshmallow grows.\n London (hybrid, 3 days in office) \n\n What you'll own \n Technical accounting across the Group \n Own and maintain Group accounting policies across all entities in scope, ensuring alignment with FRS 102 and applicable regulatory requirements\n\n Lead the Group's FRS 102 (2026 amendments) impact assessment and transition \u2014 with particular focus on revised revenue recognition and expected credit loss provisions across the business\n\n Be the authoritative internal voice on complex, judgement-intensive areas across the Group including: share-based payments, capital development and intangibles, lease accounting, bad debt provisioning and impairment, periodic payment orders (PPOs), HP loan recognition and ECL provisioning, and SPV accounting\n\n Own the technical accounting for the car finance business and its associated SPV structure\n\n Own the technical accounting for the UK insurance broking and claims handling businesses\n\n Drive resolution of legacy technical items and prior year audit findings \u2014 working through open issues to root-cause resolution rather than one-off workarounds\n\n Revenue recognition \u2014 transformation workstream \n Lead the documentation and review of revenue recognition policies across the business, ensuring they are accurate, consistently applied, and fit for audit scrutiny\n\n Own the technical accounting perspective on the revenue data workstream \u2014 understanding how revenue flows are constructed, identifying any gaps between accounting policy and practice, and driving remediation where needed\n\n Work cross-functionally with Engineering, Data, and FP&A to ensure the financial reporting of revenue is grounded in a robust and well-documented technical foundation\n\n Insurance knowledge \u2014 Group-level review and challenge \n Insurance industry knowledge is a core requirement of this role \u2014 while BAU technical accounting for the Group's insurance underwriting entity (based in Gibraltar) sits with a separate Finance team, you will be expected to review, challenge, and engage with Gibraltar Finance team from a Group perspective\n\n This includes understanding earned premium, technical provisions, reinsurance accounting, and the financial reporting implications of the Group's insurance structures \u2014 and being able to apply that understanding in Group consolidation and in conversations with auditors\n\n You will bring a Group finance lens to insurance-related accounting questions arising across the business\n\n Audit readiness & accounting quality \n Prepare and review complex balance sheet reconciliations and accounting entries across the entities in scope, maintaining the quality and evidencing standard required for external audit\n\n Act as the primary Finance contact for external auditors on technical accounting judgements \u2014 prepare clear, well-evidenced documentation for complex or contested positions\n\n Proactively identify and close accounting quality gaps, with a focus on sustainable fixes that hold up to scrutiny in future audit cycles\n\n Coaching & cross-functional collaboration \n Actively coach and develop more junior colleagues on technical accounting topics \u2014 raising the overall capability of the team is a genuine expectation of this role, not a secondary duty\n\n Work alongside FP&A, Actuarial, Legal, and new business teams to embed technical accounting requirements early in product and process design\n\n Support the Group Financial Controller in preparing clear technical accounting analysis for senior Finance stakeholders\n\n What we're looking for \n Technical accounting knowledge \n ACA, ACCA or equivalent \u2014 fully qualified, with substantial post-qualification experience in a technical accounting or senior controllership role\n\n Insurance industry knowledge is essential \u2014 you must have a working understanding of insurance accounting (earned premium, technical provisions, reinsurance structures) and be able to apply and challenge it at Group level from day one\n\n Advanced, demonstrable command of FRS 102 and/or IFRS, with a track record of applying complex standards and documenting accounting judgements to audit standard\n\n Experience with car finance or consumer credit accounting \u2014 HP income recognition, IFRS 9 / ECL, and ideally SPV or securitisation structures \u2014 is a strong advantage\n\n Comfortable passing on technical knowledge and coaching colleagues \u2014 the expectation is that you actively raise the team's technical capability, not just your own output\n\n Background & experience \n Big 4 audit background is a plus, particularly with insurance or financial services clients \u2014 the ability to construct and evidence robust accounting positions is directly relevant to how this team engages with its auditors\n\n Experience in a multi-entity group structure with consolidated reporting across UK GAAP / FRS 102\n\n Prior exposure to FCA-regulated or insurance-regulated environments is strongly preferred\n\n Data & systems \n Advanced Excel; strong working knowledge of ERP systems \u2014 NetSuite experience is an advantage\n\n Able to work with large and imperfect data sets; comfortable deriving well-supported conclusions where source data has gaps\n\n Familiarity with BI tools such as Looker or Snowflake is useful but not required\n\n How you work \n Takes ownership of complex, multi-workstream problems and sees them through independently \u2014 escalates selectively and with good judgement\n\n Presents highly complex analysis clearly to both technical and non-technical audiences\n\n Proactively identifies control risks and improvement opportunities rather than waiting to be directed\n\n Comfortable in an environment where process maturity is still developing \u2014 building rigour is part of the job, not an obstacle to it\n\n Perks & benefits \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are in a position to offer sponsorship and/or a visa for this position\n\n Our process \n Here's what to expect:\n Intro call with our Talent team (30 mins)\n\n Skills and experience interview the hiring manager (1 hour)\n\n Task-based interview (1 hour)\n\n Values and ways of working interview (1 hour)\n\n We review every application and will always let you know the outcome - though we're unable to provide individual feedback at application stage.\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/a6a7d01a-8e50-4622-8689-cfe3f41a1131?embed=js",
+    "locationType": null,
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Finance",
+    "postedAt": "2026-06-09",
+    "expiresAt": null,
+    "visaSponsorship": null,
+    "companySourceId": "a6a7d01a-8e50-4622-8689-cfe3f41a1131",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/a6a7d01a-8e50-4622-8689-cfe3f41a1131/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Workplace Experience Coordinator - part time",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n What you'll be doing\n Workplace & Operations Management: Oversee day-to-day office operations, manage supplies and mail, and support office moves, renovations, and expansions.\n\n Vendor & Safety Oversight: Serve as the primary point of contact for external vendors, suppliers, and contractors, while managing local health, safety, security, and emergency protocols.\n\n Community & Culture Building: Foster a strong sense of belonging at the Budapest Hub by championing local workplace culture, morale, and continuous employee feedback loops.\n\n Event & Engagement Coordination: Organize social events, employee engagement initiatives, and localized internal communication programs.\n\n Onboarding & Employee Experience: Deliver a welcoming experience for new joiners during onboarding days and proactively drive initiatives that improve the overall workplace experience.\n\n Please note that, due to the nature of the role, this is an on-site position with an enhanced office presence requirement. This is a part-time opportunity , with an expected commitment of 20\u201330 hours per week .\n\n What you'll bring\n Excellent communication and interpersonal skills, with fluency in both English and Hungarian\n\n Previous experience in office management, workplace experience, employee engagement, or a similar role\n\n Experience working in a rapidly growing scale-up environment is a plus\n\n Confident user of Google Workspace tools\n\n Strong organisational skills, with the ability to manage operational and people-focused priorities at the same time\n\n A proactive, hands-on approach and the ability to solve problems quickly and independently\n\n A track record of owning projects end-to-end and delivering them with excellent attention to detail\n\n Who you are\n You take great pride in creating an outstanding workplace and People experience for employees\n\n You see the office as more than just a place to work \u2014 you treat it as a product and are always looking for ways to make it better for your customers: our people\n\n You are energised by both getting things done and bringing people together, and understand how closely the two are connected\n\n You go above and beyond as a default, not an exception, and your peers notice\n\n You are curious about what makes people feel connected and engaged at work, and you turn those insights into action\n\n You are highly organised, reliable, and comfortable taking ownership from start to finish\n\n You love making things better, with a strong eye for detail and a proactive mindset\n\n You are trustworthy and understand the importance of confidentiality\n\n Perks of the job\n Learning and development \u2013 Personal budgets for books and training courses to help you grow in your role. Plus 2 days a year - on us! - to further your skillset \ud83e\udd13\n\n Mental wellbeing support \u2013 Access therapy and mental health sessions through Oliva \ud83d\udc9a\n\n Competitive bonus scheme - designed to reward and recognise high performance \ud83c\udf1f\n\n SZ\u00c9P card - Budget to spend on meals, leisure and accommodation \ud83c\udfdd\ufe0f\n\n Sabbatical Leave - Get a 4-week fully paid sabbatical after being with us for 4 years \ud83c\udf34\n\n Medicover Blue package - An exclusive pass to top-notch healthcare services\n\n Plus a monthly team social budget, bi-weekly office lunches and office tea, coffee and snacks!\n Salary : Starting from gross 720.000 HUF monthly. That is determined based on a full time position. The salary is adjusted proportionally based on the agreed working hours. We determine compensation based on relevant skills, experience and role alignment. Candidates bringing significant additional experience, specialist expertise or highly relevant capabilities may be considered for a higher starting salary. \n\n Our process\n Initial call with one of our Talent Acquisition team (30 mins)\n\n A skill-based, past experience call with the Hiring Manager (60 mins)\n\n A small task\n\n A culture interview with our People Partner and HR Manager to check that your work style fits our processes and values (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/6f057170-8693-45d0-86cb-b608c398a1f5?embed=js",
+    "locationType": null,
+    "location": "Budapest",
+    "address": "Budapest",
+    "salaryMin": 720000.0,
+    "salaryMax": null,
+    "salaryCurrency": "HUF",
+    "payPeriod": "MONTHLY",
+    "seniority": null,
+    "department": "People Team",
+    "postedAt": "2026-08-25",
+    "expiresAt": null,
+    "visaSponsorship": null,
+    "companySourceId": "6f057170-8693-45d0-86cb-b608c398a1f5",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/6f057170-8693-45d0-86cb-b608c398a1f5/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Pricing Data Scientist",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 2-3 days in office) \n\n Pricing at Marshmallow \n This role will sit in the Pricing Team, reporting into the Pricing Data Science Manager. The team is responsible for managing our loss ratio, underwriting footprint, broker optimisation and growth targets, proving integral to driving the business forwards. But you\u2019ve probably read that all before! So what\u2019s new?\n We work in a very different way to most pricing teams that you might be familiar with. Everyone in Pricing has the potential to make significant contribution to the business, taking ownership, moving fast, innovating and delivering changes to our rates at high frequency.\n We don\u2019t just churn out GLMs all day. We build & deploy exceptional in-house pricing data science models using the latest modelling techniques. You\u2019ll work alongside other Pricing Data Scientists & Analysts pushing innovative pricing projects, whilst also being able to work with the wider Data Science community on modelling customer behaviour, fraud & MLENG enhancements.\n We work alongside a bunch of amazing engineers who ensure we can implement our decisions quickly. We also have access to huge amounts of data. We don\u2019t just mean your standard policy, claims and quote data. Our engineers spend their lives building APIs to third parties so that we know more about our customers than any of our competitors.\n All of this means that you\u2019ll have access to as much data as you can handle, the freedom to be creative, the backing of senior leaders to make decisions, and the ability to see your ideas implemented rapidly. And on top of all of that, we\u2019re a pretty fun group to hang around with!\n\n What you\u2019ll be doing \n Developing a deep understanding of Marshmallow\u2019s quote, policy and claims data and use this to derive insights that can be used to enhance our pricing.\n\n Own one of the strategic initiatives of the pricing team, such as supporting our expansion plans or protecting our renewing customers.\n\n Conducting claims analysis and claims modelling using SQL and Python.\n\n Conducting price optimisation analysis/modelling using Python.\n\n Building and deploying models in APIs for use in real time pricing.\n\n Identify new sources of external data that enable us to refine our view of claims risk, and conduct analysis to quantify their value.\n\n Working directly with our Engineering & MLENG functions to implement pricing proposals.\n\n Providing pricing support for the launch of multiple new products.\n\n Who are you? \n Proactive : You drive growth by identifying & delivering new opportunities\u00a0\n\n Modeller : You use your DS expertise to build innovative best in class models\n\n Commercial : You directly use your models as tools to deliver timely real world impact\n\n Curious : You aren\u2019t satisfied with \u2018That\u2019s just how it is\u2019; you immediately investigate further\n\n Owner : You don\u2019t just pull existing levers - you own end to end transformation in your area\n\n Opinionated : You generate your own opinions & pitch to others in an open & honest way\n\n Explainer : You can communicate complicated concepts in a simple way to non-experts\n\n Networker : You build and maintain strong relationships throughout the business\n\n What skills are we looking for from you? \n Ability to interrogate data and conduct pricing analysis within SQL & Python/R\n\n Ability to build GLMs, GBMs and other claims models within Python/R\n\n At least 3 years of experience working in a data driven (ideally commercial) role\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Technical interview with a couple of the team (60 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/27e7e5ca-6cf7-4c91-b922-a1cb792917e0?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Pricing",
+    "postedAt": "2026-09-21",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "27e7e5ca-6cf7-4c91-b922-a1cb792917e0",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/27e7e5ca-6cf7-4c91-b922-a1cb792917e0/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Senior Data Science Manager, Pricing",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n London (hybrid, 3 days in office) \n\n Pricing at Marshmallow \n The Pricing team shapes how we understand risk and make pricing decisions that support sustainable growth. It plays a critical role in Marshmallow\u2019s ambition by protecting loss ratio performance and turning complex data into clear commercial action.\n We work closely with claims, finance, product and other teams, to build a holistic view of risk and keep our pricing approach effective as we scale. The team acts as a key bridge between technical analytics and business strategy, helping Marshmallow stay ahead of market conditions and make confident decisions, even where data is sparse or uncertain.\n The team works across modelling, business strategy and stakeholder communication. The challenge is balancing technical judgement with clear storytelling for very different audiences. It\u2019s a team with high impact, high visibility and plenty of momentum.\n\n What you'll be doing \n Owning Marshmallow\u2019s loss ratio view across our portfolio to understand performance and recommend commercial actions, factoring in both internal drivers and wider market, and economic conditions.\n\n Leading conversations with internal and external stakeholders on pricing performance and risk trends, translating analytical outputs into clear pricing and portfolio insights for non-technical stakeholders.\n\n Managing and developing a small group of pricing data scientists while raising the quality of their work.\n\n Driving cross-functional investigation into claims and risk signals with partners across the business.\n\n Shaping how pricing data scientists are deployed across workstreams as the team\u2019s operating model evolves.\n\n Who You Are \n You\u2019re commercially minded and enjoy connecting the dots between pricing decisions, financial outcomes and wider market conditions, not just the underlying data.\n\n You\u2019re comfortable using judgment in ambiguous situations, working with sparse or less credible data and making clear, well\u2011reasoned assumptions.\n\n You\u2019re naturally curious about why key metrics move, and you like to step back, challenge assumptions and tell a clear story behind trends and performance.\n\n You collaborate easily with different teams (e.g. claims, finance, reserving) and communicate complex ideas in a concise, business-focused way.\n\n What You'll Bring \n Experience as a data scientist and/or data science manager in a risk-focused domain such as pricing, credit decisioning or fraud.\n\n Experience operating in commercially driven environments where performance metrics guide decisions.\n\n Experience forming clear, commercially grounded views off the back of technical analysis and communicating these clearly to senior stakeholders.\n\n Experience making sound decisions when data is incomplete or imperfect, and comfortable operating under genuine uncertainty.\n\n A collaborative approach, working seamlessly with adjacent functions, to connect pricing insights to broader business performance.\n\n Perks of the job \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n We are able to offer visa sponsorship for this position. \n\n Our process \n Initial call with a member from our Talent Team (30 mins)\n\n Past Experience interview with Hiring Manager (60 mins)\n\n Systems Design & Technical interview with a couple of the team (90 mins)\n\n Culture interview (60 mins)\n\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/a7c2c0a8-7835-44f7-befd-4874bfefac66?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Pricing",
+    "postedAt": "2026-07-07",
+    "expiresAt": null,
+    "visaSponsorship": "true",
+    "companySourceId": "a7c2c0a8-7835-44f7-befd-4874bfefac66",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/a7c2c0a8-7835-44f7-befd-4874bfefac66/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Large Loss Handler",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n About the team \n Our Large Loss Specialists handle Marshmallow\u2019s most complex and high-value motor claims, often involving catastrophic injuries such as brain and spinal trauma, psychiatric injury, complex fractures and nerve damage.\n Beyond handling claims, the team acts as a centre of technical expertise, sharing insights and driving consistency across Claims. We work closely with Complex Personal Injury colleagues, reinsurers, panel solicitors and teams across Claims, Underwriting and Pricing to deliver fair, commercially sound outcomes. As a small, highly technical team, we offer broad exposure and the opportunity to grow your authority quickly.\n\n What you'll be doing \n Managing a portfolio of high-value motor claims, typically valued above \u00a3250,000, through pre- and post-litigation.\n\n Investigating liability, indemnity and coverage while setting proactive, commercial and empathetic claim strategies.\n\n Reserving accurately for complex injuries and future losses, using the available evidence and tools such as PI Calc.\n\n Identifying recovery opportunities (subrogation, contribution, and beyond) and ensuring they're actioned by the relevant teams.\n\n Collaborating with panel solicitors, reinsurers and internal teams to reduce claim lifecycles, control legal spend and pursue recovery opportunities.\n\n Shaping our Large Loss strategy while coaching colleagues and sharing technical knowledge across Claims.\n\n We offer a flexible hybrid work model, with the team coming together at our London office once every month .\n\n Your expertise \n Strong experience managing high-value or catastrophic motor bodily injury claims with current authority of at least \u00a3250,000.\n\n Deep knowledge of liability, indemnity, causation, reserving, future losses, the Ogden discount rate and complex medical issues.\n\n Experience handling litigated claims and applying relevant procedures and frameworks, including CPR, PPOS and MIB technical disputes.\n\n Who you are \n You balance empathy for customers with proactive, commercial decision-making.\n\n You investigate complex issues thoroughly and own your decisions through to settlement.\n\n You explain technical judgments clearly and build effective partnerships with internal and external stakeholders.\n\n You share your expertise, seek feedback and want to help shape a growing Large Loss function.\n\n Perks & benefits \n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n #LI-PT1\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/034a8a61-e5ec-4aff-88db-da23473e4824?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Technical Claims",
+    "postedAt": "2026-08-04",
+    "expiresAt": null,
+    "visaSponsorship": null,
+    "companySourceId": "034a8a61-e5ec-4aff-88b3-776ba7596356",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/034a8a61-e5ec-4aff-88db-da23473e4824/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   },
+   {
+    "title": "Claims Fraud Team Lead",
+    "companyName": "marshmallow",
+    "companyUrl": "https://www.marshmallow.co",
+    "companyDescription": null,
+    "description": "We\u2019re on a mission to make migration easy.\n\n We started building Marshmallow in 2017. Since then, we\u2019ve grown from 3 to 700+ people, gained unicorn status, raised ~\u00a3140M over three funding rounds, turned profitable, insured millions of drivers and lent millions in car loans.\n\n But we\u2019re only just getting started. Our goal is to become one of the largest financial services providers in the world. Over the next 10 years we\u2019ll grow exponentially, not only by scaling our existing products, but also by building new ones.\n\n To achieve our goals we need incredibly ambitious, commercially driven people who never settle for \u2018good enough\u2019. Marshmallowers are hungry for autonomy and ownership, and would rather improve than coast. Everyone raises standards and has an impact, with a focus on collective success over self-interest.\n\n We\u2019ve created an environment where curious, tenacious people win and grow together. If that sounds motivating, this could be the place for you.\n\n About the team\n We defend Marshmallow against fraudulent activity and help protect the company! Fraudulent claims can result in us losing money, which can drive up the premium prices for all of the other customers. We\u2019re here to stop that, making sure Marshmallow remains affordable and accessible for everyone.\n What you'll be doing\n Leading, coaching and managing the performance of a team of Claims Fraud Investigators and Intel Analysts, supporting their progression.\n\n Acting as the final escalation point for the most complex, high-value and organised fraud investigations.\n\n Owning the Claims Fraud KPIs, setting and evolving the team\u2019s investigation strategy.\n\n Running quality assurance across the team, using outcomes to drive consistency and improve decision-making.\n\n Owning recruitment, onboarding and development planning for the team.\n\n Representing Claims Fraud as a subject matter expert across the business, building strong relationships with wider teams.\n\n Ensuring the team\u2019s compliance with FCA requirements, Consumer Duty, vulnerable customer handling and GDPR obligations.\n\n Partnering with other teams to increase the detection of potentially fraudulent claims, ensuring the right signals and alerts are being generated and acted on.\n\n Working with Product Owners to drive process and technology improvements that reduce investigation cycle time and improve the customer experience.\n\n We offer a flexible hybrid work model, with the team coming together at our London office once every two weeks .\n Your expertise\n Experience leading a team, including driving and managing performance.\n\n Motor Claims Fraud experience.\n\n Experience using data, insight and evidence to make confident decisions and set priorities.\n\n Nice to have: experience in Fraud Intelligence.\n\n Who you are\n You build capability in others through clear, actionable feedback and lean into difficult conversations.\n\n You look ahead to future risks, opportunities and ways of improving team effectiveness, using data and insight to set priorities and solve problems without needing close guidance.\n\n You propose and drive bold, practical process and strategy changes, trying new ways to solve problems and continually raising standards.\n\n You role model low-ego leadership \u2014 giving credit, being open about what you don\u2019t know and grounding choices in insight and context rather than personal bias.\n\n You create momentum with a high sense of urgency, moving work forward quickly in a way that is clear, collaborative and constructive for others.\n\n Perks & benefits\n Bonus scheme designed to reward high performance\n\n Private medical insurance with Vitality, mental health support with Oliva\n\n Personal learning budget and 2 dedicated L&D days a year\n\n Monthly flexible benefits budget to spend as you choose\n\n 25 days holiday plus bank holidays\n\n 4 weeks Work From Anywhere per year\n\n Our process\n Initial call with our Talent Acquisition Partner - 30 minutes\n\n Technical interview with two Senior Managers from our Claims Department, with a technical task included - 60 minutes\n\n Culture interview with our Head of Claims and Third Party Operations - 60 minutes\n\n We review every application and will always let you know the outcome, though we're unable to provide individual feedback at application stage.\n\n #LI-PT1\n Diversity of thought \n We know the best ideas come from having different perspectives in the room - and we're committed to hiring fairly, regardless of background, identity or experience. If you see yourself in this role, we'd encourage you to apply.",
+    "sourceUrl": "https://jobs.ashbyhq.com/marshmallow/697f0b2f-03a0-4e2f-abb0-aa14f1042187?embed=js",
+    "locationType": "HYBRID",
+    "location": "London",
+    "address": "London",
+    "salaryMin": null,
+    "salaryMax": null,
+    "salaryCurrency": null,
+    "payPeriod": null,
+    "seniority": null,
+    "department": "Third Party Claims",
+    "postedAt": "2026-07-14",
+    "expiresAt": null,
+    "visaSponsorship": null,
+    "companySourceId": "697f0b2f-03a0-4e2f-abb0-aa14f1042187",
+    "skills": null,
+    "applyUrl": "https://jobs.ashbyhq.com/marshmallow/697f0b2f-03a0-4e2f-abb0-aa14f1042187/application?embed=js",
+    "compensationType": null,
+    "ir35Status": null
+   }
+  ],
+  "careersPageUrl": "https://www.marshmallow.com/jobs#ashby_embed"
+ },
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+   "jobs": {
+    "anyOf": [
+     {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "title": {
+         "anyOf": [
+          {
+           "type": "string",
+           "minLength": 1
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "companyName": {
+         "anyOf": [
+          {
+           "type": "string",
+           "minLength": 1
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "companyUrl": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "companyDescription": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "description": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "sourceUrl": {
+         "anyOf": [
+          {
+           "type": "string",
+           "minLength": 1
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "locationType": {
+         "anyOf": [
+          {
+           "type": "string",
+           "enum": [
+            "ONSITE",
+            "HYBRID",
+            "REMOTE"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "location": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "address": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "salaryMin": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "salaryMax": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "salaryCurrency": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "payPeriod": {
+         "anyOf": [
+          {
+           "type": "string",
+           "enum": [
+            "ANNUAL",
+            "MONTHLY",
+            "WEEKLY",
+            "DAILY",
+            "HOURLY",
+            "FIXED_TERM"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "seniority": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "department": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "postedAt": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "expiresAt": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "visaSponsorship": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "companySourceId": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "skills": {
+         "anyOf": [
+          {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "applyUrl": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "compensationType": {
+         "anyOf": [
+          {
+           "type": "string",
+           "enum": [
+            "SALARIED",
+            "CONTRACT"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "ir35Status": {
+         "anyOf": [
+          {
+           "type": "string",
+           "enum": [
+            "INSIDE_IR35",
+            "OUTSIDE_IR35",
+            "UNKNOWN"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "additionalProperties": {}
+      }
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "careersPageUrl": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "additionalProperties": {}
+ },
+ "stepCount": 23,
+ "lastStepSummary": "Task completed successfully",
+ "isTaskSuccessful": true,
+ "liveUrl": "/vnc/11ebf7e4-c794-48ff-b669-fde077ac9db8/view?path=vnc/11ebf7e4-c794-48ff-b669-fde077ac9db8/websockify",
+ "recordingUrls": [],
+ "profileId": "0bee43b4-d8c4-4741-8f1e-6576749a81b0",
+ "workspaceId": null,
+ "proxyCountryCode": null,
+ "maxCostUsd": "1.5",
+ "totalInputTokens": 522164,
+ "totalOutputTokens": 10748,
+ "llmCostUsd": "0.6140400000000001",
+ "proxyCostUsd": "0",
+ "browserCostUsd": "0",
+ "proxyUsedMb": "0",
+ "totalCostUsd": "0.6140400000000001",
+ "screenshotUrl": null,
+ "reasoningEffort": "none",
+ "failureKind": null,
+ "failureStatusCode": null,
+ "agentmailEmail": null,
+ "integrationsUsed": [],
+ "createdAt": "2026-09-25T00:17:06.054345+00:00",
+ "updatedAt": "2026-09-25T00:22:03.440820+00:00",
+ "_timeline": [
+  [
+   5,
+   1
+  ],
+  [
+   20,
+   2
+  ],
+  [
+   25,
+   3
+  ],
+  [
+   35,
+   4
+  ],
+  [
+   45,
+   5
+  ],
+  [
+   55,
+   6
+  ],
+  [
+   65,
+   7
+  ],
+  [
+   105,
+   8
+  ],
+  [
+   110,
+   9
+  ],
+  [
+   120,
+   10
+  ],
+  [
+   140,
+   11
+  ],
+  [
+   165,
+   12
+  ],
+  [
+   175,
+   13
+  ],
+  [
+   195,
+   14
+  ],
+  [
+   205,
+   15
+  ],
+  [
+   225,
+   16
+  ],
+  [
+   230,
+   17
+  ],
+  [
+   245,
+   18
+  ],
+  [
+   265,
+   19
+  ],
+  [
+   275,
+   20
+  ],
+  [
+   285,
+   21
+  ],
+  [
+   290,
+   22
+  ],
+  [
+   300,
+   23
+  ]
+ ],
+ "_stalled": false,
+ "_wall_seconds": 300
+}
